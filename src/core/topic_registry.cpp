@@ -21,7 +21,9 @@ sTopicCounter g_not_a_subscription;
 sTopicCounter* const kNotASubscription = &g_not_a_subscription;
 }  // namespace
 
-TopicRegistry::TopicRegistry() : m_id(g_next_registry_id.fetch_add(1, std::memory_order_relaxed)) {}
+TopicRegistry::TopicRegistry(uint32_t quiet_windows)
+    : m_id(g_next_registry_id.fetch_add(1, std::memory_order_relaxed)),
+      m_quiet_windows(quiet_windows) {}
 
 auto TopicRegistry::shouldFilter(const std::string& topic) -> bool {
     return topic == "/parameter_events" || topic == "/rosout" || topic == "/diagnostics";
@@ -39,20 +41,43 @@ auto TopicRegistry::counterForTopic(const std::string& topic) -> sTopicCounter* 
     return raw;
 }
 
-void TopicRegistry::onPublisherInit(const void* pub_handle, const char* topic) {
+void TopicRegistry::linkNodeCounter(const void* node_handle, sTopicCounter* counter) {
+    if (node_handle == nullptr || counter == nullptr) {
+        return;
+    }
+    auto it = m_nodehandle_to_node.find(node_handle);
+    if (it == m_nodehandle_to_node.end()) {
+        return;
+    }
+    auto& counters = it->second->counters;
+    for (auto* c : counters) {
+        if (c == counter) {
+            return;  // already listed for this node
+        }
+    }
+    counters.push_back(counter);
+}
+
+void TopicRegistry::onPublisherInit(const void* pub_handle, const void* node_handle,
+                                    const char* topic) {
     if (pub_handle == nullptr || topic == nullptr) {
         return;
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    m_pub_to_counter[pub_handle] = counterForTopic(topic);
+    auto* counter = counterForTopic(topic);
+    m_pub_to_counter[pub_handle] = counter;
+    linkNodeCounter(node_handle, counter);
 }
 
-void TopicRegistry::onSubscriptionInit(const void* sub_handle, const char* topic) {
+void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_handle,
+                                       const char* topic) {
     if (sub_handle == nullptr || topic == nullptr) {
         return;
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    m_subhandle_to_counter[sub_handle] = counterForTopic(topic);
+    auto* counter = counterForTopic(topic);
+    m_subhandle_to_counter[sub_handle] = counter;
+    linkNodeCounter(node_handle, counter);
 }
 
 void TopicRegistry::onRclcppSubscriptionInit(const void* subscription, const void* sub_handle) {
@@ -73,7 +98,8 @@ void TopicRegistry::onCallbackAdded(const void* callback, const void* subscripti
     m_cb_to_sub[callback] = subscription;
 }
 
-void TopicRegistry::onNodeInit(const char* node_name, const char* node_namespace) {
+void TopicRegistry::onNodeInit(const void* node_handle, const char* node_name,
+                               const char* node_namespace) {
     if (node_name == nullptr) {
         return;
     }
@@ -81,7 +107,13 @@ void TopicRegistry::onNodeInit(const char* node_name, const char* node_namespace
     std::string full = (ns.empty() || ns == "/") ? ("/" + std::string(node_name))
                                                   : (ns + "/" + std::string(node_name));
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    m_nodes.push_back(full);
+    auto node = std::make_unique<sNode>();
+    node->name = full;
+    sNode* raw = node.get();
+    m_nodes.push_back(std::move(node));
+    if (node_handle != nullptr) {
+        m_nodehandle_to_node[node_handle] = raw;
+    }
 }
 
 auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
@@ -216,7 +248,12 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
 
 auto TopicRegistry::activeNodes() const -> std::vector<std::string> {
     std::shared_lock<std::shared_mutex> lock(m_mu);
-    return m_nodes;
+    std::vector<std::string> out;
+    out.reserve(m_nodes.size());
+    for (const auto& n : m_nodes) {
+        out.push_back(n->name);
+    }
+    return out;
 }
 
 auto TopicRegistry::writeLockResolutions() const -> uint64_t {

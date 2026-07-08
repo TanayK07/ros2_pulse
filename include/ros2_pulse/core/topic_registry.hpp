@@ -38,6 +38,18 @@ struct sTopicStat {
     double recv_intra_hz{0.0};
 };
 
+/// @brief One initialized node plus its recent-activity bookkeeping.
+///
+/// Liveness is inferred from topic traffic (there is no node-teardown tracepoint on Humble — see
+/// docs/issues/issue-2-node-liveness.md). @c counters are the per-topic counters this node owns as a
+/// publisher or subscriber; @c idle_windows counts consecutive windows in which none of them saw
+/// traffic. A node is reported active while @c idle_windows is below the registry's K.
+struct sNode {
+    std::string name;
+    uint32_t idle_windows{0};
+    std::vector<sTopicCounter*> counters;
+};
+
 /// @brief Pure C++ core of the probe. Holds the ROS-graph handle→topic maps and per-endpoint
 /// atomic counters, resolves callback→topic lazily, and aggregates windowed frequencies.
 ///
@@ -49,16 +61,19 @@ struct sTopicStat {
 /// that elides the lock for the common repeated-endpoint case.
 class TopicRegistry {
 public:
-    TopicRegistry();
+    /// Consecutive quiet (zero-traffic) windows after which a node is dropped from activeNodes().
+    static constexpr uint32_t kDefaultQuietWindows = 3;
+
+    explicit TopicRegistry(uint32_t quiet_windows = kDefaultQuietWindows);
     TopicRegistry(TopicRegistry const&) = delete;
     auto operator=(TopicRegistry const&) -> TopicRegistry& = delete;
 
     // --- graph init (low frequency) ---
-    void onPublisherInit(const void* pub_handle, const char* topic);
-    void onSubscriptionInit(const void* sub_handle, const char* topic);
+    void onPublisherInit(const void* pub_handle, const void* node_handle, const char* topic);
+    void onSubscriptionInit(const void* sub_handle, const void* node_handle, const char* topic);
     void onRclcppSubscriptionInit(const void* subscription, const void* sub_handle);
     void onCallbackAdded(const void* callback, const void* subscription);
-    void onNodeInit(const char* node_name, const char* node_namespace);
+    void onNodeInit(const void* node_handle, const char* node_name, const char* node_namespace);
 
     // --- hot path ---
     void onPublish(const void* pub_handle);                  // inter-process publish
@@ -87,9 +102,17 @@ private:
     auto resolveCallback(const void* callback) -> sTopicCounter*;
     auto counterForTopic(const std::string& topic) -> sTopicCounter*;
 
+    // Caller must hold the write lock. Records that the node identified by node_handle owns counter
+    // (so window-boundary liveness can tell whether that node saw any traffic). No-op if the handle
+    // is unknown or the counter is already listed for that node.
+    void linkNodeCounter(const void* node_handle, sTopicCounter* counter);
+
     // Unique per-instance id (from a process-global atomic). Used to scope the thread-local
     // hot-path cache so a recycled stack/heap address never serves a destroyed instance's counter.
     uint64_t m_id;
+
+    // Consecutive quiet windows tolerated before a node drops out of activeNodes().
+    uint32_t m_quiet_windows;
 
     mutable std::shared_mutex m_mu;
 
@@ -108,7 +131,10 @@ private:
     // Count of hot-path escalations to the exclusive lock (see writeLockResolutions()).
     std::atomic<uint64_t> m_write_lock_resolutions{0};
 
-    std::vector<std::string> m_nodes;
+    // Node liveness: owned records in insertion order, plus dedup-by-name and handle->node indexes.
+    std::vector<std::unique_ptr<sNode>> m_nodes;
+    std::unordered_map<std::string, sNode*> m_node_by_name;
+    std::unordered_map<const void*, sNode*> m_nodehandle_to_node;
 };
 
 }  // namespace ros2_pulse::core
