@@ -26,11 +26,13 @@
 #include <optional>
 #include <string>
 
+#include "ros2_pulse/core/env_config.hpp"
 #include "ros2_pulse/core/timer.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
 
 namespace {
 
+using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
@@ -65,7 +67,9 @@ public:
 private:
     ProbeRuntime()
         : m_out_path(getEnv("ROS_TOPIC_STATS_OUTPUT_FILE", "/root/ssd2tb/logs/topic_freq.log")),
-          m_period_s(std::stod(getEnv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD", "5.0"))) {}
+          // noexcept parse: a bad ROS_TOPIC_STATISTICS_PUBLISH_PERIOD must fall back to the default,
+          // never throw out of this tracepoint-reached ctor into rclcpp (KNOWN_ISSUES.md #5).
+          m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)) {}
 
     void flush() {
         auto stats = m_registry.snapshot(m_period_s);
