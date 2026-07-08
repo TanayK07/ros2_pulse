@@ -145,6 +145,7 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     }
     if (ctr == nullptr) {
         std::unique_lock<std::shared_mutex> lock(m_mu);
+        m_write_lock_resolutions.fetch_add(1, std::memory_order_relaxed);
         ctr = resolveCallback(callback);
     }
     if (ctr == nullptr) {
@@ -192,6 +193,10 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
 auto TopicRegistry::activeNodes() const -> std::vector<std::string> {
     std::shared_lock<std::shared_mutex> lock(m_mu);
     return m_nodes;
+}
+
+auto TopicRegistry::writeLockResolutions() const -> uint64_t {
+    return m_write_lock_resolutions.load(std::memory_order_relaxed);
 }
 
 }  // namespace ros2_pulse::core
