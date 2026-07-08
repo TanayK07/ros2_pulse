@@ -105,8 +105,8 @@ TEST(TopicRegistry, IntraProcessReceiveBucketedSeparately) {
 TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
     TopicRegistry reg;
     // publisher + resolvable subscriber, same topic, one registry (a same-process pub+sub).
-    reg.onPublisherInit(H(0x10), "/odom");
-    reg.onSubscriptionInit(H(0x20), "/odom");
+    reg.onPublisherInit(H(0x10), nullptr, "/odom");
+    reg.onSubscriptionInit(H(0x20), nullptr, "/odom");
     reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
     reg.onCallbackAdded(H(0x22), H(0x21));
 
@@ -127,7 +127,7 @@ TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
 TEST(TopicRegistry, PublishSideIndependentOfReceive) {
     {
         TopicRegistry reg;
-        reg.onPublisherInit(H(0x10), "/pub_only");
+        reg.onPublisherInit(H(0x10), nullptr, "/pub_only");
         for (int i = 0; i < 12; i++) reg.onPublish(H(0x10));
         auto snap = reg.snapshot(1.0);
         const auto* s = findTopic(snap, "/pub_only");
@@ -138,7 +138,7 @@ TEST(TopicRegistry, PublishSideIndependentOfReceive) {
     }
     {
         TopicRegistry reg;
-        reg.onSubscriptionInit(H(0x20), "/recv_only");
+        reg.onSubscriptionInit(H(0x20), nullptr, "/recv_only");
         reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
         reg.onCallbackAdded(H(0x22), H(0x21));
         for (int i = 0; i < 9; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
