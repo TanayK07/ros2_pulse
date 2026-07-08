@@ -21,9 +21,11 @@
 #include <unistd.h>  // getpid
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <string>
 
@@ -100,6 +102,14 @@ private:
 
         std::FILE* f = std::fopen(m_out_path.c_str(), "a");
         if (!f) {
+            // Don't silently drop every window (e.g. the output directory doesn't exist). Warn
+            // ONCE — this runs on the timer thread every window, so a per-window log would spam.
+            bool expected = false;
+            if (m_warned_open_fail.compare_exchange_strong(expected, true)) {
+                std::fprintf(stderr,
+                             "[ros2_pulse] cannot open output file '%s' (%s) — dropping windows\n",
+                             m_out_path.c_str(), std::strerror(errno));
+            }
             return;
         }
         std::fwrite(block.data(), 1, block.size(), f);
@@ -109,6 +119,7 @@ private:
     TopicRegistry m_registry;
     std::optional<Timer> m_timer;
     std::atomic<bool> m_started{false};
+    std::atomic<bool> m_warned_open_fail{false};
     std::string m_out_path;
     double m_period_s;
 };
