@@ -5,17 +5,22 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 [ALTERNATIVES.md](ALTERNATIVES.md) (prior art + benchmarking) and
 [TESTING_PLAN.md](TESTING_PLAN.md) (how each issue gets a regression test).
 
+> **Status (all 7 addressed).** Each issue has a research-backed, test-first PR open against `main`
+> ([docs/issues/](issues/) carries the per-issue research note; each PR ships the fix + its
+> regression test, red→green). Cross-cutting test infrastructure + CI matrix is in a separate
+> `ci/test-suite` PR. #6 is merged; the rest are open (in review).
+
 ## Summary
 
-| # | Severity | Area | One-line |
-|---|----------|------|----------|
-| 1 | **High** | correctness | Inter-process counter double-counts when publisher + subscriber share a process |
-| 2 | Medium | correctness / claim | "Node liveness" is really "ever-initialized" — nodes never removed |
-| 3 | Medium | efficiency | Unresolvable callbacks (timers/services) take the write lock on every call |
-| 4 | Medium | robustness | Default output file is shared across all processes → interleaved writes |
-| 5 | Low | robustness | `std::stod` on a bad env var throws out of a tracepoint → `std::terminate` |
-| 6 | Low | docs | Dangling internal issue ref `#1204`; `#2911` premise needs a distro caveat |
-| 7 | Low | behaviour | Idle topics print `TOPIC /x 0.000000` every window (undocumented) |
+| # | Severity | Area | One-line | PR |
+|---|----------|------|----------|----|
+| 1 | **High** | correctness | Inter-process counter double-counts when publisher + subscriber share a process | [#4](https://github.com/TanayK07/ros2_pulse/pull/4) |
+| 2 | Medium | correctness / claim | "Node liveness" is really "ever-initialized" — nodes never removed | [#7](https://github.com/TanayK07/ros2_pulse/pull/7) |
+| 3 | Medium | efficiency | Unresolvable callbacks (timers/services) take the write lock on every call | [#2](https://github.com/TanayK07/ros2_pulse/pull/2) |
+| 4 | Medium | robustness | Default output file is shared across all processes → interleaved writes | [#6](https://github.com/TanayK07/ros2_pulse/pull/6) |
+| 5 | Low | robustness | `std::stod` on a bad env var throws out of a tracepoint → `std::terminate` | [#5](https://github.com/TanayK07/ros2_pulse/pull/5) |
+| 6 | Low | docs | Dangling internal issue ref `#1204`; `#2911` premise needs a distro caveat | [#1](https://github.com/TanayK07/ros2_pulse/pull/1) |
+| 7 | Low | behaviour | Idle topics print `TOPIC /x 0.000000` every window (undocumented) | [#3](https://github.com/TanayK07/ros2_pulse/pull/3) |
 
 ---
 
