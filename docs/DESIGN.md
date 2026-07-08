@@ -38,8 +38,9 @@ Hooked functions:
 
 ## Core (`core/`, no ROS dependency)
 
-- `TopicRegistry` — owns per-topic `sTopicCounter{atomic inter, atomic intra}`; pointer-keyed maps
-  for publisher_handle→counter and the callback→…→topic chain.
+- `TopicRegistry` — owns per-topic `sTopicCounter{atomic pub_inter, recv_inter, recv_intra}` (publish
+  vs receive kept in separate buckets so a same-process pub+sub of one topic never collide); pointer-
+  keyed maps for publisher_handle→counter and the callback→…→topic chain.
 - **Hot path** — a thread-local `{registry-id, key, counter*}` cache serves the common repeated-
   endpoint case with a single relaxed atomic increment; a miss takes a `shared_lock` (concurrent),
   and only the first sighting of a callback takes the `unique_lock` to resolve + cache. No global
