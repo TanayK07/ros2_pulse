@@ -34,9 +34,10 @@ TEST(TopicRegistry, PublishCountsAndHz) {
     auto snap = reg.snapshot(2.0);  // 100 msgs over 2 s -> 50 Hz
     const auto* s = findTopic(snap, "/scan");
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->inter_count, 100u);
-    EXPECT_EQ(s->intra_count, 0u);
-    EXPECT_DOUBLE_EQ(s->inter_hz, 50.0);
+    EXPECT_EQ(s->pub_inter_count, 100u);
+    EXPECT_EQ(s->recv_inter_count, 0u);
+    EXPECT_EQ(s->recv_intra_count, 0u);
+    EXPECT_DOUBLE_EQ(s->pub_inter_hz, 50.0);
 }
 
 TEST(TopicRegistry, SnapshotResetsCounts) {
@@ -47,7 +48,7 @@ TEST(TopicRegistry, SnapshotResetsCounts) {
     auto snap2 = reg.snapshot(1.0);
     const auto* s = findTopic(snap2, "/scan");
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->inter_count, 0u);
+    EXPECT_EQ(s->pub_inter_count, 0u);
 }
 
 TEST(TopicRegistry, UnknownPublisherIgnored) {
@@ -68,8 +69,9 @@ TEST(TopicRegistry, InterProcessReceiveViaCallback) {
     auto snap = reg.snapshot(1.0);
     const auto* s = findTopic(snap, "/img");
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->inter_count, 30u);
-    EXPECT_EQ(s->intra_count, 0u);
+    EXPECT_EQ(s->recv_inter_count, 30u);
+    EXPECT_EQ(s->recv_intra_count, 0u);
+    EXPECT_EQ(s->pub_inter_count, 0u);  // pure receiver: no publish-side count
 }
 
 TEST(TopicRegistry, IntraProcessReceiveBucketedSeparately) {
@@ -83,8 +85,62 @@ TEST(TopicRegistry, IntraProcessReceiveBucketedSeparately) {
     auto snap = reg.snapshot(1.0);
     const auto* s = findTopic(snap, "/cloud");
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->intra_count, 10u);
-    EXPECT_EQ(s->inter_count, 5u);
+    EXPECT_EQ(s->recv_intra_count, 10u);
+    EXPECT_EQ(s->recv_inter_count, 5u);
+    EXPECT_EQ(s->pub_inter_count, 0u);
+}
+
+// Regression for KNOWN_ISSUES.md #1: a publisher and an inter-process subscriber for the SAME topic
+// in the SAME process must not share one counter. The publish side is an independent measurement
+// from the receive side; N publishes + N inter-receives is a publish rate of N and a receive rate of
+// N, NOT a single inter rate of 2N. On the pre-fix code both writers fetch_add the one `inter` field,
+// so this collapses to inter_count == 2N.
+TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
+    TopicRegistry reg;
+    // publisher + resolvable subscriber, same topic, one registry (a same-process pub+sub).
+    reg.onPublisherInit(H(0x10), "/odom");
+    reg.onSubscriptionInit(H(0x20), "/odom");
+    reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
+    reg.onCallbackAdded(H(0x22), H(0x21));
+
+    constexpr int N = 40;
+    for (int i = 0; i < N; i++) reg.onPublish(H(0x10));
+    for (int i = 0; i < N; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
+
+    auto snap = reg.snapshot(1.0);
+    const auto* s = findTopic(snap, "/odom");
+    ASSERT_NE(s, nullptr);
+    // Publish and inter-receive are independent measurements — each exactly N, NOT one bucket of 2N.
+    EXPECT_EQ(s->pub_inter_count, static_cast<uint64_t>(N));
+    EXPECT_EQ(s->recv_inter_count, static_cast<uint64_t>(N));
+    EXPECT_EQ(s->recv_intra_count, 0u);
+}
+
+// Publish side and receive side must be fully decoupled: driving only one leaves the other at zero.
+TEST(TopicRegistry, PublishSideIndependentOfReceive) {
+    {
+        TopicRegistry reg;
+        reg.onPublisherInit(H(0x10), "/pub_only");
+        for (int i = 0; i < 12; i++) reg.onPublish(H(0x10));
+        auto snap = reg.snapshot(1.0);
+        const auto* s = findTopic(snap, "/pub_only");
+        ASSERT_NE(s, nullptr);
+        EXPECT_EQ(s->pub_inter_count, 12u);
+        EXPECT_EQ(s->recv_inter_count, 0u);  // no callbacks -> nothing received
+        EXPECT_EQ(s->recv_intra_count, 0u);
+    }
+    {
+        TopicRegistry reg;
+        reg.onSubscriptionInit(H(0x20), "/recv_only");
+        reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
+        reg.onCallbackAdded(H(0x22), H(0x21));
+        for (int i = 0; i < 9; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
+        auto snap = reg.snapshot(1.0);
+        const auto* s = findTopic(snap, "/recv_only");
+        ASSERT_NE(s, nullptr);
+        EXPECT_EQ(s->recv_inter_count, 9u);
+        EXPECT_EQ(s->pub_inter_count, 0u);  // no publisher -> no publish-side count
+    }
 }
 
 // The intra-process ordering bug we hit in the PoC: callback_added fires for the intra
@@ -105,7 +161,7 @@ TEST(TopicRegistry, LazyResolutionWhenInitOutOfOrder) {
     auto snap = reg.snapshot(1.0);
     const auto* s = findTopic(snap, "/late");
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->intra_count, 7u);  // the 1 early msg before resolution is allowed to be lost
+    EXPECT_EQ(s->recv_intra_count, 7u);  // the 1 early msg before resolution is allowed to be lost
 }
 
 TEST(TopicRegistry, FilteredTopicsExcluded) {
@@ -147,7 +203,7 @@ TEST(TopicRegistry, ConcurrentPublishExactTotal) {
     auto snap = reg.snapshot(1.0);
     const auto* s = findTopic(snap, "/hot");
     ASSERT_NE(s, nullptr);
-    EXPECT_EQ(s->inter_count, static_cast<uint64_t>(kThreads) * kPer);
+    EXPECT_EQ(s->pub_inter_count, static_cast<uint64_t>(kThreads) * kPer);
 }
 
 int main(int argc, char** argv) {

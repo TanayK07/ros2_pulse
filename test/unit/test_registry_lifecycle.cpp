@@ -41,7 +41,7 @@ TEST(RegistryLifecycle, PublishCacheNeverServesDestroyedInstance) {
         auto s1 = reg1->snapshot(1.0);
         const auto* o = findTopic(s1, "/old");
         ASSERT_NE(o, nullptr);
-        EXPECT_EQ(o->inter_count, 2u);
+        EXPECT_EQ(o->pub_inter_count, 2u);
     }
     delete reg1;  // thread-local last_ctr is now dangling — must never be dereferenced again
 
@@ -55,7 +55,7 @@ TEST(RegistryLifecycle, PublishCacheNeverServesDestroyedInstance) {
     auto s2 = reg2->snapshot(1.0);
     const auto* n = findTopic(s2, "/new");
     ASSERT_NE(n, nullptr);
-    EXPECT_EQ(n->inter_count, 3u);
+    EXPECT_EQ(n->pub_inter_count, 3u);
     EXPECT_EQ(findTopic(s2, "/old"), nullptr);  // reg2 never heard of /old
     delete reg2;
 }
@@ -93,7 +93,7 @@ TEST(RegistryLifecycle, CallbackCacheNeverServesDestroyedInstance) {
     auto s2 = reg2->snapshot(1.0);
     const auto* n = findTopic(s2, "/new_recv");
     ASSERT_NE(n, nullptr);
-    EXPECT_EQ(n->intra_count, 6u);
+    EXPECT_EQ(n->recv_intra_count, 6u);
     EXPECT_EQ(findTopic(s2, "/old_recv"), nullptr);
     delete reg2;
 }
@@ -115,7 +115,7 @@ TEST(RegistryLifecycle, CacheScopingHoldsOnWorkerThread) {
         reg2->onPublish(H(0x30));
         auto s = reg2->snapshot(1.0);
         const auto* n = findTopic(s, "/t_new");
-        observed = (n != nullptr) ? n->inter_count : ~0ull;
+        observed = (n != nullptr) ? n->pub_inter_count : ~0ull;
         EXPECT_EQ(findTopic(s, "/t_old"), nullptr);
         delete reg2;
     });

@@ -92,12 +92,12 @@ TEST(ConcurrencyStress, ManyThreadsManyTopicsExactTotals) {
     for (int i = 0; i < kTopics; ++i) {
         const auto* p = findTopic(snap, "/pub_" + std::to_string(i));
         ASSERT_NE(p, nullptr) << "missing /pub_" << i;
-        EXPECT_EQ(p->inter_count, expected);
+        EXPECT_EQ(p->pub_inter_count, expected);
 
         const auto* rcv = findTopic(snap, "/recv_" + std::to_string(i));
         ASSERT_NE(rcv, nullptr) << "missing /recv_" << i;
-        EXPECT_EQ(rcv->inter_count, expected);
-        EXPECT_EQ(rcv->intra_count, expected);
+        EXPECT_EQ(rcv->recv_inter_count, expected);
+        EXPECT_EQ(rcv->recv_intra_count, expected);
     }
 }
 

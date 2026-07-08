@@ -82,14 +82,17 @@ private:
         std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), m_period_s);
         for (const auto& s : stats) {
             // publish-side line; output format kept compatible with the earlier global-mutex +
-            // per-message-string-hash stats prototype this design replaced
-            if (s.inter_count > 0 || s.intra_count == 0) {
-                std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.inter_hz);
+            // per-message-string-hash stats prototype this design replaced. It now reads the
+            // genuine publish counter, so a pure in-process subscriber no longer fabricates a
+            // publish rate. Idle known topics still emit a zero line (see KNOWN_ISSUES.md #7).
+            if (s.pub_inter_count > 0 || (s.recv_inter_count == 0 && s.recv_intra_count == 0)) {
+                std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.pub_inter_hz);
             }
-            // additive receive-side line incl. intra-process (the new capability)
-            if (s.intra_count > 0 || s.inter_count > 0) {
-                std::fprintf(f, "RECV %s inter=%.6f intra=%.6f\n", s.topic.c_str(), s.inter_hz,
-                             s.intra_hz);
+            // additive receive-side line incl. intra-process (the new capability), independent of
+            // the publish counter so a same-process pub+sub is no longer double-counted.
+            if (s.recv_inter_count > 0 || s.recv_intra_count > 0) {
+                std::fprintf(f, "RECV %s inter=%.6f intra=%.6f\n", s.topic.c_str(),
+                             s.recv_inter_hz, s.recv_intra_hz);
             }
         }
         for (const auto& n : nodes) {
