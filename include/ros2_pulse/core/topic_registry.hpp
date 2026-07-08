@@ -79,9 +79,11 @@ public:
     auto writeLockResolutions() const -> uint64_t;
 
 private:
-    // Caller must hold at least a read lock. Resolves callback→counter through the chain
-    // (callback → rclcpp-sub → rcl-handle → counter) and caches the result; returns nullptr
-    // until the chain is fully populated.
+    // Caller must hold the EXCLUSIVE lock: this may insert into m_cb_to_counter. Resolves
+    // callback→counter through the chain (callback → rclcpp-sub → rcl-handle → counter) and caches
+    // the result. Returns nullptr while the chain of a real subscription is not yet populated (kept
+    // uncached, so lazy resolution retries), or the kNotASubscription sentinel — cached — for a
+    // callback with no m_cb_to_sub entry at all (a timer/service callback that can never resolve).
     auto resolveCallback(const void* callback) -> sTopicCounter*;
     auto counterForTopic(const std::string& topic) -> sTopicCounter*;
 

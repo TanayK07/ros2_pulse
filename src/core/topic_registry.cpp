@@ -11,6 +11,14 @@ namespace ros2_pulse::core {
 
 namespace {
 std::atomic<uint64_t> g_next_registry_id{1};
+
+// Negative-cache sentinel (KNOWN_ISSUES #3). A callback proven NEVER to be a subscription — a timer
+// or service callback, for which callback_added never fired — resolves to this marker instead of
+// nullptr, so repeat sightings are served from the shared-lock / thread-local fast paths rather than
+// re-taking the exclusive lock on every call. It is a unique, valid address that is never
+// dereferenced: every read site compares it by identity and skips (see onCallbackStart).
+sTopicCounter g_not_a_subscription;
+sTopicCounter* const kNotASubscription = &g_not_a_subscription;
 }  // namespace
 
 TopicRegistry::TopicRegistry() : m_id(g_next_registry_id.fetch_add(1, std::memory_order_relaxed)) {}
@@ -79,19 +87,24 @@ void TopicRegistry::onNodeInit(const char* node_name, const char* node_namespace
 auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
     auto cached = m_cb_to_counter.find(callback);
     if (cached != m_cb_to_counter.end()) {
-        return cached->second;
+        return cached->second;  // a resolved counter, or the kNotASubscription sentinel
     }
     auto s = m_cb_to_sub.find(callback);
     if (s == m_cb_to_sub.end()) {
-        return nullptr;
+        // No callback_added ever recorded a subscription for this callback. Since callback_added
+        // (a graph-init event) always precedes the first callback_start of a real subscription,
+        // absence here PROVES this is a timer/service callback that can never resolve. Cache the
+        // negative result so later sightings hit the shared-lock / thread-local fast paths.
+        m_cb_to_counter[callback] = kNotASubscription;
+        return kNotASubscription;
     }
     auto h = m_sub_to_subhandle.find(s->second);
     if (h == m_sub_to_subhandle.end()) {
-        return nullptr;
+        return nullptr;  // subscription, but chain not populated yet — stay lazy, do NOT cache
     }
     auto c = m_subhandle_to_counter.find(h->second);
     if (c == m_subhandle_to_counter.end()) {
-        return nullptr;
+        return nullptr;  // ditto: retry on a later delivery once subscription_init lands
     }
     m_cb_to_counter[callback] = c->second;  // cache once fully resolved
     return c->second;
@@ -124,17 +137,21 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     thread_local const void* last_key = nullptr;
     thread_local sTopicCounter* last_ctr = nullptr;
     if (callback != nullptr && last_id == m_id && callback == last_key) {
-        if (is_intra_process) {
-            last_ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            last_ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
+        // last_ctr is either a resolved counter or the kNotASubscription sentinel. The sentinel
+        // means "known timer/service callback" — skip it without touching the lock or a counter.
+        if (last_ctr != kNotASubscription) {
+            if (is_intra_process) {
+                last_ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                last_ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
+            }
         }
         return;
     }
-    // Steady state: the callback is already resolved+cached, so a SHARED (concurrent) lock
-    // suffices. Only the first time we see a callback do we take the exclusive lock to run the
-    // full resolution chain and insert into the cache. This keeps multi-threaded executors from
-    // serializing every received message on a single writer lock.
+    // Steady state: the callback is already resolved+cached (as a real counter OR the sentinel),
+    // so a SHARED (concurrent) lock suffices. Only the FIRST time we see a callback do we take the
+    // exclusive lock to run the full resolution chain and insert into the cache. This keeps
+    // multi-threaded executors from serializing every received message on a single writer lock.
     sTopicCounter* ctr = nullptr;
     {
         std::shared_lock<std::shared_mutex> lock(m_mu);
@@ -148,17 +165,24 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
         m_write_lock_resolutions.fetch_add(1, std::memory_order_relaxed);
         ctr = resolveCallback(callback);
     }
+    // A null result here means "subscription, not resolvable yet" (chain still being populated):
+    // leave the thread-local slot untouched so the next delivery retries resolution. A non-null
+    // result — a real counter or the sentinel — is decisive, so cache it thread-locally; that lets
+    // even a not-a-subscription callback drop the shared lock on subsequent same-thread calls.
     if (ctr == nullptr) {
         return;
+    }
+    last_id = m_id;
+    last_key = callback;
+    last_ctr = ctr;
+    if (ctr == kNotASubscription) {
+        return;  // proven timer/service callback — nothing to count
     }
     if (is_intra_process) {
         ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
     } else {
         ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
     }
-    last_id = m_id;
-    last_key = callback;
-    last_ctr = ctr;
 }
 
 auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
