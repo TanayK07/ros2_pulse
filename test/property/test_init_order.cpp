@@ -120,12 +120,12 @@ TEST(InitOrderProperty, RandomOrderNeverCrashesAndConverges) {
         // counters, so the totals are unambiguous and independent of the double-count issue #1.
         const auto* p = findTopic(snap, "/p");
         ASSERT_NE(p, nullptr);
-        EXPECT_EQ(p->inter_count, static_cast<uint64_t>(kp));
+        EXPECT_EQ(p->pub_inter_count, static_cast<uint64_t>(kp));
 
         const auto* s = findTopic(snap, "/s");
         ASSERT_NE(s, nullptr);
-        EXPECT_EQ(s->inter_count, static_cast<uint64_t>(ki));
-        EXPECT_EQ(s->intra_count, static_cast<uint64_t>(kx));
+        EXPECT_EQ(s->recv_inter_count, static_cast<uint64_t>(ki));
+        EXPECT_EQ(s->recv_intra_count, static_cast<uint64_t>(kx));
 
         auto nodes = reg.activeNodes();
         ASSERT_EQ(nodes.size(), 1u);
