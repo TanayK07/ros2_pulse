@@ -123,7 +123,7 @@ extern "C" {
 void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, const char* name,
                              const char* ns) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onNodeInit(name, ns);
+    ProbeRuntime::instance().registry().onNodeInit(node_handle, name, ns);
     static auto fn = realFn<void (*)(const void*, const void*, const char*, const char*)>(
         "ros_trace_rcl_node_init");
     if (fn) fn(node_handle, rmw_handle, name, ns);
@@ -132,7 +132,7 @@ void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, co
 void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handle,
                                   const void* rmw_pub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onPublisherInit(pub_handle, topic);
+    ProbeRuntime::instance().registry().onPublisherInit(pub_handle, node_handle, topic);
     static auto fn = realFn<void (*)(const void*, const void*, const void*, const char*, size_t)>(
         "ros_trace_rcl_publisher_init");
     if (fn) fn(pub_handle, node_handle, rmw_pub, topic, depth);
@@ -141,7 +141,7 @@ void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handl
 void ros_trace_rcl_subscription_init(const void* sub_handle, const void* node_handle,
                                      const void* rmw_sub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, topic);
+    ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, node_handle, topic);
     static auto fn = realFn<void (*)(const void*, const void*, const void*, const char*, size_t)>(
         "ros_trace_rcl_subscription_init");
     if (fn) fn(sub_handle, node_handle, rmw_sub, topic, depth);

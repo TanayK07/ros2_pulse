@@ -103,6 +103,11 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 
 - On ROS 2 Humble there is no intra-process *publish* tracepoint, so intra rate is measured
   **receive-side** (per subscription) — the signal you usually want.
+- **Node liveness is traffic-derived.** There is no node-teardown tracepoint on stock Humble, so a
+  node appears in the `NODE` lines only while a topic it publishes or subscribes to has carried
+  traffic within the last few windows; a node silent for several windows is treated as *quiet* and
+  drops out. A genuinely-alive but idle node (e.g. a pure timer/service node with no topic traffic)
+  therefore reads as quiet. Re-`init` of a node name does not duplicate its entry.
 - Requires tracing instrumentation compiled into the ROS build (default on Humble/Isaac debs;
   runtime-checkable via `ros_trace_compile_status()`).
 - File output only; no live network export (by design — zero network cost).
