@@ -65,7 +65,11 @@ public:
 private:
     ProbeRuntime()
         : m_out_path(getEnv("ROS_TOPIC_STATS_OUTPUT_FILE", "/root/ssd2tb/logs/topic_freq.log")),
-          m_period_s(std::stod(getEnv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD", "5.0"))) {}
+          m_period_s(std::stod(getEnv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD", "5.0"))),
+          // Declared-but-silent topics (no traffic in a window) are suppressed by default so large
+          // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
+          // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
+          m_emit_idle(getEnv("ROS_PULSE_EMIT_IDLE", "0") == "1") {}
 
     void flush() {
         auto stats = m_registry.snapshot(m_period_s);
@@ -81,8 +85,9 @@ private:
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
         std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), m_period_s);
         for (const auto& s : stats) {
-            // #1204-compatible publish-side line
-            if (s.inter_count > 0 || s.intra_count == 0) {
+            // #1204-compatible publish-side line. The emit decision (incl. the idle-topic policy
+            // gated by ROS_PULSE_EMIT_IDLE) lives in the pure core so it stays unit-testable.
+            if (TopicRegistry::shouldEmitTopic(s, m_emit_idle)) {
                 std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.inter_hz);
             }
             // additive receive-side line incl. intra-process (the new capability)
@@ -103,6 +108,7 @@ private:
     std::atomic<bool> m_started{false};
     std::string m_out_path;
     double m_period_s;
+    bool m_emit_idle;
 };
 
 template <typename Fn>
