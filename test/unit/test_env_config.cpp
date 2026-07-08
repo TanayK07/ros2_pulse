@@ -55,8 +55,5 @@ TEST(ParsePeriodSeconds, RejectsNonFinite) {
     EXPECT_DOUBLE_EQ(parsePeriodSeconds("inf", kDef), kDef);
     EXPECT_DOUBLE_EQ(parsePeriodSeconds("-inf", kDef), kDef);
 }
-
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
+// main() intentionally omitted: this file is linked into the shared core gtest binary whose
+// main() lives in test_topic_registry.cpp (see CMakeLists ROS2_PULSE_CORE_TEST_SOURCES).
