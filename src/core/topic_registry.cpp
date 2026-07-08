@@ -6,6 +6,7 @@
 #include "ros2_pulse/core/topic_registry.hpp"
 
 #include <mutex>  // for std::unique_lock with shared_mutex
+#include <unordered_set>
 
 namespace ros2_pulse::core {
 
@@ -107,12 +108,21 @@ void TopicRegistry::onNodeInit(const void* node_handle, const char* node_name,
     std::string full = (ns.empty() || ns == "/") ? ("/" + std::string(node_name))
                                                   : (ns + "/" + std::string(node_name));
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    auto node = std::make_unique<sNode>();
-    node->name = full;
-    sNode* raw = node.get();
-    m_nodes.push_back(std::move(node));
+    sNode* node = nullptr;
+    auto existing = m_node_by_name.find(full);
+    if (existing != m_node_by_name.end()) {
+        // Dedup: same name -> reuse the record. A re-init is treated as a fresh start.
+        node = existing->second;
+        node->idle_windows = 0;
+    } else {
+        auto owned = std::make_unique<sNode>();
+        owned->name = full;
+        node = owned.get();
+        m_nodes.push_back(std::move(owned));
+        m_node_by_name.emplace(full, node);
+    }
     if (node_handle != nullptr) {
-        m_nodehandle_to_node[node_handle] = raw;
+        m_nodehandle_to_node[node_handle] = node;
     }
 }
 
@@ -221,18 +231,23 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
     std::vector<sTopicStat> out;
     std::unique_lock<std::shared_mutex> lock(m_mu);
     const double w = window_s > 0.0 ? window_s : 1.0;
+    // Counters that carried traffic this window, used below to age per-node liveness. Filtered
+    // topics are excluded from the stats output but still count as node activity (a node emitting
+    // only /rosout is alive), so we record activity before the filter check.
+    std::unordered_set<const sTopicCounter*> active;
     for (auto& kv : m_by_topic) {
         sTopicCounter* c = kv.second.get();
-        if (shouldFilter(c->topic)) {
-            // still reset so counts don't accumulate unbounded
-            c->pub_inter.exchange(0, std::memory_order_relaxed);
-            c->recv_inter.exchange(0, std::memory_order_relaxed);
-            c->recv_intra.exchange(0, std::memory_order_relaxed);
-            continue;
-        }
+        // Exchange all three split buckets first (this also resets them), so filtered topics still
+        // count toward node activity even though they are excluded from the stats output.
         uint64_t p = c->pub_inter.exchange(0, std::memory_order_relaxed);
         uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
         uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
+        if (p > 0 || ri > 0 || rx > 0) {
+            active.insert(c);  // this topic's endpoints saw traffic -> owning node(s) are live
+        }
+        if (shouldFilter(c->topic)) {
+            continue;  // counts reset above, but the topic itself is never reported
+        }
         sTopicStat s;
         s.topic = c->topic;
         s.pub_inter_count = p;
@@ -243,6 +258,18 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         s.recv_intra_hz = static_cast<double>(rx) / w;
         out.push_back(std::move(s));
     }
+    // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose owned
+    // counters all sat idle this window advances its quiet-window count; any traffic resets it.
+    for (auto& node : m_nodes) {
+        bool node_active = false;
+        for (auto* c : node->counters) {
+            if (active.count(c) != 0) {
+                node_active = true;
+                break;
+            }
+        }
+        node->idle_windows = node_active ? 0u : (node->idle_windows + 1u);
+    }
     return out;
 }
 
@@ -251,7 +278,9 @@ auto TopicRegistry::activeNodes() const -> std::vector<std::string> {
     std::vector<std::string> out;
     out.reserve(m_nodes.size());
     for (const auto& n : m_nodes) {
-        out.push_back(n->name);
+        if (n->idle_windows < m_quiet_windows) {
+            out.push_back(n->name);
+        }
     }
     return out;
 }
