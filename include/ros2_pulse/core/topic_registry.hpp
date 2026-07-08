@@ -72,6 +72,12 @@ public:
     /// System/util topics excluded from output.
     static auto shouldFilter(const std::string& topic) -> bool;
 
+    /// Observability hook: number of times onCallbackStart has escalated to the EXCLUSIVE
+    /// (write) lock to run the full resolution chain. In steady state this must stay flat —
+    /// resolved callbacks and proven non-subscriptions are served from the shared-lock and
+    /// thread-local fast paths. Used by the KNOWN_ISSUES #3 write-lock-storm regression tests.
+    auto writeLockResolutions() const -> uint64_t;
+
 private:
     // Caller must hold at least a read lock. Resolves callback→counter through the chain
     // (callback → rclcpp-sub → rcl-handle → counter) and caches the result; returns nullptr
@@ -96,6 +102,9 @@ private:
     std::unordered_map<const void*, const void*> m_sub_to_subhandle;          // rclcpp sub → rcl sub_handle
     std::unordered_map<const void*, const void*> m_cb_to_sub;                 // callback → rclcpp sub
     std::unordered_map<const void*, sTopicCounter*> m_cb_to_counter;          // resolved cache
+
+    // Count of hot-path escalations to the exclusive lock (see writeLockResolutions()).
+    std::atomic<uint64_t> m_write_lock_resolutions{0};
 
     std::vector<std::string> m_nodes;
 };
