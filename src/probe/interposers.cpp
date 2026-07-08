@@ -28,9 +28,11 @@
 
 #include "ros2_pulse/core/timer.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
+#include "ros2_pulse/core/window_format.hpp"
 
 namespace {
 
+using ros2_pulse::core::formatWindow;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
@@ -73,28 +75,20 @@ private:
         if (stats.empty() && nodes.empty()) {
             return;
         }
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+        // Build the whole window block up front, then emit it with ONE fwrite. A window under
+        // BUFSIZ is a single write() at fclose, so its lines stay contiguous instead of
+        // interleaving mid-block with another process's per-line writes (see docs/issues/
+        // issue-4-per-process-output.md).
+        const std::string block =
+            formatWindow(stats, nodes, static_cast<long long>(ns), m_period_s);
+
         std::FILE* f = std::fopen(m_out_path.c_str(), "a");
         if (!f) {
             return;
         }
-        auto now = std::chrono::system_clock::now().time_since_epoch();
-        auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), m_period_s);
-        for (const auto& s : stats) {
-            // #1204-compatible publish-side line
-            if (s.inter_count > 0 || s.intra_count == 0) {
-                std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.inter_hz);
-            }
-            // additive receive-side line incl. intra-process (the new capability)
-            if (s.intra_count > 0 || s.inter_count > 0) {
-                std::fprintf(f, "RECV %s inter=%.6f intra=%.6f\n", s.topic.c_str(), s.inter_hz,
-                             s.intra_hz);
-            }
-        }
-        for (const auto& n : nodes) {
-            std::fprintf(f, "NODE %s\n", n.c_str());
-        }
-        std::fprintf(f, "\n");
+        std::fwrite(block.data(), 1, block.size(), f);
         std::fclose(f);
     }
 

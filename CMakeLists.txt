@@ -20,6 +20,7 @@ find_package(ament_cmake REQUIRED)
 add_library(${PROJECT_NAME}_core STATIC
   src/core/topic_registry.cpp
   src/core/timer.cpp
+  src/core/window_format.cpp
 )
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -45,6 +46,9 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_topic_registry test/unit/test_topic_registry.cpp)
   target_link_libraries(test_topic_registry ${PROJECT_NAME}_core)
+
+  ament_add_gtest(test_window_format test/unit/test_window_format.cpp)
+  target_link_libraries(test_window_format ${PROJECT_NAME}_core)
 
   # Integration test nodes (talker / listener / intra) — only if rclcpp is available.
   find_package(rclcpp QUIET)
