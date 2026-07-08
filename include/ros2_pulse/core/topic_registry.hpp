@@ -66,6 +66,13 @@ public:
     /// System/util topics excluded from output.
     static auto shouldFilter(const std::string& topic) -> bool;
 
+    /// Decide whether the publish-side `TOPIC` line should be written for this window's stat.
+    /// A fully-idle topic (no inter- AND no intra-process traffic) is emitted only when
+    /// @p emit_idle is true (operator opt-in via ROS_PULSE_EMIT_IDLE=1); otherwise the historical
+    /// rule stands — emit when inter-process traffic is present, and suppress the publish-side line
+    /// for intra-only topics (whose signal is carried on the additive RECV line instead).
+    static auto shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> bool;
+
 private:
     // Caller must hold at least a read lock. Resolves callback→counter through the chain
     // (callback → rclcpp-sub → rcl-handle → counter) and caches the result; returns nullptr

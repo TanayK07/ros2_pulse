@@ -19,6 +19,18 @@ auto TopicRegistry::shouldFilter(const std::string& topic) -> bool {
     return topic == "/parameter_events" || topic == "/rosout" || topic == "/diagnostics";
 }
 
+auto TopicRegistry::shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> bool {
+    // Fully-idle topic (declared but silent this window): keep it out of the file by default so a
+    // large graph isn't padded with `TOPIC /x 0.000000` lines every window; only the explicit
+    // opt-in restores it. See docs/issues/issue-7-idle-topic-line.md.
+    if (stat.inter_count == 0 && stat.intra_count == 0) {
+        return emit_idle;
+    }
+    // Otherwise the historical rule: emit when inter-process traffic is present, and suppress the
+    // publish-side line for an intra-only topic (its rate lives on the RECV line instead).
+    return stat.inter_count > 0 || stat.intra_count == 0;
+}
+
 auto TopicRegistry::counterForTopic(const std::string& topic) -> sTopicCounter* {
     auto it = m_by_topic.find(topic);
     if (it != m_by_topic.end()) {
