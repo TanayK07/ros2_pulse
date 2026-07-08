@@ -81,7 +81,8 @@ private:
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
         std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), m_period_s);
         for (const auto& s : stats) {
-            // #1204-compatible publish-side line
+            // publish-side line; output format kept compatible with the earlier global-mutex +
+            // per-message-string-hash stats prototype this design replaced
             if (s.inter_count > 0 || s.intra_count == 0) {
                 std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.inter_hz);
             }
