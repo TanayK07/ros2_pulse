@@ -87,6 +87,30 @@ TEST(TopicRegistry, IntraProcessReceiveBucketedSeparately) {
     EXPECT_EQ(s->inter_count, 5u);
 }
 
+// Regression for KNOWN_ISSUES.md #1: a publisher and an inter-process subscriber for the SAME topic
+// in the SAME process must not share one counter. The publish side is an independent measurement
+// from the receive side; N publishes + N inter-receives is a publish rate of N and a receive rate of
+// N, NOT a single inter rate of 2N. On the pre-fix code both writers fetch_add the one `inter` field,
+// so this collapses to inter_count == 2N.
+TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
+    TopicRegistry reg;
+    // publisher + resolvable subscriber, same topic, one registry (a same-process pub+sub).
+    reg.onPublisherInit(H(0x10), "/odom");
+    reg.onSubscriptionInit(H(0x20), "/odom");
+    reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
+    reg.onCallbackAdded(H(0x22), H(0x21));
+
+    constexpr int N = 40;
+    for (int i = 0; i < N; i++) reg.onPublish(H(0x10));
+    for (int i = 0; i < N; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
+
+    auto snap = reg.snapshot(1.0);
+    const auto* s = findTopic(snap, "/odom");
+    ASSERT_NE(s, nullptr);
+    // The publish-side count must be exactly N — the N inter-process receives must NOT be folded in.
+    EXPECT_EQ(s->inter_count, static_cast<uint64_t>(N));
+}
+
 // The intra-process ordering bug we hit in the PoC: callback_added fires for the intra
 // waitable BEFORE its sub_handle->topic chain is populated. Eager resolution would lose it;
 // lazy resolution at callback_start must still bind it.
