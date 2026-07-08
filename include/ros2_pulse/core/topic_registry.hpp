@@ -16,20 +16,26 @@
 
 namespace ros2_pulse::core {
 
-/// @brief One topic's running message counts, split by transport.
+/// @brief One topic's running message counts, split by role + transport.
+///
+/// Separate publish and receive buckets so a same-process publisher and subscriber of one topic
+/// never fetch_add the same field (KNOWN_ISSUES.md #1 — see docs/issues/issue-1-double-count.md).
 struct sTopicCounter {
     std::string topic;
-    std::atomic<uint64_t> inter{0};  // inter-process (DDS) messages
-    std::atomic<uint64_t> intra{0};  // intra-process (rclcpp IPC) messages
+    std::atomic<uint64_t> pub_inter{0};   // inter-process publishes (rcl_publish)
+    std::atomic<uint64_t> recv_inter{0};  // inter-process receives (callback_start, intra=false)
+    std::atomic<uint64_t> recv_intra{0};  // intra-process receives (callback_start, intra=true)
 };
 
 /// @brief Aggregated, windowed view of one topic (returned by snapshot()).
 struct sTopicStat {
     std::string topic;
-    uint64_t inter_count{0};
-    uint64_t intra_count{0};
-    double inter_hz{0.0};
-    double intra_hz{0.0};
+    uint64_t pub_inter_count{0};
+    uint64_t recv_inter_count{0};
+    uint64_t recv_intra_count{0};
+    double pub_inter_hz{0.0};
+    double recv_inter_hz{0.0};
+    double recv_intra_hz{0.0};
 };
 
 /// @brief Pure C++ core of the probe. Holds the ROS-graph handle→topic maps and per-endpoint

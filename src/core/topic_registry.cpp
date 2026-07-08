@@ -104,13 +104,13 @@ void TopicRegistry::onPublish(const void* pub_handle) {
     thread_local const void* last_key = nullptr;
     thread_local sTopicCounter* last_ctr = nullptr;
     if (pub_handle != nullptr && last_id == m_id && pub_handle == last_key) {
-        last_ctr->inter.fetch_add(1, std::memory_order_relaxed);
+        last_ctr->pub_inter.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     std::shared_lock<std::shared_mutex> lock(m_mu);
     auto it = m_pub_to_counter.find(pub_handle);
     if (it != m_pub_to_counter.end()) {
-        it->second->inter.fetch_add(1, std::memory_order_relaxed);
+        it->second->pub_inter.fetch_add(1, std::memory_order_relaxed);
         last_id = m_id;
         last_key = pub_handle;
         last_ctr = it->second;
@@ -125,9 +125,9 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     thread_local sTopicCounter* last_ctr = nullptr;
     if (callback != nullptr && last_id == m_id && callback == last_key) {
         if (is_intra_process) {
-            last_ctr->intra.fetch_add(1, std::memory_order_relaxed);
+            last_ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
         } else {
-            last_ctr->inter.fetch_add(1, std::memory_order_relaxed);
+            last_ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
         }
         return;
     }
@@ -151,9 +151,9 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
         return;
     }
     if (is_intra_process) {
-        ctr->intra.fetch_add(1, std::memory_order_relaxed);
+        ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
     } else {
-        ctr->inter.fetch_add(1, std::memory_order_relaxed);
+        ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
     }
     last_id = m_id;
     last_key = callback;
@@ -168,18 +168,22 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         sTopicCounter* c = kv.second.get();
         if (shouldFilter(c->topic)) {
             // still reset so counts don't accumulate unbounded
-            c->inter.exchange(0, std::memory_order_relaxed);
-            c->intra.exchange(0, std::memory_order_relaxed);
+            c->pub_inter.exchange(0, std::memory_order_relaxed);
+            c->recv_inter.exchange(0, std::memory_order_relaxed);
+            c->recv_intra.exchange(0, std::memory_order_relaxed);
             continue;
         }
-        uint64_t i = c->inter.exchange(0, std::memory_order_relaxed);
-        uint64_t x = c->intra.exchange(0, std::memory_order_relaxed);
+        uint64_t p = c->pub_inter.exchange(0, std::memory_order_relaxed);
+        uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
+        uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
         sTopicStat s;
         s.topic = c->topic;
-        s.inter_count = i;
-        s.intra_count = x;
-        s.inter_hz = static_cast<double>(i) / w;
-        s.intra_hz = static_cast<double>(x) / w;
+        s.pub_inter_count = p;
+        s.recv_inter_count = ri;
+        s.recv_intra_count = rx;
+        s.pub_inter_hz = static_cast<double>(p) / w;
+        s.recv_inter_hz = static_cast<double>(ri) / w;
+        s.recv_intra_hz = static_cast<double>(rx) / w;
         out.push_back(std::move(s));
     }
     return out;
