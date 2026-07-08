@@ -18,6 +18,7 @@
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
+#include <unistd.h>  // getpid
 
 #include <atomic>
 #include <chrono>
@@ -32,6 +33,7 @@
 
 namespace {
 
+using ros2_pulse::core::defaultOutputPath;
 using ros2_pulse::core::formatWindow;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
@@ -40,6 +42,18 @@ using ros2_pulse::core::TopicRegistry;
 auto getEnv(const char* key, const char* def) -> std::string {
     const char* v = std::getenv(key);
     return (v && *v) ? std::string(v) : std::string(def);
+}
+
+// Resolve where this process writes. An explicit ROS_TOPIC_STATS_OUTPUT_FILE is honoured verbatim
+// (operators can still deliberately share a path); otherwise default to a PER-PROCESS path with the
+// pid embedded, so a normal multi-process ROS launch no longer has every LD_PRELOADed process
+// appending to one shared file with no locking.
+auto resolveOutputPath() -> std::string {
+    const char* v = std::getenv("ROS_TOPIC_STATS_OUTPUT_FILE");
+    if (v && *v) {
+        return std::string(v);
+    }
+    return defaultOutputPath(static_cast<long>(::getpid()));
 }
 
 /// Process-wide probe runtime: the registry, the flush timer and output config.
@@ -66,7 +80,7 @@ public:
 
 private:
     ProbeRuntime()
-        : m_out_path(getEnv("ROS_TOPIC_STATS_OUTPUT_FILE", "/root/ssd2tb/logs/topic_freq.log")),
+        : m_out_path(resolveOutputPath()),
           m_period_s(std::stod(getEnv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD", "5.0"))) {}
 
     void flush() {
