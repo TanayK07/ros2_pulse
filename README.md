@@ -73,10 +73,19 @@ Humble/Isaac binaries — verify with `nm -D $(ros2 pkg prefix tracetools)/lib/l
 export LD_PRELOAD=libros2_pulse.so                      # resolved from the sourced workspace
 export ROS_TOPIC_STATS_OUTPUT_FILE=/tmp/pulse.log       # default: /root/ssd2tb/logs/topic_freq.log
 export ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=5.0          # seconds
+export ROS_PULSE_EMIT_IDLE=1                            # optional; default 0 — see below
 ros2 launch your_stack your.launch.py
 tail -f /tmp/pulse.log
 ```
 A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to set fleet-wide.
+
+### Environment variables
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ROS_TOPIC_STATS_OUTPUT_FILE` | `/root/ssd2tb/logs/topic_freq.log` | Where the rolling stats file is appended. |
+| `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` | `5.0` | Flush/snapshot window, in seconds. |
+| `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no inter- **and** no intra-process traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` already omits fully-idle topics regardless. |
 
 ## Benchmarks
 
