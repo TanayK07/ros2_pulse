@@ -77,11 +77,17 @@ TEST(InitOrderProperty, RandomOrderNeverCrashesAndConverges) {
         // resolvable) — the only requirement here is that nothing crashes.
         std::uniform_int_distribution<int> noise(0, 4);
         std::bernoulli_distribution intra(0.5);
+        // In real rclcpp a subscription callback is registered (callback_added) before the executor
+        // can ever invoke it, so callback_start never precedes callback_added. Respect that here:
+        // only fire callback noise once kCbAdded has run (the negative cache relies on this real
+        // invariant). This still exercises the genuine hazard — callback_start firing while the
+        // sub_handle->topic chain is only partially populated. Publishes have no such constraint.
+        bool cb_added = false;
         for (InitStep step : order) {
             int pre = noise(rng);
             for (int i = 0; i < pre; ++i) {
                 reg.onPublish(kPub);
-                reg.onCallbackStart(kCb, intra(rng));
+                if (cb_added) reg.onCallbackStart(kCb, intra(rng));
             }
             switch (step) {
                 case kPubInit:
@@ -95,6 +101,7 @@ TEST(InitOrderProperty, RandomOrderNeverCrashesAndConverges) {
                     break;
                 case kCbAdded:
                     reg.onCallbackAdded(kCb, kRclSub);
+                    cb_added = true;
                     break;
                 case kNodeInit:
                     reg.onNodeInit("n", "/ns");

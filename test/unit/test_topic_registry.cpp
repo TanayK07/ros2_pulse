@@ -164,6 +164,43 @@ TEST(TopicRegistry, LazyResolutionWhenInitOutOfOrder) {
     EXPECT_EQ(s->recv_intra_count, 7u);  // the 1 early msg before resolution is allowed to be lost
 }
 
+// Regression for KNOWN_ISSUES #3. A callback that is not a subscription (timer/service) is never
+// linked via onCallbackAdded, so it can never resolve to a topic. It must take the EXCLUSIVE write
+// lock AT MOST ONCE no matter how many times it fires. Before the negative cache, every invocation
+// fell through to the unique_lock branch -> a write-lock storm on a path sold as lock-light.
+TEST(TopicRegistry, UnresolvableCallbackTakesWriteLockAtMostOnce) {
+    TopicRegistry reg;
+    const void* timer_cb = H(0x99);  // never onCallbackAdded'd -> provably not a subscription
+    for (int i = 0; i < 1000; i++) {
+        reg.onCallbackStart(timer_cb, /*intra=*/false);
+    }
+    EXPECT_LE(reg.writeLockResolutions(), 1u);
+    // and it must never fabricate a topic
+    auto snap = reg.snapshot(1.0);
+    EXPECT_TRUE(snap.empty());
+}
+
+// Same guarantee under a multi-threaded executor: an unresolvable callback hammered from many
+// threads escalates to the write lock at most once PER THREAD (bounded by thread count), never once
+// per message. This is the concurrency shape the "no global lock" design promises.
+TEST(TopicRegistry, UnresolvableCallbackNoWriteLockStormConcurrent) {
+    TopicRegistry reg;
+    const void* timer_cb = H(0xabcd);  // not a subscription
+    constexpr int kThreads = 8;
+    constexpr int kPer = 100000;
+    std::vector<std::thread> ts;
+    for (int t = 0; t < kThreads; t++) {
+        ts.emplace_back([&] {
+            for (int i = 0; i < kPer; i++) reg.onCallbackStart(timer_cb, /*intra=*/false);
+        });
+    }
+    for (auto& th : ts) th.join();
+
+    EXPECT_LE(reg.writeLockResolutions(), static_cast<uint64_t>(kThreads));
+    auto snap = reg.snapshot(1.0);
+    EXPECT_TRUE(snap.empty());
+}
+
 TEST(TopicRegistry, FilteredTopicsExcluded) {
     TopicRegistry reg;
     EXPECT_TRUE(TopicRegistry::shouldFilter("/rosout"));
