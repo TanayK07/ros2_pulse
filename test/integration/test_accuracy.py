@@ -12,11 +12,16 @@
 # harness is written so that test drops in as one more assert_rate_within() call.
 
 import os
+import sys
 import tempfile
 
 import pytest
 
-import probe_harness as ph
+# probe_harness lives beside this file. Put its dir on the path explicitly so the import works
+# regardless of pytest's import mode (and when the file is run directly), not only when pytest
+# happens to prepend the test dir.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe_harness as ph  # noqa: E402  # pyright: ignore[reportMissingImports]
 
 # Wall-timer jitter + window quantisation + CI scheduling noise: a 30% band around the nominal
 # 50 Hz is tight enough to catch a ~2x double-count or a dropped-transport regression while
