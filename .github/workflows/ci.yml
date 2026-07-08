@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: build + test (${{ matrix.ROS_DISTRO }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ROS_DISTRO: [humble]
+    steps:
+      - uses: actions/checkout@v4
+      # industrial_ci builds the package and runs colcon test inside a ROS_DISTRO container,
+      # then fails the job on any test failure (AbortTestOnError).
+      - uses: ros-industrial/industrial_ci@master
+        env:
+          ROS_DISTRO: ${{ matrix.ROS_DISTRO }}
+          ROS_REPO: main
+          ADDITIONAL_DEBS: build-essential
+          AGGREGATE_TEST_RESULTS: 'true'

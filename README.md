@@ -1,0 +1,119 @@
+# ros2_pulse
+
+**The heartbeat of your ROS 2 graph.** A near-zero-overhead probe that measures per-topic message
+frequency and active-node liveness — for **both inter-process and intra-process** traffic — on
+**stock ROS 2 binaries**, with **no rebuild, no privileges, and zero network cost**.
+
+[![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-blue)](https://docs.ros.org/en/humble/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+
+---
+
+## Why
+
+You want to answer a simple question in production: **"is every topic flowing at the rate it
+should, and which nodes are alive?"** The existing options each fall short:
+
+- `ros2 topic hz` — subscribes to each topic (adds DDS traffic + CPU), one topic at a time, and is
+  **blind to intra-process messages**.
+- **Built-in topic statistics** — [bypassed entirely by intra-process comms](https://github.com/ros2/rclcpp/issues/2911);
+  composable nodes carrying point clouds lose all introspection.
+- **`ros2_tracing` / LTTng** — powerful, but built for offline analysis: needs ROS built with the
+  lttng-ust backend, a running session daemon, and post-processing a CTF trace just to get a rate.
+- **eBPF/uprobe probes** — need `CAP_SYS_ADMIN` + debugfs + a kernel with BTF/uprobes (often a
+  non-starter on Jetson/embedded), and pay a kernel-trap per message.
+
+`ros2_pulse` fills the gap: it hooks the ROS 2 **tracetools instrumentation layer** that rclcpp
+already calls on every publish and every callback, counts in-process with a lock-free hot path, and
+writes ready-to-read Hz to a small rolling file.
+
+## What you get
+
+```
+# ts_ns=1782887153899445923 window_s=5.000
+TOPIC /scan 20.000000                      # publish-side, inter-process
+RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
+RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools
+NODE  /perception
+NODE  /planner
+```
+
+## How it works
+
+`libros2_pulse.so` is injected via `LD_PRELOAD`. It exports the same symbols as
+`libtracetools.so`'s tracepoint API (`ros_trace_rcl_publish`, `ros_trace_callback_start`, the
+init tracepoints, …); the dynamic linker binds rclcpp's calls to ours first, and each interposer
+records a stat then forwards to the real function via `dlsym(RTLD_NEXT, …)`. Because rclcpp calls
+these functions unconditionally (the LTTng enable-check is *inside* them), the probe works with **no
+tracing session** and adds no DDS traffic.
+
+- **Intra-process visibility** comes from `callback_start(callback, is_intra_process)`, which fires
+  for every subscription callback regardless of transport.
+- **Hot path** is a per-endpoint relaxed atomic increment behind a thread-local cache — no global
+  lock, no per-message string hashing. Counting costs ~0.2 ns/op in isolation.
+- A background timer snapshots + resets counts every `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` seconds
+  and appends Hz to `ROS_TOPIC_STATS_OUTPUT_FILE`.
+
+The pure-C++ core (`core/`) has no ROS dependency and is unit-tested in isolation; the probe layer
+(`probe/`) is a thin `LD_PRELOAD` shim.
+
+## Install
+
+```bash
+cd ~/ros2_ws/src && git clone https://github.com/TanayK07/ros2_pulse.git
+cd ~/ros2_ws && colcon build --packages-select ros2_pulse && source install/setup.bash
+```
+
+Requires: ROS 2 Humble, a `libtracetools.so` with instrumentation compiled in (the default on
+Humble/Isaac binaries — verify with `nm -D $(ros2 pkg prefix tracetools)/lib/libtracetools.so* | grep -c ros_trace`).
+
+## Usage
+
+```bash
+export LD_PRELOAD=libros2_pulse.so                      # resolved from the sourced workspace
+export ROS_TOPIC_STATS_OUTPUT_FILE=/tmp/pulse.log       # default: /root/ssd2tb/logs/topic_freq.log
+export ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=5.0          # seconds
+ros2 launch your_stack your.launch.py
+tail -f /tmp/pulse.log
+```
+A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to set fleet-wide.
+
+## Benchmarks
+
+Measured on a `ros:humble` container, workload ≈ 4900 msg/s across 53 mixed topics
+(30 light @100 Hz + 8 heavy ~100 KB @50 Hz inter-process + 15 intra @100 Hz). Full harness +
+methodology in [`bench/`](bench/).
+
+| Method | CPU overhead | Monitor's own cost | Disk | Intra-proc | Stock binaries | Privileges |
+|---|---|---|---|---|---|---|
+| **ros2_pulse** | **within noise** (interleaved N=6: −0.2%) | in-process | ~22 KB rolling | ✅ | ✅ | none |
+| eBPF uprobe | ~noise at this rate¹ | bpftrace proc | 0 | ✅ | ✅ | CAP_SYS_ADMIN + BTF |
+| LTTng / ros2_tracing | — captured **0 events** on stock binaries² | daemons | CTF (large) | ✅ | ❌ needs rebuild | sessiond |
+
+Counting hot path microbench: **0.2 ns/op** (478× cheaper than a naive global-mutex + per-message
+string-hash design).
+
+¹ uprobe = per-event kernel trap (~µs), grows with message rate. ² stock `libtracetools.so` isn't
+always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS.md`](bench/RESULTS.md).
+
+## Limitations
+
+- On ROS 2 Humble there is no intra-process *publish* tracepoint, so intra rate is measured
+  **receive-side** (per subscription) — the signal you usually want.
+- Requires tracing instrumentation compiled into the ROS build (default on Humble/Isaac debs;
+  runtime-checkable via `ros_trace_compile_status()`).
+- File output only; no live network export (by design — zero network cost).
+
+## Compatibility
+
+Validated on ROS 2 Humble with both FastRTPS and CycloneDDS (the probe hooks above the DDS vendor,
+so it is middleware-agnostic). Iron/Jazzy support is planned (they add a dedicated intra-publish
+tracepoint that would enable publish-side intra counts).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs welcome.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

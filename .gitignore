@@ -1,0 +1,26 @@
+# colcon / ament
+build/
+install/
+log/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+*.so
+*.o
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# bench scratch output
+bench/*.log
+bench/trace/
