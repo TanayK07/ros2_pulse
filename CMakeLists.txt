@@ -36,10 +36,10 @@ elseif(NOT ROS2_PULSE_SANITIZER STREQUAL "")
 endif()
 
 # --- pure-C++ core (no ROS / tracetools dependency) — common to both build paths ---
-add_library(${PROJECT_NAME}_core STATIC
-  src/core/topic_registry.cpp
-  src/core/timer.cpp
-)
+# Globbed so a new core source (e.g. from a fix PR) joins the library in BOTH lanes automatically.
+file(GLOB ROS2_PULSE_CORE_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/core/*.cpp")
+add_library(${PROJECT_NAME}_core STATIC ${ROS2_PULSE_CORE_SOURCES})
 target_include_directories(${PROJECT_NAME}_core PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include>")
@@ -47,15 +47,15 @@ set_property(TARGET ${PROJECT_NAME}_core PROPERTY POSITION_INDEPENDENT_CODE ON)
 find_package(Threads REQUIRED)
 target_link_libraries(${PROJECT_NAME}_core PUBLIC Threads::Threads)
 
-# The core gtest suite — one binary compiled identically under both build paths. The existing
-# test file provides main(); the fix-independent additions (lifecycle/UAF, init-order property,
-# concurrency stress) are header-free TEST()s that register into the same binary.
-set(ROS2_PULSE_CORE_TEST_SOURCES
-  test/unit/test_topic_registry.cpp
-  test/unit/test_registry_lifecycle.cpp
-  test/property/test_init_order.cpp
-  test/stress/test_concurrency.cpp
-)
+# The core gtest suite — one binary compiled identically under both build paths.
+# test_topic_registry.cpp provides main() (gtest_main intentionally not linked); every other
+# unit/property/stress file is a header-free set of TEST()s that registers into the same binary.
+# Globbed so a fix PR's new test file joins BOTH lanes (fast + sanitizers) with no CMake edit.
+# Invariant: exactly ONE globbed file may define main() (test_topic_registry.cpp).
+file(GLOB ROS2_PULSE_CORE_TEST_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/test/unit/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/test/property/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/test/stress/*.cpp")
 
 if(ROS2_PULSE_STANDALONE)
   # ---- standalone lane: core + gtest, no ament ----
