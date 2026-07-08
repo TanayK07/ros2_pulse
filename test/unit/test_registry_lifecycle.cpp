@@ -34,7 +34,7 @@ auto findTopic(const std::vector<sTopicStat>& v, const std::string& t) -> const 
 // fresh reg2 that maps it to a DIFFERENT topic. reg2 must resolve to its OWN counter.
 TEST(RegistryLifecycle, PublishCacheNeverServesDestroyedInstance) {
     auto* reg1 = new TopicRegistry();
-    reg1->onPublisherInit(H(0x10), "/old");
+    reg1->onPublisherInit(H(0x10), nullptr, "/old");
     reg1->onPublish(H(0x10));  // primes thread-local {id=reg1.id, key=0x10, ctr=&/old}
     reg1->onPublish(H(0x10));  // hits the primed fast path
     {
@@ -47,7 +47,7 @@ TEST(RegistryLifecycle, PublishCacheNeverServesDestroyedInstance) {
 
     // Fresh instance; may be recycled at reg1's address. Same handle, different topic.
     auto* reg2 = new TopicRegistry();
-    reg2->onPublisherInit(H(0x10), "/new");
+    reg2->onPublisherInit(H(0x10), nullptr, "/new");
     reg2->onPublish(H(0x10));  // id mismatch forces a real lookup -> reg2's own counter
     reg2->onPublish(H(0x10));
     reg2->onPublish(H(0x10));
@@ -64,7 +64,7 @@ TEST(RegistryLifecycle, PublishCacheNeverServesDestroyedInstance) {
 // the destroyed counter (UAF); the correct behaviour is: nothing is counted.
 TEST(RegistryLifecycle, PublishCacheDropsUnknownHandleOnFreshInstance) {
     auto* reg1 = new TopicRegistry();
-    reg1->onPublisherInit(H(0x2000), "/gone");
+    reg1->onPublisherInit(H(0x2000), nullptr, "/gone");
     for (int i = 0; i < 5; i++) reg1->onPublish(H(0x2000));
     delete reg1;
 
@@ -78,14 +78,14 @@ TEST(RegistryLifecycle, PublishCacheDropsUnknownHandleOnFreshInstance) {
 // The callback path has an independent thread-local cache; assert the same id-scoping.
 TEST(RegistryLifecycle, CallbackCacheNeverServesDestroyedInstance) {
     auto* reg1 = new TopicRegistry();
-    reg1->onSubscriptionInit(H(0x20), "/old_recv");
+    reg1->onSubscriptionInit(H(0x20), nullptr, "/old_recv");
     reg1->onRclcppSubscriptionInit(H(0x21), H(0x20));
     reg1->onCallbackAdded(H(0x22), H(0x21));
     for (int i = 0; i < 4; i++) reg1->onCallbackStart(H(0x22), /*intra=*/true);  // prime cache
     delete reg1;
 
     auto* reg2 = new TopicRegistry();
-    reg2->onSubscriptionInit(H(0x20), "/new_recv");  // same handles, new topic
+    reg2->onSubscriptionInit(H(0x20), nullptr, "/new_recv");  // same handles, new topic
     reg2->onRclcppSubscriptionInit(H(0x21), H(0x20));
     reg2->onCallbackAdded(H(0x22), H(0x21));
     for (int i = 0; i < 6; i++) reg2->onCallbackStart(H(0x22), /*intra=*/true);
@@ -105,13 +105,13 @@ TEST(RegistryLifecycle, CacheScopingHoldsOnWorkerThread) {
     uint64_t observed = ~0ull;
     std::thread worker([&] {
         auto* reg1 = new TopicRegistry();
-        reg1->onPublisherInit(H(0x30), "/t_old");
+        reg1->onPublisherInit(H(0x30), nullptr, "/t_old");
         reg1->onPublish(H(0x30));
         reg1->onPublish(H(0x30));
         delete reg1;
 
         auto* reg2 = new TopicRegistry();
-        reg2->onPublisherInit(H(0x30), "/t_new");
+        reg2->onPublisherInit(H(0x30), nullptr, "/t_new");
         reg2->onPublish(H(0x30));
         auto s = reg2->snapshot(1.0);
         const auto* n = findTopic(s, "/t_new");

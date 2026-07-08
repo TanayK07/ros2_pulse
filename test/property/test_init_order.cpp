@@ -91,10 +91,10 @@ TEST(InitOrderProperty, RandomOrderNeverCrashesAndConverges) {
             }
             switch (step) {
                 case kPubInit:
-                    reg.onPublisherInit(kPub, "/p");
+                    reg.onPublisherInit(kPub, nullptr, "/p");
                     break;
                 case kSubInit:
-                    reg.onSubscriptionInit(kSubH, "/s");
+                    reg.onSubscriptionInit(kSubH, nullptr, "/s");
                     break;
                 case kRclcppSub:
                     reg.onRclcppSubscriptionInit(kRclSub, kSubH);
@@ -104,7 +104,7 @@ TEST(InitOrderProperty, RandomOrderNeverCrashesAndConverges) {
                     cb_added = true;
                     break;
                 case kNodeInit:
-                    reg.onNodeInit("n", "/ns");
+                    reg.onNodeInit(nullptr, "n", "/ns");
                     break;
             }
         }

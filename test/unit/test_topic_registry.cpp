@@ -24,11 +24,18 @@ auto findTopic(const std::vector<sTopicStat>& v, const std::string& t) -> const 
     return nullptr;
 }
 
+auto hasNode(const std::vector<std::string>& v, const std::string& n) -> bool {
+    for (const auto& s : v) {
+        if (s == n) return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 TEST(TopicRegistry, PublishCountsAndHz) {
     TopicRegistry reg;
-    reg.onPublisherInit(H(0x10), "/scan");
+    reg.onPublisherInit(H(0x10), nullptr, "/scan");
     for (int i = 0; i < 100; i++) reg.onPublish(H(0x10));
 
     auto snap = reg.snapshot(2.0);  // 100 msgs over 2 s -> 50 Hz
@@ -42,7 +49,7 @@ TEST(TopicRegistry, PublishCountsAndHz) {
 
 TEST(TopicRegistry, SnapshotResetsCounts) {
     TopicRegistry reg;
-    reg.onPublisherInit(H(0x10), "/scan");
+    reg.onPublisherInit(H(0x10), nullptr, "/scan");
     reg.onPublish(H(0x10));
     reg.snapshot(1.0);
     auto snap2 = reg.snapshot(1.0);
@@ -61,7 +68,7 @@ TEST(TopicRegistry, UnknownPublisherIgnored) {
 TEST(TopicRegistry, InterProcessReceiveViaCallback) {
     TopicRegistry reg;
     // chain: sub_handle -> topic ; rclcpp_sub -> sub_handle ; callback -> rclcpp_sub
-    reg.onSubscriptionInit(H(0x20), "/img");
+    reg.onSubscriptionInit(H(0x20), nullptr, "/img");
     reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
     reg.onCallbackAdded(H(0x22), H(0x21));
     for (int i = 0; i < 30; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
@@ -76,7 +83,7 @@ TEST(TopicRegistry, InterProcessReceiveViaCallback) {
 
 TEST(TopicRegistry, IntraProcessReceiveBucketedSeparately) {
     TopicRegistry reg;
-    reg.onSubscriptionInit(H(0x20), "/cloud");
+    reg.onSubscriptionInit(H(0x20), nullptr, "/cloud");
     reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
     reg.onCallbackAdded(H(0x22), H(0x21));
     for (int i = 0; i < 10; i++) reg.onCallbackStart(H(0x22), /*intra=*/true);
@@ -98,8 +105,8 @@ TEST(TopicRegistry, IntraProcessReceiveBucketedSeparately) {
 TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
     TopicRegistry reg;
     // publisher + resolvable subscriber, same topic, one registry (a same-process pub+sub).
-    reg.onPublisherInit(H(0x10), "/odom");
-    reg.onSubscriptionInit(H(0x20), "/odom");
+    reg.onPublisherInit(H(0x10), nullptr, "/odom");
+    reg.onSubscriptionInit(H(0x20), nullptr, "/odom");
     reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
     reg.onCallbackAdded(H(0x22), H(0x21));
 
@@ -120,7 +127,7 @@ TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
 TEST(TopicRegistry, PublishSideIndependentOfReceive) {
     {
         TopicRegistry reg;
-        reg.onPublisherInit(H(0x10), "/pub_only");
+        reg.onPublisherInit(H(0x10), nullptr, "/pub_only");
         for (int i = 0; i < 12; i++) reg.onPublish(H(0x10));
         auto snap = reg.snapshot(1.0);
         const auto* s = findTopic(snap, "/pub_only");
@@ -131,7 +138,7 @@ TEST(TopicRegistry, PublishSideIndependentOfReceive) {
     }
     {
         TopicRegistry reg;
-        reg.onSubscriptionInit(H(0x20), "/recv_only");
+        reg.onSubscriptionInit(H(0x20), nullptr, "/recv_only");
         reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
         reg.onCallbackAdded(H(0x22), H(0x21));
         for (int i = 0; i < 9; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
@@ -154,7 +161,7 @@ TEST(TopicRegistry, LazyResolutionWhenInitOutOfOrder) {
     // a message arrives BEFORE sub_handle->topic is known -> not yet resolvable, must not crash
     reg.onCallbackStart(H(0x22), true);
     // now the final link arrives
-    reg.onSubscriptionInit(H(0x20), "/late");
+    reg.onSubscriptionInit(H(0x20), nullptr, "/late");
     // subsequent messages must resolve and count
     for (int i = 0; i < 7; i++) reg.onCallbackStart(H(0x22), true);
 
@@ -208,7 +215,7 @@ TEST(TopicRegistry, FilteredTopicsExcluded) {
     EXPECT_TRUE(TopicRegistry::shouldFilter("/diagnostics"));
     EXPECT_FALSE(TopicRegistry::shouldFilter("/scan"));
 
-    reg.onPublisherInit(H(0x10), "/rosout");
+    reg.onPublisherInit(H(0x10), nullptr, "/rosout");
     reg.onPublish(H(0x10));
     auto snap = reg.snapshot(1.0);
     EXPECT_EQ(findTopic(snap, "/rosout"), nullptr);
@@ -216,17 +223,82 @@ TEST(TopicRegistry, FilteredTopicsExcluded) {
 
 TEST(TopicRegistry, NodeTracking) {
     TopicRegistry reg;
-    reg.onNodeInit("talker", "");
-    reg.onNodeInit("planner", "/nav");
+    reg.onNodeInit(H(0x100), "talker", "");
+    reg.onNodeInit(H(0x101), "planner", "/nav");
     auto nodes = reg.activeNodes();
     ASSERT_EQ(nodes.size(), 2u);
     EXPECT_EQ(nodes[0], "/talker");
     EXPECT_EQ(nodes[1], "/nav/planner");
 }
 
+// --- Issue #2: node liveness — dedup + activity-based quiet detection ---
+
+// Re-initializing the same node name must not create a duplicate entry.
+TEST(TopicRegistry, DuplicateNodeInitDeduped) {
+    TopicRegistry reg;
+    reg.onNodeInit(H(0x100), "amcl", "");
+    reg.onNodeInit(H(0x101), "amcl", "");  // same name, fresh handle (re-init)
+    auto nodes = reg.activeNodes();
+    ASSERT_EQ(nodes.size(), 1u);
+    EXPECT_EQ(nodes[0], "/amcl");
+}
+
+// A node whose topics carry no traffic for K windows drops out of activeNodes().
+TEST(TopicRegistry, NodeGoesQuietAfterKWindows) {
+    TopicRegistry reg(/*quiet_windows=*/2);
+    reg.onNodeInit(H(0x100), "worker", "");
+    reg.onPublisherInit(H(0x10), H(0x100), "/work");
+
+    for (int i = 0; i < 5; i++) reg.onPublish(H(0x10));
+    reg.snapshot(1.0);  // window carried traffic -> active
+    EXPECT_TRUE(hasNode(reg.activeNodes(), "/worker"));
+
+    reg.snapshot(1.0);  // 1st silent window (idle=1, still < K=2)
+    EXPECT_TRUE(hasNode(reg.activeNodes(), "/worker"));
+
+    reg.snapshot(1.0);  // 2nd silent window (idle=2, not < K) -> quiet
+    EXPECT_FALSE(hasNode(reg.activeNodes(), "/worker"));
+}
+
+// A node that went quiet becomes active again as soon as its topic sees traffic.
+TEST(TopicRegistry, NodeReactivatesOnNewTraffic) {
+    TopicRegistry reg(/*quiet_windows=*/2);
+    reg.onNodeInit(H(0x100), "worker", "");
+    reg.onPublisherInit(H(0x10), H(0x100), "/work");
+
+    reg.onPublish(H(0x10));
+    reg.snapshot(1.0);
+    reg.snapshot(1.0);
+    reg.snapshot(1.0);  // two silent windows -> quiet
+    ASSERT_FALSE(hasNode(reg.activeNodes(), "/worker"));
+
+    reg.onPublish(H(0x10));
+    reg.snapshot(1.0);  // fresh traffic -> active again
+    EXPECT_TRUE(hasNode(reg.activeNodes(), "/worker"));
+}
+
+// Receive-side (callback) traffic counts as node activity; stopping it lets the node go quiet.
+TEST(TopicRegistry, SubscriberNodeCountsAsActivity) {
+    TopicRegistry reg(/*quiet_windows=*/2);
+    reg.onNodeInit(H(0x100), "camera", "");
+    reg.onSubscriptionInit(H(0x20), H(0x100), "/img");
+    reg.onRclcppSubscriptionInit(H(0x21), H(0x20));
+    reg.onCallbackAdded(H(0x22), H(0x21));
+
+    for (int w = 0; w < 3; w++) {
+        for (int i = 0; i < 4; i++) reg.onCallbackStart(H(0x22), /*intra=*/false);
+        reg.snapshot(1.0);
+        EXPECT_TRUE(hasNode(reg.activeNodes(), "/camera"));  // receiving -> stays active
+    }
+
+    reg.snapshot(1.0);  // silent window 1
+    reg.snapshot(1.0);  // silent window 2 -> quiet
+    EXPECT_FALSE(hasNode(reg.activeNodes(), "/camera"));
+}
+
 TEST(TopicRegistry, ConcurrentPublishExactTotal) {
     TopicRegistry reg;
-    reg.onPublisherInit(H(0x10), "/hot");
+    reg.onPublisherInit(H(0x10), nullptr, "/hot");
     constexpr int kThreads = 8;
     constexpr int kPer = 100000;
     std::vector<std::thread> ts;

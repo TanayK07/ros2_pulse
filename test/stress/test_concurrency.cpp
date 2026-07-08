@@ -63,8 +63,8 @@ TEST(ConcurrencyStress, ManyThreadsManyTopicsExactTotals) {
     for (int i = 0; i < kTopics; ++i) {
         const std::string pub = "/pub_" + std::to_string(i);
         const std::string recv = "/recv_" + std::to_string(i);
-        reg.onPublisherInit(pubHandle(i), pub.c_str());
-        reg.onSubscriptionInit(subHandle(i), recv.c_str());
+        reg.onPublisherInit(pubHandle(i), nullptr, pub.c_str());
+        reg.onSubscriptionInit(subHandle(i), nullptr, recv.c_str());
         reg.onRclcppSubscriptionInit(rclSub(i), subHandle(i));
         reg.onCallbackAdded(cbHandle(i), rclSub(i));
     }
@@ -111,8 +111,8 @@ TEST(ConcurrencyStress, TopicSetStaysBounded) {
     for (int i = 0; i < kTopics; ++i) {
         const std::string pub = "/pub_" + std::to_string(i);
         const std::string recv = "/recv_" + std::to_string(i);
-        reg.onPublisherInit(pubHandle(i), pub.c_str());
-        reg.onSubscriptionInit(subHandle(i), recv.c_str());
+        reg.onPublisherInit(pubHandle(i), nullptr, pub.c_str());
+        reg.onSubscriptionInit(subHandle(i), nullptr, recv.c_str());
         reg.onRclcppSubscriptionInit(rclSub(i), subHandle(i));
         reg.onCallbackAdded(cbHandle(i), rclSub(i));
     }
