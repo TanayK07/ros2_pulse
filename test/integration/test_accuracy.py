@@ -52,5 +52,48 @@ def test_accuracy_inter_process_separate_known_rate():
         print(f"inter /chatter measured {got:.2f} Hz")
 
 
+def test_accuracy_first_window_not_inflated():
+    """KNOWN_ISSUES #8: the FIRST window must not report ~2x the known rate.
+
+    On the buggy code the flush timer first fires at 2x the period while Hz divides by the
+    nominal period, so a 50 Hz publisher reads ~100 Hz in window one. Only the upper bound is
+    asserted: the first window may legitimately start slightly late (probe attaches at the first
+    tracepoint, before delivery begins) and therefore read a little low, never high.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "first.log")
+        text = ph.run_single("intra", out, run_s=4.0, period="1.0")
+        windows = ph.parse_windows(text)
+        assert windows, f"no windows written\n--- log ---\n{text}"
+        pair = windows[0]["recv"].get("/intra_topic")
+        assert pair is not None, f"/intra_topic missing from first window\n--- log ---\n{text}"
+        first_intra = pair[1]
+        hi = ph.KNOWN_RATE_HZ * (1.0 + TOL)
+        assert first_intra <= hi, (
+            f"first window intra={first_intra:.2f}Hz exceeds {hi:.2f}Hz — first-window "
+            f"inflation (KNOWN_ISSUES #8)\n--- log ---\n{text}")
+
+
+def test_window_header_reports_measured_elapsed():
+    """KNOWN_ISSUES #8b: window_s in each header is a measurement, not the configured constant.
+
+    Consecutive headers carry wall-clock ts_ns; the second header's window_s must agree with the
+    ts delta between them. Guards the measured-window plumbing against regressing to a constant
+    (holds both before and after the fix in the steady state; the fix makes it true by
+    construction).
+    """
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "measured.log")
+        text = ph.run_single("intra", out, run_s=5.0, period="1.0")
+        headers = [(int(m.group(1)), float(m.group(2)))
+                   for m in ph._HEADER_RE.finditer(text)]
+        assert len(headers) >= 3, f"need >=3 windows\n--- log ---\n{text}"
+        for (ts_a, _), (ts_b, win_b) in zip(headers, headers[1:]):
+            delta_s = (ts_b - ts_a) / 1e9
+            assert abs(win_b - delta_s) <= 0.25 * delta_s, (
+                f"window_s={win_b:.3f} inconsistent with inter-header delta {delta_s:.3f}s"
+                f"\n--- log ---\n{text}")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v", "-s"]))
