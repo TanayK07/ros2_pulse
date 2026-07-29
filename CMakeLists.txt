@@ -105,6 +105,9 @@ else()
       # the host during static destruction (KNOWN_ISSUES #9).
       ament_add_pytest_test(integration_shutdown test/integration/test_shutdown.py
         TIMEOUT 120)
+      # fork() without exec: the child re-arms its own flush timer (KNOWN_ISSUES #10).
+      ament_add_pytest_test(integration_fork test/integration/test_fork.py
+        TIMEOUT 120)
     endif()
   endif()
 

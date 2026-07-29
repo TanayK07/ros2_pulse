@@ -7,6 +7,11 @@
 //                                                                -> intra-process receive
 //   exit_storm : detached threads hammer the ros_trace_* interposers while main() returns
 //                                                                -> KNOWN_ISSUES #9 exit hazard
+//   fork_pub   : fork() WITHOUT exec; the child publishes via the interposers and must flush
+//                its own windows                                 -> KNOWN_ISSUES #10
+
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <memory>
@@ -16,11 +21,16 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
 
-// exit_storm drives the probe's interposed tracepoints directly (they resolve to
+// exit_storm / fork_pub drive the probe's interposed tracepoints directly (they resolve to
 // libros2_pulse.so under LD_PRELOAD, or to tracetools' real no-op functions otherwise). No rcl
-// machinery is involved, so the ONLY thing that can crash at exit is the probe itself.
+// machinery is involved: DDS state is not fork-safe and is irrelevant to the probe path, so the
+// ONLY thing that can fail is the probe itself.
 extern "C" void ros_trace_rcl_publish(const void* pub_handle, const void* message);
 extern "C" void ros_trace_callback_start(const void* callback, bool is_intra_process);
+extern "C" void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle,
+                                        const char* name, const char* ns);
+extern "C" void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handle,
+                                             const void* rmw_pub, const char* topic, size_t depth);
 
 using namespace std::chrono_literals;
 
@@ -107,6 +117,28 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(400ms);
         rclcpp::shutdown();
         return 0;
+    } else if (mode == "fork_pub") {
+        // fork()-without-exec hazard (KNOWN_ISSUES #10). Synthetic graph via direct interposer
+        // calls: arm the probe, register a publisher, then fork. The CHILD publishes ~500
+        // messages over ~2.5 s and exits normally — its counts must appear in the output file
+        // (periodic and/or final window). The parent publishes nothing and waits.
+        const auto* node_h = reinterpret_cast<const void*>(0xF0);
+        const auto* pub_h = reinterpret_cast<const void*>(0xF1);
+        ros_trace_rcl_node_init(node_h, nullptr, "forker", "");
+        ros_trace_rcl_publisher_init(pub_h, node_h, nullptr, "/forked", 10);
+
+        const pid_t pid = fork();
+        if (pid == 0) {
+            for (int i = 0; i < 500; ++i) {
+                ros_trace_rcl_publish(pub_h, nullptr);
+                std::this_thread::sleep_for(5ms);
+            }
+            return 0;  // normal exit: atexit final flush must persist the child's counts
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        rclcpp::shutdown();
+        return WIFEXITED(status) ? WEXITSTATUS(status) : 3;
     } else {
         fprintf(stderr, "unknown mode %s\n", mode.c_str());
         return 2;
