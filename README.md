@@ -16,8 +16,11 @@ should, and which nodes are alive?"** The existing options each fall short:
 
 - `ros2 topic hz` — subscribes to each topic (adds DDS traffic + CPU), one topic at a time, and is
   **blind to intra-process messages**.
-- **Built-in topic statistics** — [bypassed entirely by intra-process comms](https://github.com/ros2/rclcpp/issues/2911);
-  composable nodes carrying point clouds lose all introspection.
+- **Built-in topic statistics** — on Humble-class binaries,
+  [bypassed entirely by intra-process comms](https://github.com/ros2/rclcpp/issues/2911), so composable
+  nodes carrying point clouds lose all introspection. (Fixed upstream for intra-process on `rolling`/newer
+  by [rclcpp#3130](https://github.com/ros2/rclcpp/pull/3130), merged Apr 2026; no public Humble backport
+  as of this writing.)
 - **`ros2_tracing` / LTTng** — powerful, but built for offline analysis: needs ROS built with the
   lttng-ust backend, a running session daemon, and post-processing a CTF trace just to get a rate.
 - **eBPF/uprobe probes** — need `CAP_SYS_ADMIN` + debugfs + a kernel with BTF/uprobes (often a
@@ -33,7 +36,7 @@ writes ready-to-read Hz to a small rolling file.
 # ts_ns=1782887153899445923 window_s=5.000
 TOPIC /scan 20.000000                      # publish-side, inter-process
 RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
-RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools
+RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools on Humble
 NODE  /perception
 NODE  /planner
 ```
@@ -100,6 +103,11 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 
 - On ROS 2 Humble there is no intra-process *publish* tracepoint, so intra rate is measured
   **receive-side** (per subscription) — the signal you usually want.
+- **Node liveness is traffic-derived.** There is no node-teardown tracepoint on stock Humble, so a
+  node appears in the `NODE` lines only while a topic it publishes or subscribes to has carried
+  traffic within the last few windows; a node silent for several windows is treated as *quiet* and
+  drops out. A genuinely-alive but idle node (e.g. a pure timer/service node with no topic traffic)
+  therefore reads as quiet. Re-`init` of a node name does not duplicate its entry.
 - Requires tracing instrumentation compiled into the ROS build (default on Humble/Isaac debs;
   runtime-checkable via `ros_trace_compile_status()`).
 - File output only; no live network export (by design — zero network cost).

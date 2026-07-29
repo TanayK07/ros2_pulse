@@ -39,22 +39,24 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
     out += '\n';
 
     for (const auto& s : stats) {
-        // #1204-compatible publish-side line
-        if (s.inter_count > 0 || s.intra_count == 0) {
+        // Publish-side line, reading the genuine publish counter (split buckets, issue #1).
+        // Idle known topics still emit a zero line (see KNOWN_ISSUES.md #7).
+        if (s.pub_inter_count > 0 || (s.recv_inter_count == 0 && s.recv_intra_count == 0)) {
             out += "TOPIC ";
             out += s.topic;
             out += ' ';
-            out += sprintfStr("%.6f", s.inter_hz);
+            out += sprintfStr("%.6f", s.pub_inter_hz);
             out += '\n';
         }
-        // additive receive-side line incl. intra-process (the new capability)
-        if (s.intra_count > 0 || s.inter_count > 0) {
+        // Additive receive-side line incl. intra-process, independent of the publish counter so
+        // a same-process pub+sub is not double-counted.
+        if (s.recv_inter_count > 0 || s.recv_intra_count > 0) {
             out += "RECV ";
             out += s.topic;
             out += " inter=";
-            out += sprintfStr("%.6f", s.inter_hz);
+            out += sprintfStr("%.6f", s.recv_inter_hz);
             out += " intra=";
-            out += sprintfStr("%.6f", s.intra_hz);
+            out += sprintfStr("%.6f", s.recv_intra_hz);
             out += '\n';
         }
     }
