@@ -47,7 +47,8 @@ TEST(WindowFormat, MixedWindowExactBytes) {
     };
     std::vector<std::string> nodes = {"/perception", "/planner"};
 
-    const std::string got = formatWindow(stats, nodes, 1782887153899445923LL, 5.0);
+    const std::string got =
+        formatWindow(stats, nodes, 1782887153899445923LL, 5.0, /*emit_idle=*/false);
 
     const std::string want =
         "# ts_ns=1782887153899445923 window_s=5.000\n"
@@ -61,13 +62,26 @@ TEST(WindowFormat, MixedWindowExactBytes) {
     EXPECT_EQ(got, want);
 }
 
-// A declared-but-silent topic (no traffic) emits the zero TOPIC line and NO RECV line
-// (issue #7 behaviour — locked here so the atomic-write refactor does not change it).
-TEST(WindowFormat, IdleTopicEmitsZeroTopicLineOnly) {
+// A declared-but-silent topic (no traffic) is suppressed by default (issue #7): the window is
+// header + blank line only, no TOPIC zero line and no RECV line.
+TEST(WindowFormat, IdleTopicSuppressedByDefault) {
     std::vector<sTopicStat> stats = {stat("/idle", 0, 0, 0, 0.0, 0.0, 0.0)};
     std::vector<std::string> nodes = {};
 
-    const std::string got = formatWindow(stats, nodes, 42LL, 1.5);
+    const std::string got = formatWindow(stats, nodes, 42LL, 1.5, /*emit_idle=*/false);
+
+    const std::string want =
+        "# ts_ns=42 window_s=1.500\n"
+        "\n";
+    EXPECT_EQ(got, want);
+}
+
+// With the ROS_PULSE_EMIT_IDLE opt-in the zero TOPIC line comes back (and still no RECV line).
+TEST(WindowFormat, IdleTopicZeroLineRestoredByOptIn) {
+    std::vector<sTopicStat> stats = {stat("/idle", 0, 0, 0, 0.0, 0.0, 0.0)};
+    std::vector<std::string> nodes = {};
+
+    const std::string got = formatWindow(stats, nodes, 42LL, 1.5, /*emit_idle=*/true);
 
     const std::string want =
         "# ts_ns=42 window_s=1.500\n"
@@ -81,7 +95,7 @@ TEST(WindowFormat, NodesOnlyWindow) {
     std::vector<sTopicStat> stats = {};
     std::vector<std::string> nodes = {"/talker"};
 
-    const std::string got = formatWindow(stats, nodes, 7LL, 5.0);
+    const std::string got = formatWindow(stats, nodes, 7LL, 5.0, /*emit_idle=*/false);
 
     const std::string want =
         "# ts_ns=7 window_s=5.000\n"

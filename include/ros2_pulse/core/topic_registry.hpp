@@ -87,6 +87,13 @@ public:
     /// System/util topics excluded from output.
     static auto shouldFilter(const std::string& topic) -> bool;
 
+    /// Decide whether the publish-side `TOPIC` line should be written for this window's stat.
+    /// A fully-idle topic (no publish AND no receive traffic in any bucket) is emitted only when
+    /// @p emit_idle is true (operator opt-in via ROS_PULSE_EMIT_IDLE=1). Otherwise TOPIC is the
+    /// publish-side line: emitted only when this process published (pub_inter_count > 0); a
+    /// receive-only topic's signal is carried on the additive RECV line instead.
+    static auto shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> bool;
+
     /// Observability hook: number of times onCallbackStart has escalated to the EXCLUSIVE
     /// (write) lock to run the full resolution chain. In steady state this must stay flat —
     /// resolved callbacks and proven non-subscriptions are served from the shared-lock and
