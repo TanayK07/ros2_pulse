@@ -25,7 +25,7 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 | 6 | Low | docs | Dangling internal issue ref `#1204`; `#2911` premise needs a distro caveat | [#1](https://github.com/TanayK07/ros2_pulse/pull/1) |
 | 7 | Low | behaviour | Idle topics print `TOPIC /x 0.000000` every window (undocumented) | [#3](https://github.com/TanayK07/ros2_pulse/pull/3) |
 | 8 | **High** | correctness | ~~First window reports up to ~2× Hz: timer first-fire off-by-one + nominal (not measured) window denominator~~ | [#9](https://github.com/TanayK07/ros2_pulse/pull/9) |
-| 9 | Medium | robustness | Exit-time UAF: tracepoints can run during/after `ProbeRuntime` static destruction | — |
+| 9 | Medium | robustness | ~~Exit-time UAF: tracepoints can run during/after `ProbeRuntime` static destruction~~ | [#10](https://github.com/TanayK07/ros2_pulse/pull/10) |
 | 10 | Medium | robustness | `fork()` without `exec`: child inherits `m_started` but no flush thread → counts never written | — |
 | 11 | Low | docs / behaviour | Output file is append-only and unbounded; README claims a "rolling" file | — |
 | 12 | Medium | behaviour | Stalled subscription emits no `RECV` line — stall indistinguishable from absence | — |
