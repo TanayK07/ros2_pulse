@@ -13,13 +13,12 @@ using ros2_pulse::core::TopicRegistry;
 
 namespace {
 
-auto makeStat(uint64_t inter, uint64_t intra) -> sTopicStat {
+auto makeStat(uint64_t pub_inter, uint64_t recv_inter, uint64_t recv_intra) -> sTopicStat {
     sTopicStat s;
     s.topic = "/x";
-    s.inter_count = inter;
-    s.intra_count = intra;
-    s.inter_hz = 0.0;
-    s.intra_hz = 0.0;
+    s.pub_inter_count = pub_inter;
+    s.recv_inter_count = recv_inter;
+    s.recv_intra_count = recv_intra;
     return s;
 }
 
@@ -28,28 +27,36 @@ auto makeStat(uint64_t inter, uint64_t intra) -> sTopicStat {
 // A fully-idle topic (no inter- and no intra-process traffic) is the zero-line bug: by default it
 // must NOT be emitted, but it IS restored when the operator opts in via ROS_PULSE_EMIT_IDLE=1.
 TEST(ShouldEmitTopic, FullyIdleSuppressedByDefault) {
-    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 0), /*emit_idle=*/false));
+    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 0, 0), /*emit_idle=*/false));
 }
 
 TEST(ShouldEmitTopic, FullyIdleEmittedWhenOptedIn) {
-    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(0, 0), /*emit_idle=*/true));
+    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(0, 0, 0), /*emit_idle=*/true));
 }
 
-// An active inter-process topic is always emitted, regardless of the idle flag.
-TEST(ShouldEmitTopic, ActiveInterAlwaysEmitted) {
-    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 0), /*emit_idle=*/false));
-    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 0), /*emit_idle=*/true));
+// A locally-published topic is always emitted, regardless of the idle flag.
+TEST(ShouldEmitTopic, ActivePublisherAlwaysEmitted) {
+    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 0, 0), /*emit_idle=*/false));
+    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 0, 0), /*emit_idle=*/true));
 }
 
-// A topic with both transports active is always emitted (publish-side line still meaningful).
-TEST(ShouldEmitTopic, ActiveBothTransportsEmitted) {
-    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 5), /*emit_idle=*/false));
-    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 5), /*emit_idle=*/true));
+// Publish + receive in the same process (both buckets active): the publish-side line is still
+// meaningful and must be emitted.
+TEST(ShouldEmitTopic, ActivePubAndRecvEmitted) {
+    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 10, 5), /*emit_idle=*/false));
+    EXPECT_TRUE(TopicRegistry::shouldEmitTopic(makeStat(10, 10, 5), /*emit_idle=*/true));
 }
 
-// An intra-only topic must NOT emit the publish-side line (its signal is on the RECV line). This
-// preserves the pre-fix behaviour and must be independent of the idle flag.
-TEST(ShouldEmitTopic, IntraOnlyPublishLineSuppressed) {
-    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 7), /*emit_idle=*/false));
-    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 7), /*emit_idle=*/true));
+// An intra-receive-only topic must NOT emit the publish-side line (its signal is on the RECV
+// line). Independent of the idle flag.
+TEST(ShouldEmitTopic, IntraReceiveOnlyPublishLineSuppressed) {
+    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 0, 7), /*emit_idle=*/false));
+    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 0, 7), /*emit_idle=*/true));
+}
+
+// Same for an inter-receive-only topic (pure subscriber in this process): the split buckets
+// (issue #1) mean receive traffic no longer fabricates a publish-side rate.
+TEST(ShouldEmitTopic, InterReceiveOnlyPublishLineSuppressed) {
+    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 9, 0), /*emit_idle=*/false));
+    EXPECT_FALSE(TopicRegistry::shouldEmitTopic(makeStat(0, 9, 0), /*emit_idle=*/true));
 }
