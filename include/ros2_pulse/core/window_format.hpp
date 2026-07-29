@@ -18,8 +18,8 @@ namespace ros2_pulse::core {
 /// Layout (one trailing blank line closes the block):
 /// @code
 /// # ts_ns=<ts_ns> window_s=<window_s to 3dp>
-/// TOPIC <topic> <inter_hz to 6dp>                       // when inter_count>0 || intra_count==0
-/// RECV <topic> inter=<inter_hz to 6dp> intra=<intra_hz to 6dp>  // when intra_count>0 || inter_count>0
+/// TOPIC <topic> <pub_inter_hz to 6dp>          // when pub_inter_count>0 || no recv traffic
+/// RECV <topic> inter=<recv_inter_hz to 6dp> intra=<recv_intra_hz to 6dp>  // when any recv count>0
 /// NODE <node>
 /// <blank line>
 /// @endcode
