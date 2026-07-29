@@ -96,20 +96,69 @@ functional tests. Add sanitizer builds:
 
 ## CI
 
-`.github/workflows/ci.yml` currently runs `industrial_ci` on Humble. Add:
+`.github/workflows/ci.yml` runs four lanes (the standalone lanes rely on the
+`-DROS2_PULSE_STANDALONE=ON` no-ROS build path added in this PR):
 
-- A **sanitizer matrix leg** (TSan, ASan/UBSan) on the pure core — fast, no ROS container needed.
-- Keep Humble; consider adding a **rolling** leg so behaviour against the post-#3130 built-in stats
-  is observed (and so the intra claim's distro scope stays honest).
-- Gate merges on the accuracy + double-count integration tests once they land.
+- **`build-and-test` (Humble, blocking)** — `industrial_ci` builds the package and runs `colcon
+  test` in a Humble container (core gtest + integration). Unchanged from before.
+- **`standalone / fast` (blocking)** — plain `ubuntu-22.04`, no ROS container: configure with
+  `-DROS2_PULSE_STANDALONE=ON`, build the core + gtest suite via `find_package(GTest)`, `ctest`.
+- **`standalone / tsan` (blocking)** — same, `-DROS2_PULSE_SANITIZER=thread`. Catches data races on
+  the resolution maps and the thread-local / `m_id` interaction. Run under `setarch -R` to dodge the
+  TSan mmap-entropy FATAL on some kernels.
+- **`standalone / asan-ubsan` (blocking)** — same, `-DROS2_PULSE_SANITIZER=address` (address +
+  undefined). Catches the UAF class the registry-id guard defends against, plus UB.
+- **`rolling-nonblocking` (NON-blocking)** — `industrial_ci`, `ROS_DISTRO=rolling`,
+  `continue-on-error: true`. Only Humble is verifiable in-repo, so this is **observational**: it
+  watches ros2_pulse against the post-[#3130](https://github.com/ros2/rclcpp/pull/3130) built-in
+  intra-process stats so the intra-visibility claim's distro scope stays honest. It must **not**
+  gate merges — do not mark it a required check.
+
+The three `standalone` legs are locally reproducible on a stock ubuntu box, so they are blocking
+(mark them required in branch protection). Merges should additionally gate on the accuracy +
+double-count integration tests once the fix PRs land them.
+
+## What runs where
+
+Four lanes, layered fastest → slowest. The first three need **no ROS** thanks to the standalone
+build path (`-DROS2_PULSE_STANDALONE=ON`); only the integration lane needs a ROS container.
+
+| Lane | Build | Runs | CI job | Blocking |
+|---|---|---|---|---|
+| **Fast standalone core** | `cmake -DROS2_PULSE_STANDALONE=ON` → gtest via `find_package(GTest)` | the full `test_topic_registry` binary (unit + lifecycle/UAF + property + stress) | `standalone / fast` | yes |
+| **Sanitizer (TSan)** | standalone + `-DROS2_PULSE_SANITIZER=thread` | same binary, `-fsanitize=thread` | `standalone / tsan` | yes |
+| **Sanitizer (ASan/UBSan)** | standalone + `-DROS2_PULSE_SANITIZER=address` | same binary, `-fsanitize=address,undefined` | `standalone / asan-ubsan` | yes |
+| **ament / colcon** | `colcon build` (ament, Humble) | gtest (same suite) + pytest integration (probe + accuracy) | `build-and-test` | yes |
+| **Rolling (observational)** | `colcon build` (ament, rolling) | full colcon test | `rolling-nonblocking` | **no** |
+
+Stress/property size is CI-fast by default; scale locally via env:
+`ROS2_PULSE_PROP_TRIALS`, `ROS2_PULSE_STRESS_{THREADS,TOPICS,ROUNDS,SNAPSHOTS}`.
 
 ## Coverage → issue traceability
 
-| Issue | Unit | Integration | Sanitizer/stress |
-|---|---|---|---|
-| #1 double count | `SameProcessPubAndSub…`, `PublishSideIndependent…` | `test_single_process_inter_no_double_count`, `test_composed_container`, `test_accuracy_known_rate` | soak drift |
-| #2 node liveness | `DuplicateNodeInitDeduped`, `NodeLivenessSemantics` | `test_node_death` | — |
-| #3 lock storm | `TimerCallbackResolvedOnce`, `NegativeCacheDoesNotLeak` | `test_timer_heavy_node` | TSan |
-| #4 shared file | — | `test_per_process_output_file` | — |
-| #5 env parse | `ParsePeriod` | `test_probe_survives_bad_env` | — |
-| UAF guard | registry-id scoping test | — | ASan |
+**Landed in THIS PR (fix-independent — green on `main` today):**
+
+| Coverage | Test / artifact | Lane |
+|---|---|---|
+| Standalone (no-ROS) build path | `-DROS2_PULSE_STANDALONE=ON` in `CMakeLists.txt` | fast + sanitizer |
+| UAF / registry-id cache scoping | `RegistryLifecycle.*` (`test/unit/test_registry_lifecycle.cpp`) | fast + **ASan** |
+| Init-order robustness (property/fuzz) | `InitOrderProperty.RandomOrderNeverCrashesAndConverges` (`test/property/test_init_order.cpp`) | fast + sanitizer |
+| Concurrency exact totals + bounded map | `ConcurrencyStress.*` (`test/stress/test_concurrency.cpp`) | fast + **TSan** |
+| Accuracy harness (known-rate Hz) | `probe_harness.py`; `test_accuracy_intra_process_known_rate`, `test_accuracy_inter_process_separate_known_rate` (`test/integration/test_accuracy.py`) | ament integration |
+| Sanitizer + rolling CI legs | `.github/workflows/ci.yml` | — |
+
+**Per-issue regression tests (fail on `main`, land WITH their fix in PR #2–#6 — NOT in this PR):**
+
+| Issue (KNOWN_ISSUES) | Regression test(s) | Fix PR |
+|---|---|---|
+| #1 double count | `SameProcessPubAndSubDoNotDoubleCount`, `PublishSideIndependentOfReceive` (unit); `test_single_process_inter_no_double_count`, `test_composed_container` (integration, extend `probe_harness`) | **#4** (split `sTopicCounter` buckets) |
+| #2 node liveness | `DuplicateNodeInitDeduped`, `NodeLivenessSemantics`; `test_node_death` | fix PR (node-dedup) |
+| #3 lock storm | `TimerCallbackResolvedOnce`, `NegativeCacheDoesNotLeak`; `test_timer_heavy_node` | fix PR (negative-result cache + test hook) |
+| #4 shared output file | `test_per_process_output_file` | fix PR (`formatWindow` / per-pid path) |
+| #5 env parse | `ParsePeriod` (table test, `noexcept`); `test_probe_survives_bad_env` | fix PR (`parsePeriodSeconds`) |
+| #7 idle zero line | emit-predicate unit test | fix PR (`shouldEmitTopic`) |
+
+Notes: the single-process double-count accuracy assertion (`test_accuracy_known_rate` asserting
+≈R, not ≈2R) is deliberately **excluded here** — it fails on `main` by design and ships with PR #4.
+The exact PR number for each remaining fix is assigned by the fix-PR split; the anchor is that every
+regression test above lives WITH its fix, never on this branch. Issue #6 is docs-only (no test).

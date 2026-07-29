@@ -18,26 +18,47 @@
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
+#include <unistd.h>  // getpid
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <string>
 
+#include "ros2_pulse/core/env_config.hpp"
 #include "ros2_pulse/core/timer.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
+#include "ros2_pulse/core/window_format.hpp"
 
 namespace {
 
+using ros2_pulse::core::defaultOutputPath;
+using ros2_pulse::core::formatWindow;
+using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
 
-auto getEnv(const char* key, const char* def) -> std::string {
+// True iff the env var is set to exactly "1" (the documented opt-in form).
+auto envFlag(const char* key) -> bool {
     const char* v = std::getenv(key);
-    return (v && *v) ? std::string(v) : std::string(def);
+    return v != nullptr && v[0] == '1' && v[1] == '\0';
+}
+
+// Resolve where this process writes. An explicit ROS_TOPIC_STATS_OUTPUT_FILE is honoured verbatim
+// (operators can still deliberately share a path); otherwise default to a PER-PROCESS path with the
+// pid embedded, so a normal multi-process ROS launch no longer has every LD_PRELOADed process
+// appending to one shared file with no locking.
+auto resolveOutputPath() -> std::string {
+    const char* v = std::getenv("ROS_TOPIC_STATS_OUTPUT_FILE");
+    if (v && *v) {
+        return std::string(v);
+    }
+    return defaultOutputPath(static_cast<long>(::getpid()));
 }
 
 /// Process-wide probe runtime: the registry, the flush timer and output config.
@@ -56,6 +77,10 @@ public:
             std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
                                  "(out=%s, period=%.1fs)\n",
                          m_out_path.c_str(), m_period_s);
+            // Counting effectively begins here (first tracepoint) — stamp the window start
+            // before the flush thread exists so the first window's denominator is measured
+            // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
+            m_window_start = std::chrono::steady_clock::now();
             m_timer.emplace([this]() { flush(); },
                             std::chrono::milliseconds(static_cast<long>(m_period_s * 1000.0)));
             m_timer->start();
@@ -64,51 +89,65 @@ public:
 
 private:
     ProbeRuntime()
-        : m_out_path(getEnv("ROS_TOPIC_STATS_OUTPUT_FILE", "/root/ssd2tb/logs/topic_freq.log")),
-          m_period_s(std::stod(getEnv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD", "5.0"))),
+        : m_out_path(resolveOutputPath()),
+          // noexcept parse: a bad ROS_TOPIC_STATISTICS_PUBLISH_PERIOD must fall back to the default,
+          // never throw out of this tracepoint-reached ctor into rclcpp (KNOWN_ISSUES.md #5).
+          m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)),
           // Declared-but-silent topics (no traffic in a window) are suppressed by default so large
           // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
           // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
-          m_emit_idle(getEnv("ROS_PULSE_EMIT_IDLE", "0") == "1") {}
+          m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")) {}
 
     void flush() {
-        auto stats = m_registry.snapshot(m_period_s);
+        // Hz must divide by the MEASURED window, not the configured period: the first window is
+        // longer than the period (probe attaches before the timer's first fire) and any window
+        // can be stretched by flush latency or scheduler jitter (KNOWN_ISSUES #8b). steady_clock
+        // for the length (monotonic); ts_ns below stays wall-clock for log correlation.
+        const auto now_mono = std::chrono::steady_clock::now();
+        const double window_s = std::chrono::duration<double>(now_mono - m_window_start).count();
+        m_window_start = now_mono;
+        auto stats = m_registry.snapshot(window_s);
         auto nodes = m_registry.activeNodes();
         if (stats.empty() && nodes.empty()) {
             return;
         }
-        std::FILE* f = std::fopen(m_out_path.c_str(), "a");
-        if (!f) {
-            return;
-        }
         auto now = std::chrono::system_clock::now().time_since_epoch();
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), m_period_s);
-        for (const auto& s : stats) {
-            // #1204-compatible publish-side line. The emit decision (incl. the idle-topic policy
-            // gated by ROS_PULSE_EMIT_IDLE) lives in the pure core so it stays unit-testable.
-            if (TopicRegistry::shouldEmitTopic(s, m_emit_idle)) {
-                std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.inter_hz);
+        // Build the whole window block up front, then emit it with ONE fwrite. A window under
+        // BUFSIZ is a single write() at fclose, so its lines stay contiguous instead of
+        // interleaving mid-block with another process's per-line writes (see docs/issues/
+        // issue-4-per-process-output.md). The block carries the MEASURED window_s (issue #8b),
+        // and the TOPIC emit decision (incl. the idle-topic policy gated by ROS_PULSE_EMIT_IDLE)
+        // lives in the pure core so it stays unit-testable (issue #7).
+        const std::string block =
+            formatWindow(stats, nodes, static_cast<long long>(ns), window_s, m_emit_idle);
+
+        std::FILE* f = std::fopen(m_out_path.c_str(), "a");
+        if (!f) {
+            // Don't silently drop every window (e.g. the output directory doesn't exist). Warn
+            // ONCE — this runs on the timer thread every window, so a per-window log would spam.
+            bool expected = false;
+            if (m_warned_open_fail.compare_exchange_strong(expected, true)) {
+                std::fprintf(stderr,
+                             "[ros2_pulse] cannot open output file '%s' (%s) — dropping windows\n",
+                             m_out_path.c_str(), std::strerror(errno));
             }
-            // additive receive-side line incl. intra-process (the new capability)
-            if (s.intra_count > 0 || s.inter_count > 0) {
-                std::fprintf(f, "RECV %s inter=%.6f intra=%.6f\n", s.topic.c_str(), s.inter_hz,
-                             s.intra_hz);
-            }
+            return;
         }
-        for (const auto& n : nodes) {
-            std::fprintf(f, "NODE %s\n", n.c_str());
-        }
-        std::fprintf(f, "\n");
+        std::fwrite(block.data(), 1, block.size(), f);
         std::fclose(f);
     }
 
     TopicRegistry m_registry;
     std::optional<Timer> m_timer;
     std::atomic<bool> m_started{false};
+    std::atomic<bool> m_warned_open_fail{false};
     std::string m_out_path;
     double m_period_s;
     bool m_emit_idle;
+    // Start of the current stats window. Written in ensureStarted() (before the flush thread is
+    // created — the thread creation orders it) and thereafter only by flush() on the timer thread.
+    std::chrono::steady_clock::time_point m_window_start{};
 };
 
 template <typename Fn>
@@ -125,7 +164,7 @@ extern "C" {
 void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, const char* name,
                              const char* ns) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onNodeInit(name, ns);
+    ProbeRuntime::instance().registry().onNodeInit(node_handle, name, ns);
     static auto fn = realFn<void (*)(const void*, const void*, const char*, const char*)>(
         "ros_trace_rcl_node_init");
     if (fn) fn(node_handle, rmw_handle, name, ns);
@@ -134,7 +173,7 @@ void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, co
 void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handle,
                                   const void* rmw_pub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onPublisherInit(pub_handle, topic);
+    ProbeRuntime::instance().registry().onPublisherInit(pub_handle, node_handle, topic);
     static auto fn = realFn<void (*)(const void*, const void*, const void*, const char*, size_t)>(
         "ros_trace_rcl_publisher_init");
     if (fn) fn(pub_handle, node_handle, rmw_pub, topic, depth);
@@ -143,7 +182,7 @@ void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handl
 void ros_trace_rcl_subscription_init(const void* sub_handle, const void* node_handle,
                                      const void* rmw_sub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, topic);
+    ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, node_handle, topic);
     static auto fn = realFn<void (*)(const void*, const void*, const void*, const char*, size_t)>(
         "ros_trace_rcl_subscription_init");
     if (fn) fn(sub_handle, node_handle, rmw_sub, topic, depth);

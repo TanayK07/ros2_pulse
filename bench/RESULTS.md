@@ -40,10 +40,11 @@ mean baseline=6.192s  mean ours=6.177s  delta=-0.2%
 ## Per-operation microbench (isolated hot path)
 
 ```
-OLD (#1204 global mutex + per-msg string hash)  109.7 ns/op    9.1 M ops/s
+OLD (global mutex + per-msg string hash)         109.7 ns/op    9.1 M ops/s
 NEW (per-endpoint atomic + thread-local cache)     0.2 ns/op  4360.5 M ops/s   -> 478x
 ```
-This compares ours to the design it replaces (#1204), not to eBPF/LTTng.
+This compares ours to the design it replaces (the earlier global-mutex + per-message string-hash
+stats prototype), not to eBPF/LTTng.
 
 ## Verdict
 

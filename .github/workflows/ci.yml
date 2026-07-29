@@ -23,3 +23,55 @@ jobs:
           ROS_REPO: main
           ADDITIONAL_DEBS: build-essential
           AGGREGATE_TEST_RESULTS: 'true'
+
+  # Standalone (no-ROS) lanes on a plain ubuntu image: the pure-C++ core + the gtest suite,
+  # built via -DROS2_PULSE_STANDALONE=ON (find_package(GTest)/Threads, no ament). One plain
+  # "fast" lane plus two sanitizer lanes. All three are reproducible on a stock ubuntu box
+  # (no ROS container), so all three are BLOCKING — mark them required in branch protection.
+  standalone:
+    name: standalone core (${{ matrix.name }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: fast, sanitizer: '' }
+          - { name: tsan, sanitizer: 'thread' }
+          - { name: asan-ubsan, sanitizer: 'address' }
+    env:
+      # Fail the run on the first sanitizer report rather than continuing.
+      TSAN_OPTIONS: halt_on_error=1:second_deadlock_stack=1
+      ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake g++ libgtest-dev
+      - name: Configure
+        run: cmake -S . -B build -DROS2_PULSE_STANDALONE=ON -DROS2_PULSE_SANITIZER=${{ matrix.sanitizer }}
+      - name: Build
+        run: cmake --build build -j
+      - name: Test
+        # setarch -R disables ASLR to dodge the TSan "unexpected memory mapping" FATAL some
+        # runner kernels hit via high mmap entropy; it is harmless for the other legs.
+        run: setarch "$(uname -m)" -R ctest --test-dir build --output-on-failure
+
+  # Rolling distro lane — NON-BLOCKING (continue-on-error). Only Humble is verifiable in this
+  # repo's dev environment, so rolling is observational: it watches ros2_pulse against the
+  # post-#3130 built-in intra-process topic statistics (rclcpp PR #3130, merged to rolling
+  # Apr 2026) to keep the intra-visibility claim honest as upstream evolves. A rolling break
+  # must NOT gate merges, hence continue-on-error — do not mark this check required.
+  rolling-nonblocking:
+    name: ament + colcon (rolling, non-blocking)
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-industrial/industrial_ci@master
+        env:
+          ROS_DISTRO: rolling
+          ROS_REPO: main
+          ADDITIONAL_DEBS: build-essential
+          AGGREGATE_TEST_RESULTS: 'true'
