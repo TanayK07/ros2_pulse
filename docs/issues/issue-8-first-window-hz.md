@@ -68,6 +68,17 @@ the first data point to 2× the configured period (operator-visible startup late
 
    First fire at 1×interval; absolute-deadline cadence (no drift) preserved.
 
+   **Toolchain note (found by the new tests under TSan).** The deadline stays on
+   `steady_clock`, but each wait slice is issued as
+   `m_cv.wait_until(lock, system_clock::now() + remaining)`. A `steady_clock` timed wait
+   compiles to `pthread_cond_clockwait` on gcc-11/libstdc++, which gcc-11's libtsan does **not**
+   intercept — TSan then loses the unlock-during-wait and reports false "double lock of a mutex"
+   and data races on `m_mu` (4 warnings, sanitizer lane red). A `system_clock` wait maps to the
+   intercepted `pthread_cond_timedwait`. Correctness is unaffected: every wakeup re-derives the
+   remaining time from the steady deadline, so a wall-clock jump costs one extra loop iteration,
+   never a wrong fire time. The unit tests use atomics + sleep-polling instead of a
+   condition_variable for the same reason.
+
 2. **Measured window** (`src/probe/interposers.cpp`): `ProbeRuntime` stamps
    `steady_clock::now()` when the probe starts (`ensureStarted`) and at every flush; each flush
    computes `elapsed = now - m_window_start`, advances the stamp, passes `elapsed` to
