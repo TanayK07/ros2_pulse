@@ -58,6 +58,10 @@ public:
             std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
                                  "(out=%s, period=%.1fs)\n",
                          m_out_path.c_str(), m_period_s);
+            // Counting effectively begins here (first tracepoint) — stamp the window start
+            // before the flush thread exists so the first window's denominator is measured
+            // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
+            m_window_start = std::chrono::steady_clock::now();
             m_timer.emplace([this]() { flush(); },
                             std::chrono::milliseconds(static_cast<long>(m_period_s * 1000.0)));
             m_timer->start();
@@ -72,7 +76,14 @@ private:
           m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)) {}
 
     void flush() {
-        auto stats = m_registry.snapshot(m_period_s);
+        // Hz must divide by the MEASURED window, not the configured period: the first window is
+        // longer than the period (probe attaches before the timer's first fire) and any window
+        // can be stretched by flush latency or scheduler jitter (KNOWN_ISSUES #8b). steady_clock
+        // for the length (monotonic); ts_ns below stays wall-clock for log correlation.
+        const auto now_mono = std::chrono::steady_clock::now();
+        const double window_s = std::chrono::duration<double>(now_mono - m_window_start).count();
+        m_window_start = now_mono;
+        auto stats = m_registry.snapshot(window_s);
         auto nodes = m_registry.activeNodes();
         if (stats.empty() && nodes.empty()) {
             return;
@@ -83,7 +94,7 @@ private:
         }
         auto now = std::chrono::system_clock::now().time_since_epoch();
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), m_period_s);
+        std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), window_s);
         for (const auto& s : stats) {
             // publish-side line; output format kept compatible with the earlier global-mutex +
             // per-message-string-hash stats prototype this design replaced. It now reads the
@@ -111,6 +122,9 @@ private:
     std::atomic<bool> m_started{false};
     std::string m_out_path;
     double m_period_s;
+    // Start of the current stats window. Written in ensureStarted() (before the flush thread is
+    // created — the thread creation orders it) and thereafter only by flush() on the timer thread.
+    std::chrono::steady_clock::time_point m_window_start{};
 };
 
 template <typename Fn>
