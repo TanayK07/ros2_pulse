@@ -5,12 +5,13 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 [ALTERNATIVES.md](ALTERNATIVES.md) (prior art + benchmarking) and
 [TESTING_PLAN.md](TESTING_PLAN.md) (how each issue gets a regression test).
 
-> **Status.** Round 1 (issues 1–7): all addressed with research-backed, test-first PRs
+> **Status.** Round 1 (issues 1–7): all fixed and merged via research-backed, test-first PRs
 > ([docs/issues/](issues/) carries the per-issue research note; each PR ships the fix + its
-> regression test, red→green). #1, #2, #4, #5, #7, #8 merged; #3 and #6 open (in review).
-> **Round 2 (issues 8–14): found in a fresh audit of current `main` (2026-07-29)** — verified
-> against the post-round-1 code; each gets the same one-issue-one-PR treatment, fix order by
-> severity. Features/positioning work is tracked separately in [ROADMAP.md](ROADMAP.md).
+> regression test, red→green).
+> **Round 2 (issues 8–14): found in a fresh audit of `main` (2026-07-29)** — verified against
+> the post-round-1 code; same one-issue-one-PR treatment, fix order by severity. #8 fixed and
+> merged ([#9](https://github.com/TanayK07/ros2_pulse/pull/9)); 9–14 open.
+> Features/positioning work is tracked separately in [ROADMAP.md](ROADMAP.md).
 
 ## Summary
 
