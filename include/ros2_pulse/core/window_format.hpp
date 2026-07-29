@@ -18,16 +18,19 @@ namespace ros2_pulse::core {
 /// Layout (one trailing blank line closes the block):
 /// @code
 /// # ts_ns=<ts_ns> window_s=<window_s to 3dp>
-/// TOPIC <topic> <pub_inter_hz to 6dp>          // when pub_inter_count>0 || no recv traffic
+/// TOPIC <topic> <pub_inter_hz to 6dp>          // when TopicRegistry::shouldEmitTopic(stat, emit_idle)
 /// RECV <topic> inter=<recv_inter_hz to 6dp> intra=<recv_intra_hz to 6dp>  // when any recv count>0
 /// NODE <node>
 /// <blank line>
 /// @endcode
 ///
+/// @p emit_idle is the ROS_PULSE_EMIT_IDLE opt-in: fully-idle topics are suppressed unless true
+/// (see KNOWN_ISSUES.md #7 / docs/issues/issue-7-idle-topic-line.md).
+///
 /// Pure (no ROS / tracetools / I/O dependency) so the probe can build the whole window once and
 /// write it with a single call, and so the exact format is unit-testable.
 auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
-                  long long ts_ns, double window_s) -> std::string;
+                  long long ts_ns, double window_s, bool emit_idle) -> std::string;
 
 /// @brief Per-process default output path: `/root/ssd2tb/logs/topic_freq.<pid>.log`.
 ///

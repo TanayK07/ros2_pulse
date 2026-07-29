@@ -27,7 +27,7 @@ auto sprintfStr(const char* fmt, T value) -> std::string {
 }  // namespace
 
 auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
-                  long long ts_ns, double window_s) -> std::string {
+                  long long ts_ns, double window_s, bool emit_idle) -> std::string {
     std::string out;
     // Reserve a rough upper bound so the common window is built without reallocating.
     out.reserve(64 + stats.size() * 96 + nodes.size() * 32);
@@ -39,9 +39,10 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
     out += '\n';
 
     for (const auto& s : stats) {
-        // Publish-side line, reading the genuine publish counter (split buckets, issue #1).
-        // Idle known topics still emit a zero line (see KNOWN_ISSUES.md #7).
-        if (s.pub_inter_count > 0 || (s.recv_inter_count == 0 && s.recv_intra_count == 0)) {
+        // Publish-side line, reading the genuine publish counter (split buckets, issue #1). The
+        // emit decision — incl. the idle-topic suppression gated by emit_idle (issue #7) — lives
+        // in the core registry so it has one home and stays unit-testable.
+        if (TopicRegistry::shouldEmitTopic(s, emit_idle)) {
             out += "TOPIC ";
             out += s.topic;
             out += ' ';

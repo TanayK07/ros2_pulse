@@ -43,6 +43,12 @@ using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
 
+// True iff the env var is set to exactly "1" (the documented opt-in form).
+auto envFlag(const char* key) -> bool {
+    const char* v = std::getenv(key);
+    return v != nullptr && v[0] == '1' && v[1] == '\0';
+}
+
 // Resolve where this process writes. An explicit ROS_TOPIC_STATS_OUTPUT_FILE is honoured verbatim
 // (operators can still deliberately share a path); otherwise default to a PER-PROCESS path with the
 // pid embedded, so a normal multi-process ROS launch no longer has every LD_PRELOADed process
@@ -86,7 +92,11 @@ private:
         : m_out_path(resolveOutputPath()),
           // noexcept parse: a bad ROS_TOPIC_STATISTICS_PUBLISH_PERIOD must fall back to the default,
           // never throw out of this tracepoint-reached ctor into rclcpp (KNOWN_ISSUES.md #5).
-          m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)) {}
+          m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)),
+          // Declared-but-silent topics (no traffic in a window) are suppressed by default so large
+          // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
+          // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
+          m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")) {}
 
     void flush() {
         // Hz must divide by the MEASURED window, not the configured period: the first window is
@@ -106,9 +116,11 @@ private:
         // Build the whole window block up front, then emit it with ONE fwrite. A window under
         // BUFSIZ is a single write() at fclose, so its lines stay contiguous instead of
         // interleaving mid-block with another process's per-line writes (see docs/issues/
-        // issue-4-per-process-output.md). The block carries the MEASURED window_s (issue #8b).
+        // issue-4-per-process-output.md). The block carries the MEASURED window_s (issue #8b),
+        // and the TOPIC emit decision (incl. the idle-topic policy gated by ROS_PULSE_EMIT_IDLE)
+        // lives in the pure core so it stays unit-testable (issue #7).
         const std::string block =
-            formatWindow(stats, nodes, static_cast<long long>(ns), window_s);
+            formatWindow(stats, nodes, static_cast<long long>(ns), window_s, m_emit_idle);
 
         std::FILE* f = std::fopen(m_out_path.c_str(), "a");
         if (!f) {
@@ -132,6 +144,7 @@ private:
     std::atomic<bool> m_warned_open_fail{false};
     std::string m_out_path;
     double m_period_s;
+    bool m_emit_idle;
     // Start of the current stats window. Written in ensureStarted() (before the flush thread is
     // created — the thread creation orders it) and thereafter only by flush() on the timer thread.
     std::chrono::steady_clock::time_point m_window_start{};
