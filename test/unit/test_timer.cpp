@@ -5,13 +5,16 @@
 // The first window's Hz depends on the timer firing at exactly ONE interval: firing at 2x
 // (the off-by-one this guards against) doubles the first window's accumulation time, and firing
 // immediately would make it ~zero-length. Registers into the shared test binary (no main()).
+//
+// Synchronization here is atomics + sleep-polling on purpose: a condition_variable timed wait
+// compiles to pthread_cond_clockwait on this toolchain, which gcc-11's libtsan does not
+// intercept — the sanitizer lane would report false double-locks/races inside the test itself.
 
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
-#include <mutex>
+#include <cstdint>
 #include <thread>
 
 #include "ros2_pulse/core/timer.hpp"
@@ -24,30 +27,24 @@ using namespace std::chrono;
 // Bounds are wide (0.5x..1.6x) so sanitizer-lane scheduling noise cannot flake this.
 TEST(Timer, FirstCallbackArrivesWithinOneInterval) {
     constexpr auto kInterval = milliseconds(400);
-    std::mutex mu;
-    std::condition_variable cv;
-    bool fired = false;
-    steady_clock::time_point first_fire;
-
     const auto start = steady_clock::now();
+    std::atomic<int64_t> first_fire_ms{-1};
+
     Timer t(
         [&] {
-            std::lock_guard<std::mutex> lk(mu);
-            if (!fired) {
-                fired = true;
-                first_fire = steady_clock::now();
-                cv.notify_all();
-            }
+            const auto e = duration_cast<milliseconds>(steady_clock::now() - start).count();
+            int64_t expected = -1;
+            first_fire_ms.compare_exchange_strong(expected, e);  // record the FIRST fire only
         },
         kInterval);
     t.start();
-    {
-        std::unique_lock<std::mutex> lk(mu);
-        ASSERT_TRUE(cv.wait_for(lk, seconds(3), [&] { return fired; })) << "timer never fired";
+    for (int i = 0; i < 300 && first_fire_ms.load() < 0; ++i) {  // <= 3 s
+        std::this_thread::sleep_for(milliseconds(10));
     }
     t.stop();
 
-    const auto elapsed_ms = duration_cast<milliseconds>(first_fire - start).count();
+    const int64_t elapsed_ms = first_fire_ms.load();
+    ASSERT_GE(elapsed_ms, 0) << "timer never fired";
     EXPECT_GE(elapsed_ms, 200) << "first fire too early — a ~0-length first window breaks Hz";
     EXPECT_LE(elapsed_ms, 640) << "first fire late by ~one interval (first-tick off-by-one)";
 }
