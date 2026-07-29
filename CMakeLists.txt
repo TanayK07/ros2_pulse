@@ -101,6 +101,10 @@ else()
       # Accuracy harness: known-rate publisher -> reported Hz within tolerance (inter + intra).
       ament_add_pytest_test(integration_accuracy test/integration/test_accuracy.py
         TIMEOUT 180)
+      # Shutdown path: final partial window written at exit; straggler tracepoints can't crash
+      # the host during static destruction (KNOWN_ISSUES #9).
+      ament_add_pytest_test(integration_shutdown test/integration/test_shutdown.py
+        TIMEOUT 120)
     endif()
   endif()
 

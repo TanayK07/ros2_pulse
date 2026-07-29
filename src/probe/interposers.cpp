@@ -65,8 +65,16 @@ auto resolveOutputPath() -> std::string {
 class ProbeRuntime {
 public:
     static auto instance() -> ProbeRuntime& {
-        static ProbeRuntime s_instance;
-        return s_instance;
+        // LEAKY singleton — intentionally never destroyed (KNOWN_ISSUES #9). DDS transport and
+        // executor threads keep firing tracepoints while static destructors run in undefined
+        // cross-library order; a Meyers singleton's destroyed registry/mutex made those
+        // stragglers a use-after-free (reproducibly SIGSEGV under test/integration/
+        // test_shutdown.py's exit_storm). Leaked, the runtime stays valid for any straggler at
+        // any point of teardown — late events just count into buckets that are never flushed.
+        // The flush thread is stopped (and the tail window written) by the atexit hook below;
+        // the OS reclaims the rest at process exit.
+        static auto* s_instance = new ProbeRuntime();
+        return *s_instance;
     }
 
     auto registry() -> TopicRegistry& { return m_registry; }
@@ -84,10 +92,23 @@ public:
             m_timer.emplace([this]() { flush(); },
                             std::chrono::milliseconds(static_cast<long>(m_period_s * 1000.0)));
             m_timer->start();
+            // With the runtime leaked, nothing stops the flush thread implicitly anymore: join
+            // it at exit and write the FINAL PARTIAL window — the tail counts since the last
+            // periodic flush are exactly the data an operator wants from a dying process. Runs
+            // on the exiting thread and touches only our leaked objects + libc, so it is safe
+            // at any point of the atexit sequence.
+            std::atexit([] { ProbeRuntime::instance().shutdownAtExit(); });
         }
     }
 
 private:
+    void shutdownAtExit() {
+        if (m_timer) {
+            m_timer->stop();  // join the flush thread; periodic flushing ends here
+        }
+        flush();  // final partial window (measured window_s keeps its Hz honest, issue #8)
+    }
+
     ProbeRuntime()
         : m_out_path(resolveOutputPath()),
           // noexcept parse: a bad ROS_TOPIC_STATISTICS_PUBLISH_PERIOD must fall back to the default,
