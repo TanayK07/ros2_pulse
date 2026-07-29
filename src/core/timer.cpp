@@ -21,14 +21,29 @@ void Timer::start() {
 
 void Timer::runThread() {
     std::unique_lock<std::mutex> lock(m_mu);
-    auto end_time = std::chrono::steady_clock::now() + m_interval;
+    // Absolute-deadline cadence: the first fire lands at exactly ONE interval, and the deadline
+    // advances AFTER each callback so cadence never drifts by the callback's own duration.
+    // (Advancing it before the first wait made the first fire land at 2x the interval and the
+    // first stats window report ~2x Hz — KNOWN_ISSUES #8a.)
+    auto deadline = std::chrono::steady_clock::now() + m_interval;
     while (m_running) {
-        end_time += m_interval;
-        while (m_running && m_cv.wait_until(lock, end_time) != std::cv_status::timeout) {
+        // The deadline lives on steady_clock (immune to wall-clock jumps), but each wait slice
+        // is issued against system_clock: libstdc++ maps a steady_clock wait_until to
+        // pthread_cond_clockwait, which gcc-11's libtsan does not intercept — TSan then loses
+        // the unlock-during-wait and reports false double-locks/races on m_mu (the sanitizer CI
+        // lane runs exactly that toolchain). A system_clock wait uses the intercepted
+        // pthread_cond_timedwait. Correctness is unaffected: every wakeup — timeout, notify or
+        // wall-clock jump — re-derives the remaining time from the steady deadline, so a jump
+        // costs at most an extra loop iteration, never a wrong fire time.
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining > std::chrono::steady_clock::duration::zero()) {
+            m_cv.wait_until(lock, std::chrono::system_clock::now() + remaining);
+            continue;  // re-check m_running and the steady deadline after any wakeup
         }
         if (m_running) {
             m_func();
         }
+        deadline += m_interval;
     }
 }
 
