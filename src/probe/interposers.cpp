@@ -18,28 +18,41 @@
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
+#include <unistd.h>  // getpid
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <string>
 
 #include "ros2_pulse/core/env_config.hpp"
 #include "ros2_pulse/core/timer.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
+#include "ros2_pulse/core/window_format.hpp"
 
 namespace {
 
+using ros2_pulse::core::defaultOutputPath;
+using ros2_pulse::core::formatWindow;
 using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
 
-auto getEnv(const char* key, const char* def) -> std::string {
-    const char* v = std::getenv(key);
-    return (v && *v) ? std::string(v) : std::string(def);
+// Resolve where this process writes. An explicit ROS_TOPIC_STATS_OUTPUT_FILE is honoured verbatim
+// (operators can still deliberately share a path); otherwise default to a PER-PROCESS path with the
+// pid embedded, so a normal multi-process ROS launch no longer has every LD_PRELOADed process
+// appending to one shared file with no locking.
+auto resolveOutputPath() -> std::string {
+    const char* v = std::getenv("ROS_TOPIC_STATS_OUTPUT_FILE");
+    if (v && *v) {
+        return std::string(v);
+    }
+    return defaultOutputPath(static_cast<long>(::getpid()));
 }
 
 /// Process-wide probe runtime: the registry, the flush timer and output config.
@@ -70,7 +83,7 @@ public:
 
 private:
     ProbeRuntime()
-        : m_out_path(getEnv("ROS_TOPIC_STATS_OUTPUT_FILE", "/root/ssd2tb/logs/topic_freq.log")),
+        : m_out_path(resolveOutputPath()),
           // noexcept parse: a bad ROS_TOPIC_STATISTICS_PUBLISH_PERIOD must fall back to the default,
           // never throw out of this tracepoint-reached ctor into rclcpp (KNOWN_ISSUES.md #5).
           m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)) {}
@@ -88,38 +101,35 @@ private:
         if (stats.empty() && nodes.empty()) {
             return;
         }
-        std::FILE* f = std::fopen(m_out_path.c_str(), "a");
-        if (!f) {
-            return;
-        }
         auto now = std::chrono::system_clock::now().time_since_epoch();
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
-        std::fprintf(f, "# ts_ns=%lld window_s=%.3f\n", static_cast<long long>(ns), window_s);
-        for (const auto& s : stats) {
-            // publish-side line; output format kept compatible with the earlier global-mutex +
-            // per-message-string-hash stats prototype this design replaced. It now reads the
-            // genuine publish counter, so a pure in-process subscriber no longer fabricates a
-            // publish rate. Idle known topics still emit a zero line (see KNOWN_ISSUES.md #7).
-            if (s.pub_inter_count > 0 || (s.recv_inter_count == 0 && s.recv_intra_count == 0)) {
-                std::fprintf(f, "TOPIC %s %.6f\n", s.topic.c_str(), s.pub_inter_hz);
+        // Build the whole window block up front, then emit it with ONE fwrite. A window under
+        // BUFSIZ is a single write() at fclose, so its lines stay contiguous instead of
+        // interleaving mid-block with another process's per-line writes (see docs/issues/
+        // issue-4-per-process-output.md). The block carries the MEASURED window_s (issue #8b).
+        const std::string block =
+            formatWindow(stats, nodes, static_cast<long long>(ns), window_s);
+
+        std::FILE* f = std::fopen(m_out_path.c_str(), "a");
+        if (!f) {
+            // Don't silently drop every window (e.g. the output directory doesn't exist). Warn
+            // ONCE — this runs on the timer thread every window, so a per-window log would spam.
+            bool expected = false;
+            if (m_warned_open_fail.compare_exchange_strong(expected, true)) {
+                std::fprintf(stderr,
+                             "[ros2_pulse] cannot open output file '%s' (%s) — dropping windows\n",
+                             m_out_path.c_str(), std::strerror(errno));
             }
-            // additive receive-side line incl. intra-process (the new capability), independent of
-            // the publish counter so a same-process pub+sub is no longer double-counted.
-            if (s.recv_inter_count > 0 || s.recv_intra_count > 0) {
-                std::fprintf(f, "RECV %s inter=%.6f intra=%.6f\n", s.topic.c_str(),
-                             s.recv_inter_hz, s.recv_intra_hz);
-            }
+            return;
         }
-        for (const auto& n : nodes) {
-            std::fprintf(f, "NODE %s\n", n.c_str());
-        }
-        std::fprintf(f, "\n");
+        std::fwrite(block.data(), 1, block.size(), f);
         std::fclose(f);
     }
 
     TopicRegistry m_registry;
     std::optional<Timer> m_timer;
     std::atomic<bool> m_started{false};
+    std::atomic<bool> m_warned_open_fail{false};
     std::string m_out_path;
     double m_period_s;
     // Start of the current stats window. Written in ensureStarted() (before the flush thread is
