@@ -86,8 +86,36 @@ private:
 };
 
 int main(int argc, char** argv) {
-    rclcpp::init(argc, argv);
     std::string mode = argc > 1 ? argv[1] : "talker";
+
+    if (mode == "fork_pub") {
+        // fork()-without-exec hazard (KNOWN_ISSUES #10). Synthetic graph via direct interposer
+        // calls: arm the probe, register a publisher, then fork. The CHILD publishes ~500
+        // messages over ~2.5 s and exits normally — its counts must appear in the output file
+        // (periodic and/or final window). The parent publishes nothing and waits.
+        //
+        // Deliberately NO rclcpp::init in this mode: forking after rclcpp::init wedges the
+        // child inside rclcpp/DDS fork handlers even WITHOUT the probe preloaded (verified
+        // with a no-preload control), and the probe path needs no rcl machinery anyway.
+        const auto* node_h = reinterpret_cast<const void*>(0xF0);
+        const auto* pub_h = reinterpret_cast<const void*>(0xF1);
+        ros_trace_rcl_node_init(node_h, nullptr, "forker", "");
+        ros_trace_rcl_publisher_init(pub_h, node_h, nullptr, "/forked", 10);
+
+        const pid_t pid = fork();
+        if (pid == 0) {
+            for (int i = 0; i < 500; ++i) {
+                ros_trace_rcl_publish(pub_h, nullptr);
+                std::this_thread::sleep_for(5ms);
+            }
+            return 0;  // normal exit: atexit final flush must persist the child's counts
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : 3;
+    }
+
+    rclcpp::init(argc, argv);
 
     rclcpp::NodeOptions plain;
     rclcpp::NodeOptions ipc;
@@ -117,28 +145,6 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(400ms);
         rclcpp::shutdown();
         return 0;
-    } else if (mode == "fork_pub") {
-        // fork()-without-exec hazard (KNOWN_ISSUES #10). Synthetic graph via direct interposer
-        // calls: arm the probe, register a publisher, then fork. The CHILD publishes ~500
-        // messages over ~2.5 s and exits normally — its counts must appear in the output file
-        // (periodic and/or final window). The parent publishes nothing and waits.
-        const auto* node_h = reinterpret_cast<const void*>(0xF0);
-        const auto* pub_h = reinterpret_cast<const void*>(0xF1);
-        ros_trace_rcl_node_init(node_h, nullptr, "forker", "");
-        ros_trace_rcl_publisher_init(pub_h, node_h, nullptr, "/forked", 10);
-
-        const pid_t pid = fork();
-        if (pid == 0) {
-            for (int i = 0; i < 500; ++i) {
-                ros_trace_rcl_publish(pub_h, nullptr);
-                std::this_thread::sleep_for(5ms);
-            }
-            return 0;  // normal exit: atexit final flush must persist the child's counts
-        }
-        int status = 0;
-        waitpid(pid, &status, 0);
-        rclcpp::shutdown();
-        return WIFEXITED(status) ? WEXITSTATUS(status) : 3;
     } else {
         fprintf(stderr, "unknown mode %s\n", mode.c_str());
         return 2;
