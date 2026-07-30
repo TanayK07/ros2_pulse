@@ -54,4 +54,33 @@ double parsePeriodSeconds(const char* raw, double def) noexcept {
     return value;
 }
 
+unsigned long long parseMaxBytes(const char* raw, unsigned long long def) noexcept {
+    if (raw == nullptr) {
+        return def;  // variable unset
+    }
+
+    const char* first = raw;
+    const char* last = raw;
+    while (*last != '\0') {
+        ++last;
+    }
+    while (first != last && isAsciiSpace(*first)) {
+        ++first;
+    }
+    while (last != first && isAsciiSpace(*(last - 1))) {
+        --last;
+    }
+    if (first == last) {
+        return def;  // empty or whitespace-only
+    }
+
+    unsigned long long value = 0;
+    const std::from_chars_result res = std::from_chars(first, last, value);
+    // Whole-token integral parse only: rejects "512abc", "1.5", and (via unsigned) "-1".
+    if (res.ec != std::errc{} || res.ptr != last) {
+        return def;
+    }
+    return value;  // 0 is legitimate: rotation disabled
+}
+
 }  // namespace ros2_pulse::core
