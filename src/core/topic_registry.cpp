@@ -45,6 +45,13 @@ auto TopicRegistry::shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> b
     return stat.pub_inter_count > 0;
 }
 
+auto TopicRegistry::shouldEmitRecv(const sTopicStat& stat) -> bool {
+    // Receive traffic always emits; a proven (once-delivered) endpoint emits a zero line when
+    // idle so a dead upstream reads 0.0 instead of vanishing (KNOWN_ISSUES #12). Never-active
+    // subscriptions stay suppressed (issue #7: declared-but-silent is noise).
+    return stat.recv_inter_count > 0 || stat.recv_intra_count > 0 || stat.recv_endpoint_seen;
+}
+
 auto TopicRegistry::counterForTopic(const std::string& topic) -> sTopicCounter* {
     auto it = m_by_topic.find(topic);
     if (it != m_by_topic.end()) {
@@ -164,6 +171,10 @@ auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
         return nullptr;  // ditto: retry on a later delivery once subscription_init lands
     }
     m_cb_to_counter[callback] = c->second;  // cache once fully resolved
+    // First delivered message for this subscription: the topic is now a PROVEN receive
+    // endpoint, so idle windows keep emitting an explicit RECV 0.0 line for it
+    // (KNOWN_ISSUES #12). Written under the exclusive lock resolution already holds.
+    c->second->recv_endpoint_seen = true;
     return c->second;
 }
 
@@ -271,6 +282,7 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         s.pub_inter_hz = static_cast<double>(p) / w;
         s.recv_inter_hz = static_cast<double>(ri) / w;
         s.recv_intra_hz = static_cast<double>(rx) / w;
+        s.recv_endpoint_seen = c->recv_endpoint_seen;
         out.push_back(std::move(s));
     }
     // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose owned
