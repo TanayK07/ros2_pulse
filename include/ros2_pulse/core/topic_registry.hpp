@@ -100,6 +100,13 @@ public:
     /// thread-local fast paths. Used by the KNOWN_ISSUES #3 write-lock-storm regression tests.
     auto writeLockResolutions() const -> uint64_t;
 
+    // pthread_atfork support (used by the probe layer, KNOWN_ISSUES #10): quiesce the registry
+    // across fork() so the child never inherits m_mu locked by a thread it doesn't have.
+    void forkPrepare();     ///< before fork: take the write lock
+    void forkRelease();     ///< after fork, PARENT only: release it
+    void forkChildReset();  ///< after fork, CHILD only: re-init the lock (unlock is a no-op
+                            ///< there — the rwlock's stored writer TID no longer matches)
+
 private:
     // Caller must hold the EXCLUSIVE lock: this may insert into m_cb_to_counter. Resolves
     // callback→counter through the chain (callback → rclcpp-sub → rcl-handle → counter) and caches

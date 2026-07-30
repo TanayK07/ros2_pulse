@@ -24,6 +24,12 @@ public:
     void stop();   ///< interrupt and join (no-op if stopped)
     auto isRunning() const -> bool;
 
+    // pthread_atfork support (used by the probe layer, KNOWN_ISSUES #10): fork() must not land
+    // while the timer mutex is held by a thread the child won't have.
+    void forkPrepare();     ///< before fork: acquire the timer mutex
+    void forkRelease();     ///< after fork, parent AND child: release it
+    void forkChildReset();  ///< child only (mutex still held): drop the stale thread handle
+
 private:
     void runThread();
 

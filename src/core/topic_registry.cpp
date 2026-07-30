@@ -6,6 +6,7 @@
 #include "ros2_pulse/core/topic_registry.hpp"
 
 #include <mutex>  // for std::unique_lock with shared_mutex
+#include <new>    // placement-new (forkChildReset)
 #include <unordered_set>
 
 namespace ros2_pulse::core {
@@ -301,6 +302,20 @@ auto TopicRegistry::activeNodes() const -> std::vector<std::string> {
 
 auto TopicRegistry::writeLockResolutions() const -> uint64_t {
     return m_write_lock_resolutions.load(std::memory_order_relaxed);
+}
+
+void TopicRegistry::forkPrepare() { m_mu.lock(); }
+
+void TopicRegistry::forkRelease() { m_mu.unlock(); }
+
+void TopicRegistry::forkChildReset() {
+    // The write lock taken in forkPrepare() CANNOT be released in the fork child: glibc's
+    // rwlock records the writer's TID, and the forking thread's TID differs in the child, so
+    // pthread_rwlock_unlock is a silent no-op there — the registry would stay write-locked
+    // forever and the child's first shared_lock would hang (exactly the futex wait the
+    // issue-10 regression test caught). The child is single-threaded and is the lock's owner
+    // by inheritance, so re-initialize the mutex in place instead of unlocking it.
+    new (&m_mu) std::shared_mutex();
 }
 
 }  // namespace ros2_pulse::core

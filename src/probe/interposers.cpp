@@ -18,7 +18,8 @@
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
-#include <unistd.h>  // getpid
+#include <pthread.h>  // pthread_atfork
+#include <unistd.h>   // getpid
 
 #include <atomic>
 #include <cerrno>
@@ -26,7 +27,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <optional>
 #include <string>
 
 #include "ros2_pulse/core/env_config.hpp"
@@ -89,19 +89,70 @@ public:
             // before the flush thread exists so the first window's denominator is measured
             // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
             m_window_start = std::chrono::steady_clock::now();
-            m_timer.emplace([this]() { flush(); },
-                            std::chrono::milliseconds(static_cast<long>(m_period_s * 1000.0)));
+            // Heap-allocate the timer and LEAK any previous one (a fork()ed child re-arming
+            // here still holds the parent's timer object, whose condition variable may carry
+            // waiter refs from the dead flush thread — destroying such a cv can block forever
+            // in pthread_cond_destroy). One small leak per fork generation, same philosophy as
+            // the leaky runtime itself (KNOWN_ISSUES #9/#10).
+            m_timer = new Timer([this]() { flush(); },
+                                std::chrono::milliseconds(static_cast<long>(m_period_s * 1000.0)));
             m_timer->start();
-            // With the runtime leaked, nothing stops the flush thread implicitly anymore: join
-            // it at exit and write the FINAL PARTIAL window — the tail counts since the last
-            // periodic flush are exactly the data an operator wants from a dying process. Runs
-            // on the exiting thread and touches only our leaked objects + libc, so it is safe
-            // at any point of the atexit sequence.
-            std::atexit([] { ProbeRuntime::instance().shutdownAtExit(); });
+            // Process-lifecycle hooks, registered exactly once per PROCESS IMAGE (guarded by a
+            // flag the fork-child handler does NOT reset — atexit/atfork registrations are
+            // inherited across fork(), so re-registering per generation would stack duplicates
+            // in grandchildren):
+            //  - atexit (KNOWN_ISSUES #9): with the runtime leaked, nothing stops the flush
+            //    thread implicitly anymore — join it at exit and write the FINAL PARTIAL
+            //    window. Runs on the exiting thread, touches only leaked objects + libc.
+            //  - pthread_atfork (KNOWN_ISSUES #10): quiesce our locks across fork() and let
+            //    the child re-arm its own flush timer.
+            bool hooks_expected = false;
+            if (m_hooks_registered.compare_exchange_strong(hooks_expected, true)) {
+                std::atexit([] { ProbeRuntime::instance().shutdownAtExit(); });
+                pthread_atfork([] { ProbeRuntime::instance().forkPrepare(); },
+                               [] { ProbeRuntime::instance().forkParent(); },
+                               [] { ProbeRuntime::instance().forkChild(); });
+            }
         }
     }
 
 private:
+    // --- pthread_atfork handlers (KNOWN_ISSUES #10) ---
+    // Lock order matches the flush thread (Timer::runThread holds the timer mutex while
+    // flush() -> snapshot() takes the registry write lock), so prepare can never deadlock
+    // against a concurrent flush; fork then only lands at a quiescent point and the child
+    // inherits both locks HELD BY THE FORKING THREAD, which its handler may legally release.
+    void forkPrepare() {
+        if (m_timer) {
+            m_timer->forkPrepare();
+        }
+        m_registry.forkPrepare();
+    }
+    void forkParent() {
+        m_registry.forkRelease();
+        if (m_timer) {
+            m_timer->forkRelease();
+        }
+    }
+    void forkChild() {
+        // Registry: RE-INIT, not unlock — pthread rwlock unlock is a silent no-op in the child
+        // (stored writer TID no longer matches), which left the registry locked forever.
+        m_registry.forkChildReset();
+        if (m_timer) {
+            m_timer->forkChildReset();  // drop the stale (dead) flush-thread handle
+            m_timer->forkRelease();     // plain mutex: no owner check, unlock works in child
+        }
+        // The child is a new process: give it its own default output path (an explicit
+        // ROS_TOPIC_STATS_OUTPUT_FILE stays honoured verbatim inside resolveOutputPath), a
+        // fresh window origin, and let the NEXT tracepoint lazily re-arm the flush timer via
+        // ensureStarted(). Until then the inherited atexit hook still guarantees a final flush
+        // of whatever the child counts. Inherited pre-fork counts may smear into the child's
+        // first window — documented in docs/issues/issue-10-fork-without-exec.md.
+        m_out_path = resolveOutputPath();
+        m_window_start = std::chrono::steady_clock::now();
+        m_started.store(false);
+    }
+
     void shutdownAtExit() {
         if (m_timer) {
             m_timer->stop();  // join the flush thread; periodic flushing ends here
@@ -160,8 +211,11 @@ private:
     }
 
     TopicRegistry m_registry;
-    std::optional<Timer> m_timer;
+    Timer* m_timer{nullptr};  // heap-allocated, intentionally leaked (see ensureStarted)
     std::atomic<bool> m_started{false};
+    // Once-per-process-image guard for atexit/pthread_atfork registration. Deliberately NOT
+    // reset by forkChild(): the child inherits the parent's registrations.
+    std::atomic<bool> m_hooks_registered{false};
     std::atomic<bool> m_warned_open_fail{false};
     std::string m_out_path;
     double m_period_s;
