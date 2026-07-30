@@ -39,12 +39,26 @@ mean baseline=6.192s  mean ours=6.177s  delta=-0.2%
 
 ## Per-operation microbench (isolated hot path)
 
+Two access patterns per design: *fixed* = each thread hammers one endpoint (best case);
+*alt-4* = each thread alternates across 4 endpoints (the realistic camera-pipeline pattern —
+image + camera_info + compressed from one timer callback). 8 threads, 16-core x86 host,
+2026-07-31 run of `hotpath_bench.cpp`:
+
 ```
-OLD (global mutex + per-msg string hash)         109.7 ns/op    9.1 M ops/s
-NEW (per-endpoint atomic + thread-local cache)     0.2 ns/op  4360.5 M ops/s   -> 478x
+OLD (global mutex + per-msg string hash), fixed  1717.0 ns/op     0.6 M ops/s
+single-entry TLS cache (pre-#13), fixed             3.8 ns/op   259.9 M ops/s
+single-entry TLS cache (pre-#13), alt-4           496.2 ns/op     2.0 M ops/s   <- the thrash
+mini-map TLS cache (current), fixed                 2.9 ns/op   341.7 M ops/s
+mini-map TLS cache (current), alt-4                11.6 ns/op    86.1 M ops/s   -> 43x vs pre-#13
 ```
-This compares ours to the design it replaces (the earlier global-mutex + per-message string-hash
-stats prototype), not to eBPF/LTTng.
+
+The single-entry cache's alternating number is the KNOWN_ISSUES #13 finding: every call missed
+the cache and hit the shared rw-lock, whose cross-core contention dominated. The 16-slot
+direct-mapped mini-map keeps a typical per-thread working set cached; its alt-4 residue
+(11.6 vs 2.9 ns) is occasional same-slot collisions, still an order of magnitude under one
+LTTng-UST tracepoint (~158 ns). Numbers move with host/thread count — treat ratios, not
+absolutes, as the signal. This compares ours to the design it replaces (the earlier
+global-mutex + per-message string-hash stats prototype), not to eBPF/LTTng.
 
 ## Verdict
 
