@@ -50,8 +50,9 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += '\n';
         }
         // Additive receive-side line incl. intra-process, independent of the publish counter so
-        // a same-process pub+sub is not double-counted.
-        if (s.recv_inter_count > 0 || s.recv_intra_count > 0) {
+        // a same-process pub+sub is not double-counted. Proven receive endpoints emit an
+        // explicit zero line when idle — stall visibility (KNOWN_ISSUES #12).
+        if (TopicRegistry::shouldEmitRecv(s)) {
             out += "RECV ";
             out += s.topic;
             out += " inter=";
