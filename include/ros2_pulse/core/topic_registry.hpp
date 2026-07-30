@@ -22,6 +22,10 @@ namespace ros2_pulse::core {
 /// never fetch_add the same field (KNOWN_ISSUES.md #1 — see docs/issues/issue-1-double-count.md).
 struct sTopicCounter {
     std::string topic;
+    // True once a subscription callback for this topic has RESOLVED (first delivered message).
+    // Written only under the registry's write lock; lets a later zero-traffic window emit an
+    // explicit RECV 0.0 line instead of dropping the topic (KNOWN_ISSUES #12).
+    bool recv_endpoint_seen{false};
     std::atomic<uint64_t> pub_inter{0};   // inter-process publishes (rcl_publish)
     std::atomic<uint64_t> recv_inter{0};  // inter-process receives (callback_start, intra=false)
     std::atomic<uint64_t> recv_intra{0};  // intra-process receives (callback_start, intra=true)
@@ -36,6 +40,9 @@ struct sTopicStat {
     double pub_inter_hz{0.0};
     double recv_inter_hz{0.0};
     double recv_intra_hz{0.0};
+    // A subscription for this topic has delivered at least once — emit RECV even at zero so a
+    // dead upstream reads 0.0 instead of vanishing (KNOWN_ISSUES #12).
+    bool recv_endpoint_seen{false};
 };
 
 /// @brief One initialized node plus its recent-activity bookkeeping.
@@ -93,6 +100,13 @@ public:
     /// publish-side line: emitted only when this process published (pub_inter_count > 0); a
     /// receive-only topic's signal is carried on the additive RECV line instead.
     static auto shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> bool;
+
+    /// Decide whether the receive-side `RECV` line should be written for this window's stat:
+    /// when the window saw receive traffic, or when the topic is a proven receive endpoint
+    /// (delivered at least once) — so a stalled upstream reads an explicit 0.0 every window
+    /// instead of vanishing (KNOWN_ISSUES #12). Never-active subscriptions stay suppressed
+    /// (issue #7 rationale: declared-but-silent is noise, active-then-stopped is signal).
+    static auto shouldEmitRecv(const sTopicStat& stat) -> bool;
 
     /// Observability hook: number of times onCallbackStart has escalated to the EXCLUSIVE
     /// (write) lock to run the full resolution chain. In steady state this must stay flat —

@@ -36,10 +36,17 @@ def _env(so, out_path, period="1.0"):
 
 
 def _parse_recv(text):
-    """Return {topic: (inter_hz, intra_hz)} from the last window in the file."""
+    """Return {topic: (peak inter_hz, peak intra_hz)} across all windows.
+
+    Peak, not last: the final partial window at exit (issue #9) legitimately reads ~0, and
+    proven receive endpoints now emit explicit zero lines when idle (issue #12) — "did the
+    topic ever flow at rate" is the health signal these tests assert.
+    """
     out = {}
     for m in re.finditer(r"^RECV (\S+) inter=([\d.]+) intra=([\d.]+)", text, re.M):
-        out[m.group(1)] = (float(m.group(2)), float(m.group(3)))
+        topic, inter, intra = m.group(1), float(m.group(2)), float(m.group(3))
+        prev_inter, prev_intra = out.get(topic, (0.0, 0.0))
+        out[topic] = (max(prev_inter, inter), max(prev_intra, intra))
     return out
 
 
