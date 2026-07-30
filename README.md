@@ -86,9 +86,10 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROS_TOPIC_STATS_OUTPUT_FILE` | `/root/ssd2tb/logs/topic_freq.log` | Where the rolling stats file is appended. |
+| `ROS_TOPIC_STATS_OUTPUT_FILE` | `/root/ssd2tb/logs/topic_freq.<pid>.log` | Where the stats file is appended (per-process by default; set an explicit path to share one file deliberately). |
 | `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` | `5.0` | Flush/snapshot window, in seconds. |
-| `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no inter- **and** no intra-process traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` already omits fully-idle topics regardless. |
+| `ROS_TOPIC_STATS_MAX_BYTES` | `10485760` (10 MiB) | Size cap: at/over it the file rotates to `<path>.1` (single generation, worst-case disk = 2× cap per process). `0` disables rotation (pure append). Reopen-per-window is kept, so external logrotate also works. |
+| `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a **stalled** upstream stays visible) and omits never-active topics. |
 
 ## Benchmarks
 

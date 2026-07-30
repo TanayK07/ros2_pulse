@@ -23,6 +23,16 @@ namespace ros2_pulse::core {
 /// @return the parsed seconds on success, otherwise @p def.
 double parsePeriodSeconds(const char* raw, double def) noexcept;
 
+/// @brief Parse a byte-size cap (ROS_TOPIC_STATS_MAX_BYTES) out of a raw env-var string.
+///
+/// Same `noexcept` contract and rationale as parsePeriodSeconds (KNOWN_ISSUES #5): reached from
+/// the tracepoint-driven singleton constructor, must never throw.
+///
+/// `"0"` is a VALID value meaning "rotation disabled" — distinct from unusable input. Unset,
+/// empty, non-integral (`"1.5"`), negative, or trailing-junk input yields @p def. Surrounding
+/// whitespace is tolerated.
+unsigned long long parseMaxBytes(const char* raw, unsigned long long def) noexcept;
+
 }  // namespace ros2_pulse::core
 
 #endif  // ROS2_PULSE__CORE__ENV_CONFIG_HPP_

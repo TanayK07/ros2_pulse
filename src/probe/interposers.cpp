@@ -18,8 +18,9 @@
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
-#include <pthread.h>  // pthread_atfork
-#include <unistd.h>   // getpid
+#include <pthread.h>   // pthread_atfork
+#include <sys/stat.h>  // stat (size rotation)
+#include <unistd.h>    // getpid
 
 #include <atomic>
 #include <cerrno>
@@ -38,6 +39,7 @@ namespace {
 
 using ros2_pulse::core::defaultOutputPath;
 using ros2_pulse::core::formatWindow;
+using ros2_pulse::core::parseMaxBytes;
 using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
@@ -153,6 +155,25 @@ private:
         m_started.store(false);
     }
 
+    // Single-generation size rotation (KNOWN_ISSUES #11): at/over the cap, atomically rename
+    // <path> -> <path>.1 (replacing any previous generation) and let the append below start a
+    // fresh file. One stat() per window, on the flush thread — not the hot path. Reopen-per-
+    // window is preserved, so external logrotate keeps working for operators who prefer it.
+    void rotateIfNeeded() {
+        if (m_max_bytes == 0) {
+            return;  // rotation disabled
+        }
+        struct stat st {};
+        if (::stat(m_out_path.c_str(), &st) != 0) {
+            return;  // nothing written yet (or path inaccessible — the fopen below will warn)
+        }
+        if (static_cast<unsigned long long>(st.st_size) < m_max_bytes) {
+            return;
+        }
+        const std::string rotated = m_out_path + ".1";
+        ::rename(m_out_path.c_str(), rotated.c_str());
+    }
+
     void shutdownAtExit() {
         if (m_timer) {
             m_timer->stop();  // join the flush thread; periodic flushing ends here
@@ -165,6 +186,10 @@ private:
           // noexcept parse: a bad ROS_TOPIC_STATISTICS_PUBLISH_PERIOD must fall back to the default,
           // never throw out of this tracepoint-reached ctor into rclcpp (KNOWN_ISSUES.md #5).
           m_period_s(parsePeriodSeconds(std::getenv("ROS_TOPIC_STATISTICS_PUBLISH_PERIOD"), 5.0)),
+          // Size-rotation cap (KNOWN_ISSUES #11): rotate <path> -> <path>.1 at this size;
+          // 0 disables (pure append). Default 10 MiB bounds worst-case disk at 2x cap.
+          m_max_bytes(parseMaxBytes(std::getenv("ROS_TOPIC_STATS_MAX_BYTES"),
+                                    10ULL * 1024 * 1024)),
           // Declared-but-silent topics (no traffic in a window) are suppressed by default so large
           // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
           // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
@@ -194,6 +219,7 @@ private:
         const std::string block =
             formatWindow(stats, nodes, static_cast<long long>(ns), window_s, m_emit_idle);
 
+        rotateIfNeeded();
         std::FILE* f = std::fopen(m_out_path.c_str(), "a");
         if (!f) {
             // Don't silently drop every window (e.g. the output directory doesn't exist). Warn
@@ -219,6 +245,7 @@ private:
     std::atomic<bool> m_warned_open_fail{false};
     std::string m_out_path;
     double m_period_s;
+    unsigned long long m_max_bytes;
     bool m_emit_idle;
     // Start of the current stats window. Written in ensureStarted() (before the flush thread is
     // created — the thread creation orders it) and thereafter only by flush() on the timer thread.
