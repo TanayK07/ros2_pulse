@@ -65,6 +65,30 @@ and the **child** publishes ~500 messages over ~2.5 s and exits normally:
 The parent `waitpid`s the child and propagates its exit status, so a deadlocked or crashed child
 fails the test by timeout/rc instead of hanging silently.
 
+## Debugging findings (what the red test actually caught)
+
+Two things beyond the original analysis, both found by tracing the hung child
+(`strace -k` stack capture; gdb attach was blocked by yama ptrace_scope):
+
+1. **`std::shared_mutex` unlock is a silent no-op in a fork child.** glibc's rwlock stores the
+   writer's TID; the forking thread's TID differs in the child, so `pthread_rwlock_unlock`
+   fails the owner check and leaves the registry write-locked forever — the child's first
+   `shared_lock` blocked on the rwlock futex with no possible waker. The child handler must
+   **re-initialize** the mutex in place (`TopicRegistry::forkChildReset()`, placement-new) —
+   legal because the child is single-threaded and owns the lock by inheritance. A plain
+   `std::mutex` (the Timer's) has no owner check, so its unlock works in the child as-is.
+2. **`fork()` after `rclcpp::init` wedges the child with no probe involved** (verified with a
+   no-preload control run): rclcpp/DDS fork handlers leave the child stuck on a condvar. The
+   regression test therefore drives the interposers directly and forks *before* any rclcpp
+   init — which also matches the real-world pattern (Python `multiprocessing` forks before the
+   child touches ROS state).
+
+Also fixed along the way: a fork child re-arming the probe must not destroy the inherited
+Timer — its condition variable can carry waiter refs from the dead flush thread, and
+`pthread_cond_destroy` on such a cv can block forever. The runtime now heap-allocates the timer
+and leaks the previous instance on re-arm (one small leak per fork generation, same philosophy
+as the leaky runtime).
+
 ## Interactions
 
 - Builds on issue #9 (leaky singleton + atexit): the child inherits the parent's atexit

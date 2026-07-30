@@ -63,4 +63,21 @@ void Timer::stop() {
 
 auto Timer::isRunning() const -> bool { return m_running; }
 
+void Timer::forkPrepare() { m_mu.lock(); }
+
+void Timer::forkRelease() { m_mu.unlock(); }
+
+void Timer::forkChildReset() {
+    // fork() child: the flush thread does not survive, but the inherited std::thread handle
+    // still reports joinable. join() would hang forever (the red state of the issue-10
+    // regression test) and destroying/assigning a joinable std::thread calls std::terminate —
+    // detaching the stale descriptor is the one safe way to make the handle droppable. Then
+    // mark the timer stopped so the next start() arms a fresh thread. Called from the atfork
+    // child handler with the timer mutex held (taken in forkPrepare).
+    if (m_thread.joinable()) {
+        m_thread.detach();
+    }
+    m_running = false;
+}
+
 }  // namespace ros2_pulse::core
