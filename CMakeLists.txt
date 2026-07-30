@@ -108,6 +108,9 @@ else()
       # fork() without exec: the child re-arms its own flush timer (KNOWN_ISSUES #10).
       ament_add_pytest_test(integration_fork test/integration/test_fork.py
         TIMEOUT 120)
+      # Stall visibility: dead upstream must read RECV 0.0, not vanish (KNOWN_ISSUES #12).
+      ament_add_pytest_test(integration_stall test/integration/test_stall.py
+        TIMEOUT 120)
     endif()
   endif()
 

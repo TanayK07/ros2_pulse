@@ -90,6 +90,24 @@ TEST(WindowFormat, IdleTopicZeroLineRestoredByOptIn) {
     EXPECT_EQ(got, want);
 }
 
+// A stalled subscription (delivered once, then upstream died) must render an explicit RECV
+// zero line every window (KNOWN_ISSUES #12) — while its TOPIC line stays idle-suppressed.
+TEST(WindowFormat, StalledTopicEmitsRecvZeroLine) {
+    sTopicStat s;
+    s.topic = "/scan";
+    s.recv_endpoint_seen = true;  // proven receive endpoint, all counts zero this window
+    std::vector<sTopicStat> stats = {s};
+    std::vector<std::string> nodes = {};
+
+    const std::string got = formatWindow(stats, nodes, 42LL, 1.5, /*emit_idle=*/false);
+
+    const std::string want =
+        "# ts_ns=42 window_s=1.500\n"
+        "RECV /scan inter=0.000000 intra=0.000000\n"
+        "\n";
+    EXPECT_EQ(got, want);
+}
+
 // Nodes-only window (no topics yet) still emits a valid, closed block.
 TEST(WindowFormat, NodesOnlyWindow) {
     std::vector<sTopicStat> stats = {};
