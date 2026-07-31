@@ -52,8 +52,10 @@ tracing session** and adds no DDS traffic.
 
 - **Intra-process visibility** comes from `callback_start(callback, is_intra_process)`, which fires
   for every subscription callback regardless of transport.
-- **Hot path** is a per-endpoint relaxed atomic increment behind a thread-local cache — no global
-  lock, no per-message string hashing. Counting costs ~0.2 ns/op in isolation.
+- **Hot path** is a per-endpoint relaxed atomic increment behind a 16-slot thread-local cache —
+  no global lock, no per-message string hashing. Counting costs a few ns/op with a warm cache
+  (~3 ns fixed-endpoint, ~12 ns alternating across a 4-topic working set on the reference box) —
+  one to two orders of magnitude under a single LTTng-UST tracepoint (~158 ns).
 - A background timer snapshots + resets counts every `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` seconds
   and appends Hz to `ROS_TOPIC_STATS_OUTPUT_FILE`.
 
@@ -103,7 +105,8 @@ methodology in [`bench/`](bench/).
 | eBPF uprobe | ~noise at this rate¹ | bpftrace proc | 0 | ✅ | ✅ | CAP_SYS_ADMIN + BTF |
 | LTTng / ros2_tracing | — captured **0 events** on stock binaries² | daemons | CTF (large) | ✅ | ❌ needs rebuild | sessiond |
 
-Counting hot path microbench: **0.2 ns/op** (478× cheaper than a naive global-mutex + per-message
+Counting hot path microbench: **~3 ns/op** warm-cache, **~12 ns/op** alternating endpoints
+(hundreds of times cheaper than a naive global-mutex + per-message
 string-hash design).
 
 ¹ uprobe = per-event kernel trap (~µs), grows with message rate. ² stock `libtracetools.so` isn't

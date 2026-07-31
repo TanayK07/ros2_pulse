@@ -21,6 +21,28 @@ std::atomic<uint64_t> g_next_registry_id{1};
 // dereferenced: every read site compares it by identity and skips (see onCallbackStart).
 sTopicCounter g_not_a_subscription;
 sTopicCounter* const kNotASubscription = &g_not_a_subscription;
+
+// Direct-mapped thread-local hot-path cache, shared by onPublish and onCallbackStart (publisher
+// handles and callback objects are distinct live allocations, so the key domains cannot
+// collide). A single-entry cache thrashed on the REALISTIC pattern — one thread alternating
+// between a few endpoints per cycle — pushing every operation onto the shared rw-lock
+// (KNOWN_ISSUES #13). 16 slots cover a typical node's per-thread working set; a same-slot
+// collision merely degrades that key to the shared-lock path (it is a cache, not a map).
+// Entries are scoped by registry id so a recycled instance address can never be served a
+// destroyed registry's counter (same guard the single-entry cache had).
+struct sTlsSlot {
+    uint64_t id{0};
+    const void* key{nullptr};
+    sTopicCounter* ctr{nullptr};
+};
+constexpr uintptr_t kTlsSlotMask = 15;
+thread_local sTlsSlot t_tls_cache[kTlsSlotMask + 1];
+
+inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
+    // Live-object addresses have zeroed alignment bits; >>4 spreads neighbouring allocations
+    // across slots.
+    return t_tls_cache[(reinterpret_cast<uintptr_t>(key) >> 4) & kTlsSlotMask];
+}
 }  // namespace
 
 TopicRegistry::TopicRegistry(uint32_t quiet_windows)
@@ -179,39 +201,36 @@ auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
 }
 
 void TopicRegistry::onPublish(const void* pub_handle) {
-    // Thread-local cache is scoped to (registry id, handle) so it can never serve a counter
-    // owned by a different/destroyed registry instance, even at a recycled address.
-    thread_local uint64_t last_id = 0;
-    thread_local const void* last_key = nullptr;
-    thread_local sTopicCounter* last_ctr = nullptr;
-    if (pub_handle != nullptr && last_id == m_id && pub_handle == last_key) {
-        last_ctr->pub_inter.fetch_add(1, std::memory_order_relaxed);
+    if (pub_handle == nullptr) {
+        return;
+    }
+    sTlsSlot& slot = tlsSlotFor(pub_handle);
+    if (slot.id == m_id && slot.key == pub_handle) {
+        slot.ctr->pub_inter.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     std::shared_lock<std::shared_mutex> lock(m_mu);
+    m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
     auto it = m_pub_to_counter.find(pub_handle);
     if (it != m_pub_to_counter.end()) {
         it->second->pub_inter.fetch_add(1, std::memory_order_relaxed);
-        last_id = m_id;
-        last_key = pub_handle;
-        last_ctr = it->second;
+        slot = {m_id, pub_handle, it->second};
     }
 }
 
 void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process) {
-    // Fast path: thread-local cache of the last resolved callback for this thread, scoped to
-    // (registry id, callback) to avoid serving a counter from a destroyed registry instance.
-    thread_local uint64_t last_id = 0;
-    thread_local const void* last_key = nullptr;
-    thread_local sTopicCounter* last_ctr = nullptr;
-    if (callback != nullptr && last_id == m_id && callback == last_key) {
-        // last_ctr is either a resolved counter or the kNotASubscription sentinel. The sentinel
+    if (callback == nullptr) {
+        return;
+    }
+    sTlsSlot& slot = tlsSlotFor(callback);
+    if (slot.id == m_id && slot.key == callback) {
+        // slot.ctr is either a resolved counter or the kNotASubscription sentinel. The sentinel
         // means "known timer/service callback" — skip it without touching the lock or a counter.
-        if (last_ctr != kNotASubscription) {
+        if (slot.ctr != kNotASubscription) {
             if (is_intra_process) {
-                last_ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
+                slot.ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
             } else {
-                last_ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
+                slot.ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
             }
         }
         return;
@@ -223,6 +242,7 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     sTopicCounter* ctr = nullptr;
     {
         std::shared_lock<std::shared_mutex> lock(m_mu);
+        m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
         auto it = m_cb_to_counter.find(callback);
         if (it != m_cb_to_counter.end()) {
             ctr = it->second;
@@ -240,9 +260,7 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     if (ctr == nullptr) {
         return;
     }
-    last_id = m_id;
-    last_key = callback;
-    last_ctr = ctr;
+    slot = {m_id, callback, ctr};
     if (ctr == kNotASubscription) {
         return;  // proven timer/service callback — nothing to count
     }
@@ -314,6 +332,10 @@ auto TopicRegistry::activeNodes() const -> std::vector<std::string> {
 
 auto TopicRegistry::writeLockResolutions() const -> uint64_t {
     return m_write_lock_resolutions.load(std::memory_order_relaxed);
+}
+
+auto TopicRegistry::sharedLockLookups() const -> uint64_t {
+    return m_shared_lock_lookups.load(std::memory_order_relaxed);
 }
 
 void TopicRegistry::forkPrepare() { m_mu.lock(); }

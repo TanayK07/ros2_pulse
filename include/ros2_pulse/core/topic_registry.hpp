@@ -114,6 +114,13 @@ public:
     /// thread-local fast paths. Used by the KNOWN_ISSUES #3 write-lock-storm regression tests.
     auto writeLockResolutions() const -> uint64_t;
 
+    /// Observability hook: number of times a hot-path call missed the thread-local cache and
+    /// took the SHARED lock. Steady state for a warm per-thread working set must stay flat —
+    /// the KNOWN_ISSUES #13 regression asserts alternating endpoints don't thrash the cache.
+    /// Incremented only on the miss path (cold after warm-up), so the counter itself costs
+    /// nothing where it matters.
+    auto sharedLockLookups() const -> uint64_t;
+
     // pthread_atfork support (used by the probe layer, KNOWN_ISSUES #10): quiesce the registry
     // across fork() so the child never inherits m_mu locked by a thread it doesn't have.
     void forkPrepare();     ///< before fork: take the write lock
@@ -158,6 +165,7 @@ private:
 
     // Count of hot-path escalations to the exclusive lock (see writeLockResolutions()).
     std::atomic<uint64_t> m_write_lock_resolutions{0};
+    std::atomic<uint64_t> m_shared_lock_lookups{0};
 
     // Node liveness: owned records in insertion order, plus dedup-by-name and handle->node indexes.
     std::vector<std::unique_ptr<sNode>> m_nodes;
