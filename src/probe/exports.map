@@ -1,0 +1,10 @@
+/* Dynamic-symbol contract of the LD_PRELOAD probe (KNOWN_ISSUES #14): the ros_trace_*
+ * interposers and nothing else. -fvisibility=hidden handles our own code; this script also
+ * localizes the vague-linkage std:: template instantiations that libstdc++ headers force to
+ * default visibility. Pinned by test/integration/test_symbols.py. */
+{
+  global:
+    ros_trace_*;
+  local:
+    *;
+};
