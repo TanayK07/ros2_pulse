@@ -90,6 +90,26 @@ TEST(WindowFormat, IdleTopicZeroLineRestoredByOptIn) {
     EXPECT_EQ(got, want);
 }
 
+// Publish-side intra traffic (jazzy+, rclcpp_intra_publish) renders the ADDITIVE `PUB` line —
+// the legacy TOPIC line format stays untouched so existing parsers keep working. An intra-only
+// publisher gets a PUB line and no TOPIC line.
+TEST(WindowFormat, IntraPublisherEmitsAdditivePubLine) {
+    sTopicStat s;
+    s.topic = "/points";
+    s.pub_intra_count = 150;
+    s.pub_intra_hz = 30.0;
+    std::vector<sTopicStat> stats = {s};
+    std::vector<std::string> nodes = {};
+
+    const std::string got = formatWindow(stats, nodes, 42LL, 5.0, /*emit_idle=*/false);
+
+    const std::string want =
+        "# ts_ns=42 window_s=5.000\n"
+        "PUB /points inter=0.000000 intra=30.000000\n"
+        "\n";
+    EXPECT_EQ(got, want);
+}
+
 // A stalled subscription (delivered once, then upstream died) must render an explicit RECV
 // zero line every window (KNOWN_ISSUES #12) — while its TOPIC line stays idle-suppressed.
 TEST(WindowFormat, StalledTopicEmitsRecvZeroLine) {
