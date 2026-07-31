@@ -21,8 +21,12 @@ should, and which nodes are alive?"** The existing options each fall short:
   nodes carrying point clouds lose all introspection. (Fixed upstream for intra-process on `rolling`/newer
   by [rclcpp#3130](https://github.com/ros2/rclcpp/pull/3130), merged Apr 2026; no public Humble backport
   as of this writing.)
-- **`ros2_tracing` / LTTng** — powerful, but built for offline analysis: needs ROS built with the
-  lttng-ust backend, a running session daemon, and post-processing a CTF trace just to get a rate.
+- **`ros2_tracing` / LTTng** — powerful, but built for offline analysis: a running session daemon
+  and post-processing a CTF trace just to get a rate (and on Humble it additionally needs ROS
+  rebuilt with the lttng-ust backend; Jazzy+ binaries trace out-of-the-box).
+- **CARET (Tier IV)** — same hook layer as this probe (LD_PRELOAD over tracetools — independent
+  validation of the mechanism), built for deep offline latency/chain analysis: needs LTTng, a
+  forked rclcpp, and Jupyter post-processing. Complementary, not always-on.
 - **eBPF/uprobe probes** — need `CAP_SYS_ADMIN` + debugfs + a kernel with BTF/uprobes (often a
   non-starter on Jetson/embedded), and pay a kernel-trap per message.
 
@@ -125,6 +129,10 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
   therefore reads as quiet. Re-`init` of a node name does not duplicate its entry.
 - Requires tracing instrumentation compiled into the ROS build (default on Humble/Isaac debs;
   runtime-checkable via `ros_trace_compile_status()`).
+- **Python (rclpy) nodes: publish-side only.** `rcl_publish` fires in the C layer, so Python
+  publishers are counted; but `callback_start` is rclcpp-only and rclpy was never instrumented
+  ([ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)), so a Python subscriber's
+  deliveries do not appear in `RECV` lines.
 - File output only; no live network export (by design — zero network cost).
 
 ## Compatibility
