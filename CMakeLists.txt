@@ -131,6 +131,9 @@ else()
       # Symbol surface: only the ros_trace_* interposers may be exported (KNOWN_ISSUES #14).
       ament_add_pytest_test(integration_symbols test/integration/test_symbols.py
         TIMEOUT 60)
+      # Publish-side intra counts via rclcpp_intra_publish (jazzy+; humble asserts absence).
+      ament_add_pytest_test(integration_intra_publish test/integration/test_intra_publish.py
+        TIMEOUT 120)
     endif()
   endif()
 

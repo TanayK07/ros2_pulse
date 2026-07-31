@@ -9,6 +9,7 @@
 # Output format produced by src/probe/interposers.cpp, one block per window:
 #     # ts_ns=<int> window_s=<float>
 #     TOPIC <name> <inter_hz>
+#     PUB <name> inter=<inter_hz> intra=<intra_hz>     (jazzy+: publish-side intra)
 #     RECV <name> inter=<inter_hz> intra=<intra_hz>
 #     NODE <name>
 #     <blank line>
@@ -27,6 +28,7 @@ KNOWN_RATE_HZ = 50.0
 
 _HEADER_RE = re.compile(r"^# ts_ns=(\d+)\s+window_s=([\d.]+)", re.M)
 _TOPIC_RE = re.compile(r"^TOPIC (\S+) ([\d.]+)$")
+_PUB_RE = re.compile(r"^PUB (\S+) inter=([\d.]+) intra=([\d.]+)$")
 _RECV_RE = re.compile(r"^RECV (\S+) inter=([\d.]+) intra=([\d.]+)$")
 
 
@@ -63,11 +65,15 @@ def parse_windows(text):
         start = m.end()
         end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         block = text[start:end]
-        win = {"window_s": float(m.group(2)), "topic": {}, "recv": {}}
+        win = {"window_s": float(m.group(2)), "topic": {}, "pub": {}, "recv": {}}
         for line in block.splitlines():
             tm = _TOPIC_RE.match(line)
             if tm:
                 win["topic"][tm.group(1)] = float(tm.group(2))
+                continue
+            pm = _PUB_RE.match(line)
+            if pm:
+                win["pub"][pm.group(1)] = (float(pm.group(2)), float(pm.group(3)))
                 continue
             rm = _RECV_RE.match(line)
             if rm:

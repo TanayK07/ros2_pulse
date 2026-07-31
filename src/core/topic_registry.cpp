@@ -57,8 +57,8 @@ auto TopicRegistry::shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> b
     // Fully-idle topic (declared but silent this window): keep it out of the file by default so a
     // large graph isn't padded with `TOPIC /x 0.000000` lines every window; only the explicit
     // opt-in restores it. See docs/issues/issue-7-idle-topic-line.md.
-    const bool fully_idle = stat.pub_inter_count == 0 && stat.recv_inter_count == 0 &&
-                            stat.recv_intra_count == 0;
+    const bool fully_idle = stat.pub_inter_count == 0 && stat.pub_intra_count == 0 &&
+                            stat.recv_inter_count == 0 && stat.recv_intra_count == 0;
     if (fully_idle) {
         return emit_idle;
     }
@@ -200,20 +200,26 @@ auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
     return c->second;
 }
 
-void TopicRegistry::onPublish(const void* pub_handle) {
+void TopicRegistry::onPublish(const void* pub_handle) { publishCount(pub_handle, false); }
+
+void TopicRegistry::onIntraPublish(const void* pub_handle) { publishCount(pub_handle, true); }
+
+void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) {
     if (pub_handle == nullptr) {
         return;
     }
     sTlsSlot& slot = tlsSlotFor(pub_handle);
     if (slot.id == m_id && slot.key == pub_handle) {
-        slot.ctr->pub_inter.fetch_add(1, std::memory_order_relaxed);
+        auto& bucket = is_intra_process ? slot.ctr->pub_intra : slot.ctr->pub_inter;
+        bucket.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     std::shared_lock<std::shared_mutex> lock(m_mu);
     m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
     auto it = m_pub_to_counter.find(pub_handle);
     if (it != m_pub_to_counter.end()) {
-        it->second->pub_inter.fetch_add(1, std::memory_order_relaxed);
+        auto& bucket = is_intra_process ? it->second->pub_intra : it->second->pub_inter;
+        bucket.fetch_add(1, std::memory_order_relaxed);
         slot = {m_id, pub_handle, it->second};
     }
 }
@@ -284,9 +290,10 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         // Exchange all three split buckets first (this also resets them), so filtered topics still
         // count toward node activity even though they are excluded from the stats output.
         uint64_t p = c->pub_inter.exchange(0, std::memory_order_relaxed);
+        uint64_t px = c->pub_intra.exchange(0, std::memory_order_relaxed);
         uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
         uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
-        if (p > 0 || ri > 0 || rx > 0) {
+        if (p > 0 || px > 0 || ri > 0 || rx > 0) {
             active.insert(c);  // this topic's endpoints saw traffic -> owning node(s) are live
         }
         if (shouldFilter(c->topic)) {
@@ -295,9 +302,11 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         sTopicStat s;
         s.topic = c->topic;
         s.pub_inter_count = p;
+        s.pub_intra_count = px;
         s.recv_inter_count = ri;
         s.recv_intra_count = rx;
         s.pub_inter_hz = static_cast<double>(p) / w;
+        s.pub_intra_hz = static_cast<double>(px) / w;
         s.recv_inter_hz = static_cast<double>(ri) / w;
         s.recv_intra_hz = static_cast<double>(rx) / w;
         s.recv_endpoint_seen = c->recv_endpoint_seen;

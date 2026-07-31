@@ -49,6 +49,18 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += sprintfStr("%.6f", s.pub_inter_hz);
             out += '\n';
         }
+        // Publish-side intra line (jazzy+: the rclcpp_intra_publish tracepoint) — ADDITIVE,
+        // like RECV, so legacy TOPIC parsers stay valid. Emitted only when intra publishes
+        // happened this window (impossible on humble: the tracepoint doesn't exist there).
+        if (s.pub_intra_count > 0) {
+            out += "PUB ";
+            out += s.topic;
+            out += " inter=";
+            out += sprintfStr("%.6f", s.pub_inter_hz);
+            out += " intra=";
+            out += sprintfStr("%.6f", s.pub_intra_hz);
+            out += '\n';
+        }
         // Additive receive-side line incl. intra-process, independent of the publish counter so
         // a same-process pub+sub is not double-counted. Proven receive endpoints emit an
         // explicit zero line when idle — stall visibility (KNOWN_ISSUES #12).
