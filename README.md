@@ -127,9 +127,17 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 
 ## Compatibility
 
-Validated on ROS 2 Humble with both FastRTPS and CycloneDDS (the probe hooks above the DDS vendor,
-so it is middleware-agnostic). Iron/Jazzy support is planned (they add a dedicated intra-publish
-tracepoint that would enable publish-side intra counts).
+| Distro | Status | Notes |
+|---|---|---|
+| Humble (LTS, EOL 2027) | ✅ CI-tested | tracetools ships without the LTTng backend — the case where this probe is the *only* zero-rebuild option |
+| Jazzy (LTS, EOL 2029) | ✅ CI-tested | full suite green on stock `ros:jazzy`; tracetools is LTTng-enabled, the probe forwards so a live tracing session coexists |
+| Kilted | ✅ CI-tested | full suite green on stock `ros:kilted` |
+| Rolling | 🟡 non-blocking CI lane | observational — watches upstream churn |
+| Iron | ❌ not targeted | EOL December 2024 |
+
+Middleware-agnostic (hooks sit above the DDS vendor): validated with FastRTPS and CycloneDDS on
+Humble. Jazzy+ adds a dedicated `rclcpp_intra_publish` tracepoint enabling **publish-side** intra
+counts — hooking it is on the roadmap; intra rates are receive-side on all distros today.
 
 ## Contributing
 

@@ -7,20 +7,28 @@ on:
 
 jobs:
   build-and-test:
+    # BLOCKING distro matrix: every supported distro builds the package and runs the full
+    # colcon test suite (unit + the LD_PRELOAD integration tests incl. the symbol-surface
+    # check) inside the official ros:<distro> container. Humble = still-supported LTS with
+    # LTTng-less tracetools; Jazzy = current LTS (EOL 2029); Kilted = latest release. Iron is
+    # EOL (Dec 2024) and deliberately absent.
     name: build + test (${{ matrix.ROS_DISTRO }})
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        ROS_DISTRO: [humble]
+        ROS_DISTRO: [humble, jazzy, kilted]
     steps:
       - uses: actions/checkout@v4
-      # industrial_ci builds the package and runs colcon test inside a ROS_DISTRO container,
-      # then fails the job on any test failure (AbortTestOnError).
+      # industrial_ci builds the package and runs colcon test inside the container, then fails
+      # the job on any test failure (AbortTestOnError). DOCKER_IMAGE pins the official ROS
+      # image so the distro's own tracetools/rclcpp binaries are what we interpose — that IS
+      # the compatibility claim under test.
       - uses: ros-industrial/industrial_ci@master
         env:
           ROS_DISTRO: ${{ matrix.ROS_DISTRO }}
           ROS_REPO: main
+          DOCKER_IMAGE: ros:${{ matrix.ROS_DISTRO }}
           ADDITIONAL_DEBS: build-essential
           AGGREGATE_TEST_RESULTS: 'true'
 
@@ -65,7 +73,7 @@ jobs:
   # must NOT gate merges, hence continue-on-error — do not mark this check required.
   rolling-nonblocking:
     name: ament + colcon (rolling, non-blocking)
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -73,5 +81,8 @@ jobs:
         env:
           ROS_DISTRO: rolling
           ROS_REPO: main
+          # Rolling moved past ubuntu jammy; the official ros:rolling image tracks the right
+          # base OS, which is what the previous (apt-from-scratch) setup tripped over.
+          DOCKER_IMAGE: ros:rolling
           ADDITIONAL_DEBS: build-essential
           AGGREGATE_TEST_RESULTS: 'true'
