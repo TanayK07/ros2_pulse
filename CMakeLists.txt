@@ -104,7 +104,9 @@ else()
     find_package(std_msgs QUIET)
     if(rclcpp_FOUND AND std_msgs_FOUND)
       add_executable(stats_probe_test_nodes test/integration/test_nodes.cpp)
-      ament_target_dependencies(stats_probe_test_nodes rclcpp std_msgs)
+      # Modern target form — ament_target_dependencies() was removed on rolling (deprecated
+      # since jazzy); rclcpp::rclcpp and ${std_msgs_TARGETS} exist on every supported distro.
+      target_link_libraries(stats_probe_test_nodes rclcpp::rclcpp ${std_msgs_TARGETS})
       install(TARGETS stats_probe_test_nodes DESTINATION lib/${PROJECT_NAME})
 
       find_package(ament_cmake_pytest REQUIRED)
