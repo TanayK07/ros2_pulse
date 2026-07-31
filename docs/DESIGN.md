@@ -22,6 +22,12 @@ A prior approach (`rmw_stats_shim`) relied on `RMW_IMPLEMENTATION_WRAPPER`, whic
 stock ROS 2 Humble `rmw_implementation` — so it silently never ran. `ros2_pulse` needs no patched
 rmw and no ROS rebuild.
 
+**Related work.** [CARET](https://tier4.github.io/caret_doc/) (Tier IV) independently validates
+this exact mechanism at Autoware scale — LD_PRELOAD function hooking over the tracetools layer —
+but points it at deep offline latency/chain analysis (LTTng sessions, forked rclcpp, Jupyter
+post-processing). ros2_pulse makes the opposite trade: zero dependencies and an always-on,
+online Hz file. See `docs/ALTERNATIVES.md` for the full landscape.
+
 ## Mechanism
 
 `libros2_pulse.so` is `LD_PRELOAD`ed. It exports the same symbols as `libtracetools.so`; the dynamic
