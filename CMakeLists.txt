@@ -114,6 +114,9 @@ else()
       # Output rotation: ROS_TOPIC_STATS_MAX_BYTES bounds the file (KNOWN_ISSUES #11).
       ament_add_pytest_test(integration_rotation test/integration/test_rotation.py
         TIMEOUT 120)
+      # Symbol surface: only the ros_trace_* interposers may be exported (KNOWN_ISSUES #14).
+      ament_add_pytest_test(integration_symbols test/integration/test_symbols.py
+        TIMEOUT 60)
     endif()
   endif()
 
