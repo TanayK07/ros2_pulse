@@ -38,12 +38,47 @@ tool meets all five. Rundown:
 - **What.** The canonical instrumentation path. Hooks the same `ros_trace_*` tracepoints, records a
   CTF trace via an LTTng session, analyse offline with `tracetools_analysis` (pandas/Jupyter) to
   derive rates.
-- **Gap.** Needs `libtracetools.so` **built against `lttng-ust`** (not the case on some stock
-  images — the bake-off measured **0 events** on `ros:humble`), a running `lttng-sessiond`, and
-  post-processing. Built for offline analysis, not a cheap always-on "current Hz" readout.
+- **Gap (distro-dependent — be precise).** On **Humble**, `libtracetools.so` is **not built
+  against `lttng-ust`** (the bake-off measured **0 events** on stock `ros:humble`), so tracing
+  needs a ROS rebuild. Since **Iron**, the LTTng tracer is a ROS dependency and **stock binaries
+  trace out-of-the-box** — on Jazzy+ the "needs a rebuild" argument is gone, and the honest
+  differentiators are: no `lttng-sessiond`, no CTF post-processing, an *online* ready-to-read Hz
+  file, and zero setup. Built for offline analysis either way, not a cheap always-on readout.
 - **Relationship.** ros2_pulse hooks the *same layer* but replaces "record everything → analyse
   offline" with "count in-process → emit Hz now", and works even when the tracepoints are no-ops
-  (it interposes the function symbols themselves).
+  (it interposes the function symbols themselves). On LTTng-enabled distros the probe *forwards*
+  to the real tracepoints, so it coexists with a live tracing session.
+
+### CARET (Tier IV) — the mechanism cousin
+- **What.** [CARET](https://tier4.github.io/caret_doc/) is Tier IV's performance-analysis tool
+  for ROS 2 (built for Autoware): callback/communication/**chain** latency, frequency, period and
+  jitter. Crucially, it uses the **same core mechanism as ros2_pulse** — `LD_PRELOAD` function
+  hooking over the tracetools layer to add/observe tracepoints without rebuilding ROS core.
+  Independent, production-scale validation that preload-over-tracetools is sound.
+- **Gap (for this use case).** CARET is a *deep offline analysis* suite: it requires **LTTng**
+  recording sessions, a **forked/patched rclcpp** for its extra tracepoints, a from-source build
+  (no apt package), and Jupyter/CLI post-processing. Superb for "why is my pipeline slow";
+  heavyweight for "is every topic flowing right now".
+- **Relationship.** Same hook layer, opposite trade: CARET maximizes analytical depth at
+  deployment cost; ros2_pulse maximizes deployability (zero deps, always-on, online Hz file) at
+  analytical depth. They compose — pulse for 24/7 fleet monitoring, CARET for the deep dive when
+  pulse flags something.
+
+### `diagnostic_updater` topic diagnostics — the in-code incumbent
+- **What.** `diagnostic_updater::TopicDiagnostic` / `HeaderlessTopicDiagnostic`: the standard ROS
+  way to monitor a topic's rate against expected bounds, publishing to `/diagnostics`.
+- **Gap.** Requires **source changes in every node** (wrap each publisher / add an updater),
+  publishes over DDS, covers only what authors remembered to instrument, and nothing intra-only.
+- **Relationship.** ros2_pulse is the zero-touch equivalent for a whole process tree; the
+  expected-rate spec (ROADMAP R1) will close the "against bounds" half without per-node code.
+
+### rclpy (Python nodes) — a real limitation
+- Publish side **works** for Python nodes: `rcl_publish` fires in the C `rcl` layer under rclpy.
+- Receive side is **invisible**: `callback_start` is emitted by rclcpp only, and rclpy was never
+  instrumented at the client-library level
+  ([ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)). A Python subscriber's
+  delivery rate does not appear in `RECV` lines. Document this wherever receive-side claims are
+  made.
 
 ### eBPF / uprobe (bpftrace on the tracetools functions)
 - **What.** Attach uprobes to `ros_trace_rcl_publish` / `ros_trace_callback_start` and aggregate in
@@ -80,7 +115,9 @@ tool meets all five. Rundown:
 | `ros2 topic hz` | ❌ | yes (subscriber) | none | ✅ | ✅ (stdout, 1 topic) | ❌ |
 | Built-in topic stats (Humble) | ❌ (#2911) | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
 | Built-in topic stats (rolling, #3130) | ✅ | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
-| ros2_tracing / LTTng | ✅ | none (CTF disk) | sessiond | ❌ (needs lttng-ust build) | ❌ (offline) | ✅ (offline) |
+| ros2_tracing / LTTng | ✅ | none (CTF disk) | sessiond | ❌ Humble / ✅ Jazzy+ | ❌ (offline) | ✅ (offline) |
+| CARET (Tier IV) | ✅ | none (CTF disk) | sessiond | ❌ (forked rclcpp, source build) | ❌ (offline) | possible |
+| `diagnostic_updater` | ❌ | yes (/diagnostics) | none | ❌ (per-node source changes) | vs bounds | ❌ |
 | eBPF uprobe | ✅ | none (kernel map) | CAP_SYS_ADMIN | ✅ | needs script | possible |
 | DDS monitor | ❌ | monitor traffic | none | ✅ | ❌ | partial |
 
