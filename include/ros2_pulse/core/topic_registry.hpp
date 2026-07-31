@@ -27,6 +27,7 @@ struct sTopicCounter {
     // explicit RECV 0.0 line instead of dropping the topic (KNOWN_ISSUES #12).
     bool recv_endpoint_seen{false};
     std::atomic<uint64_t> pub_inter{0};   // inter-process publishes (rcl_publish)
+    std::atomic<uint64_t> pub_intra{0};   // intra-process publishes (rclcpp_intra_publish, jazzy+)
     std::atomic<uint64_t> recv_inter{0};  // inter-process receives (callback_start, intra=false)
     std::atomic<uint64_t> recv_intra{0};  // intra-process receives (callback_start, intra=true)
 };
@@ -35,9 +36,11 @@ struct sTopicCounter {
 struct sTopicStat {
     std::string topic;
     uint64_t pub_inter_count{0};
+    uint64_t pub_intra_count{0};
     uint64_t recv_inter_count{0};
     uint64_t recv_intra_count{0};
     double pub_inter_hz{0.0};
+    double pub_intra_hz{0.0};
     double recv_inter_hz{0.0};
     double recv_intra_hz{0.0};
     // A subscription for this topic has delivered at least once — emit RECV even at zero so a
@@ -83,7 +86,8 @@ public:
     void onNodeInit(const void* node_handle, const char* node_name, const char* node_namespace);
 
     // --- hot path ---
-    void onPublish(const void* pub_handle);                  // inter-process publish
+    void onPublish(const void* pub_handle);       // inter-process publish (rcl_publish)
+    void onIntraPublish(const void* pub_handle);  // intra-process publish (jazzy+ tracepoint)
     void onCallbackStart(const void* callback, bool is_intra_process);  // any-transport receive
 
     // --- aggregation ---
@@ -136,6 +140,10 @@ private:
     // callback with no m_cb_to_sub entry at all (a timer/service callback that can never resolve).
     auto resolveCallback(const void* callback) -> sTopicCounter*;
     auto counterForTopic(const std::string& topic) -> sTopicCounter*;
+
+    // Shared hot path for both publish transports: TLS-cache hit or shared-lock lookup on
+    // m_pub_to_counter, then bump the inter or intra publish bucket.
+    void publishCount(const void* pub_handle, bool is_intra_process);
 
     // Caller must hold the write lock. Records that the node identified by node_handle owns counter
     // (so window-boundary liveness can tell whether that node saw any traffic). No-op if the handle

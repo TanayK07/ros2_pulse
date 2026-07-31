@@ -30,18 +30,17 @@ wedged node whose subscriptions still drain — arguably a stronger health signa
 Service rates via `rcl_service_init` + `rclcpp_service_callback_added`. Bonus: timer callbacks
 become *resolvable*, retiring the negative-cache sentinel path for them (KNOWN_ISSUES #3).
 
-## R3. Distro matrix: Jazzy / Kilted / rolling
+## R3. Distro matrix: Jazzy / Kilted / rolling — **mostly DONE**
 
-Humble EOL is May 2027; Jazzy is the current LTS; Iron is already EOL. Work items:
-
-- CI: extend the industrial_ci matrix beyond `humble` (rolling lane exists, non-blocking).
-- Interposer signatures must be re-verified per distro — LD_PRELOAD interposition is
-  ABI-sensitive to `tracetools.h` changes.
-- Hook `rclcpp_intra_publish` (landed via rclcpp#2091 / ros2_tracing#30) → **publish-side
-  intra** counts on Jazzy+, retiring the Humble receive-side-only limitation there. Exporting
-  the extra symbol on Humble is harmless (never called).
-- Iron+ binaries ship LTTng-enabled tracetools: add an integration assertion that the probe and
-  a live LTTng session coexist (we forward via `dlsym(RTLD_NEXT)`, so both should fire).
+- ✅ CI: blocking matrix humble+jazzy+kilted on official `ros:<distro>` images; rolling
+  observational lane fixed (PR #16 — it immediately caught the `ament_target_dependencies`
+  removal on rolling).
+- ✅ Interposer signatures verified per distro: all hooked events plain-called by rcl/rclcpp on
+  jazzy/kilted; full suite green on both.
+- ✅ `rclcpp_intra_publish` hooked → **publish-side intra** counts on Jazzy+ (additive `PUB`
+  line; symbol exported-but-never-called on Humble).
+- ⬜ Remaining: integration assertion that the probe and a **live LTTng session** coexist on
+  Jazzy+ (we forward via `dlsym(RTLD_NEXT)`, so both should fire — assert it).
 
 ## R4. Positioning docs (ALTERNATIVES.md gaps)
 

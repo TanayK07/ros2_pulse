@@ -316,6 +316,17 @@ ROS2_PULSE_EXPORT void ros_trace_rcl_publish(const void* pub_handle, const void*
     if (fn) fn(pub_handle, message);
 }
 
+// jazzy+ only: rclcpp publishes an intra-process message through the IntraProcessManager. On
+// humble this symbol is exported but never called (the tracepoint doesn't exist there) — the
+// probe stays a single binary across distros.
+ROS2_PULSE_EXPORT void ros_trace_rclcpp_intra_publish(const void* publisher_handle,
+                                                      const void* message) {
+    ProbeRuntime::instance().registry().onIntraPublish(publisher_handle);
+    static auto fn =
+        realFn<void (*)(const void*, const void*)>("ros_trace_rclcpp_intra_publish");
+    if (fn) fn(publisher_handle, message);
+}
+
 ROS2_PULSE_EXPORT void ros_trace_callback_start(const void* callback, bool is_intra_process) {
     ProbeRuntime::instance().registry().onCallbackStart(callback, is_intra_process);
     static auto fn = realFn<void (*)(const void*, bool)>("ros_trace_callback_start");
