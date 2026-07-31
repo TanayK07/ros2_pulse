@@ -259,11 +259,16 @@ auto realFn(const char* name) -> Fn {
 
 }  // namespace
 
+// The library is compiled with -fvisibility=hidden (KNOWN_ISSUES #14) so nothing leaks into
+// the dynamic symbol table of every preloaded process; the seven interposers below are the
+// ONLY contract and are re-exported explicitly. test/integration/test_symbols.py pins this.
+#define ROS2_PULSE_EXPORT __attribute__((visibility("default")))
+
 extern "C" {
 
 // ---- graph init (low frequency) ----
 
-void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, const char* name,
+ROS2_PULSE_EXPORT void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, const char* name,
                              const char* ns) {
     ProbeRuntime::instance().ensureStarted();
     ProbeRuntime::instance().registry().onNodeInit(node_handle, name, ns);
@@ -272,7 +277,7 @@ void ros_trace_rcl_node_init(const void* node_handle, const void* rmw_handle, co
     if (fn) fn(node_handle, rmw_handle, name, ns);
 }
 
-void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handle,
+ROS2_PULSE_EXPORT void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handle,
                                   const void* rmw_pub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
     ProbeRuntime::instance().registry().onPublisherInit(pub_handle, node_handle, topic);
@@ -281,7 +286,7 @@ void ros_trace_rcl_publisher_init(const void* pub_handle, const void* node_handl
     if (fn) fn(pub_handle, node_handle, rmw_pub, topic, depth);
 }
 
-void ros_trace_rcl_subscription_init(const void* sub_handle, const void* node_handle,
+ROS2_PULSE_EXPORT void ros_trace_rcl_subscription_init(const void* sub_handle, const void* node_handle,
                                      const void* rmw_sub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
     ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, node_handle, topic);
@@ -290,13 +295,13 @@ void ros_trace_rcl_subscription_init(const void* sub_handle, const void* node_ha
     if (fn) fn(sub_handle, node_handle, rmw_sub, topic, depth);
 }
 
-void ros_trace_rclcpp_subscription_init(const void* sub_handle, const void* subscription) {
+ROS2_PULSE_EXPORT void ros_trace_rclcpp_subscription_init(const void* sub_handle, const void* subscription) {
     ProbeRuntime::instance().registry().onRclcppSubscriptionInit(subscription, sub_handle);
     static auto fn = realFn<void (*)(const void*, const void*)>("ros_trace_rclcpp_subscription_init");
     if (fn) fn(sub_handle, subscription);
 }
 
-void ros_trace_rclcpp_subscription_callback_added(const void* subscription, const void* callback) {
+ROS2_PULSE_EXPORT void ros_trace_rclcpp_subscription_callback_added(const void* subscription, const void* callback) {
     ProbeRuntime::instance().registry().onCallbackAdded(callback, subscription);
     auto fn =
         realFn<void (*)(const void*, const void*)>("ros_trace_rclcpp_subscription_callback_added");
@@ -305,13 +310,13 @@ void ros_trace_rclcpp_subscription_callback_added(const void* subscription, cons
 
 // ---- hot path ----
 
-void ros_trace_rcl_publish(const void* pub_handle, const void* message) {
+ROS2_PULSE_EXPORT void ros_trace_rcl_publish(const void* pub_handle, const void* message) {
     ProbeRuntime::instance().registry().onPublish(pub_handle);
     static auto fn = realFn<void (*)(const void*, const void*)>("ros_trace_rcl_publish");
     if (fn) fn(pub_handle, message);
 }
 
-void ros_trace_callback_start(const void* callback, bool is_intra_process) {
+ROS2_PULSE_EXPORT void ros_trace_callback_start(const void* callback, bool is_intra_process) {
     ProbeRuntime::instance().registry().onCallbackStart(callback, is_intra_process);
     static auto fn = realFn<void (*)(const void*, bool)>("ros_trace_callback_start");
     if (fn) fn(callback, is_intra_process);

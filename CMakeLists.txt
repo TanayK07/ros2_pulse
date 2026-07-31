@@ -76,6 +76,18 @@ else()
     src/probe/interposers.cpp
   )
   target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_NAME}_core ${CMAKE_DL_LIBS})
+  # Preloaded into every process on the robot: export ONLY the ros_trace_* interposer contract
+  # (explicit visibility("default") in interposers.cpp) — nothing else may leak into the host's
+  # dynamic symbol namespace (KNOWN_ISSUES #14; pinned by test/integration/test_symbols.py).
+  # The core objects are linked in statically, so they get the same treatment.
+  target_compile_options(${PROJECT_NAME} PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+  target_compile_options(${PROJECT_NAME}_core PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
+  # Version script localizes the vague-linkage std:: instantiations that header pragmas force
+  # back to default visibility — the export list is the script's global clause, nothing else.
+  target_link_options(${PROJECT_NAME} PRIVATE
+    "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/probe/exports.map")
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+    LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/probe/exports.map")
 
   install(DIRECTORY include/ DESTINATION include)
   install(TARGETS ${PROJECT_NAME}
@@ -114,6 +126,9 @@ else()
       # Output rotation: ROS_TOPIC_STATS_MAX_BYTES bounds the file (KNOWN_ISSUES #11).
       ament_add_pytest_test(integration_rotation test/integration/test_rotation.py
         TIMEOUT 120)
+      # Symbol surface: only the ros_trace_* interposers may be exported (KNOWN_ISSUES #14).
+      ament_add_pytest_test(integration_symbols test/integration/test_symbols.py
+        TIMEOUT 60)
     endif()
   endif()
 

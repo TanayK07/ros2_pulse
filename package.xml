@@ -21,8 +21,10 @@
   <test_depend>rclcpp</test_depend>
   <test_depend>std_msgs</test_depend>
   <test_depend>ros2run</test_depend>
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <!-- No ament_lint_auto/common: they were declared but never wired into CMake, so they never
+       ran (KNOWN_ISSUES #14). Quality gates are the gtest suites + TSan/ASan-UBSan CI lanes;
+       adopting a style linter should be a deliberate decision, not a manifest leftover. -->
+
 
   <export>
     <build_type>ament_cmake</build_type>
