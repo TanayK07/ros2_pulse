@@ -9,8 +9,8 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 > ([docs/issues/](issues/) carries the per-issue research note; each PR ships the fix + its
 > regression test, red→green).
 > **Round 2 (issues 8–14): found in a fresh audit of `main` (2026-07-29)** — verified against
-> the post-round-1 code; same one-issue-one-PR treatment, fix order by severity. #8 fixed and
-> merged ([#9](https://github.com/TanayK07/ros2_pulse/pull/9)); 9–14 open.
+> the post-round-1 code; same one-issue-one-PR treatment, fixed in severity order. **All seven
+> fixed and merged** (PRs [#9](https://github.com/TanayK07/ros2_pulse/pull/9)–[#15](https://github.com/TanayK07/ros2_pulse/pull/15)).
 > Features/positioning work is tracked separately in [ROADMAP.md](ROADMAP.md).
 
 ## Summary
