@@ -4,7 +4,12 @@ Defects live in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); this file tracks **features 
 work** — things the probe doesn't do yet, ordered by leverage. Research grounding: ros2_tracing
 design docs + paper (Bédard et al., RA-L 2022), CARET (Tier IV), ROS 2 distro release notes.
 
-## R1. Expected-rate spec + alerting — turns the logger into a monitor
+## R1. Expected-rate spec + alerting — turns the logger into a monitor — **DONE**
+
+> Shipped: `ROS_TOPIC_STATS_EXPECTED` spec (documented YAML subset, no YAML lib in the probe),
+> flush-time `WARN TOPIC` / `WARN NODE` lines with first-window grace, and the no-ROS
+> `pulse-check` CLI (exit 0/1/2) re-deriving verdicts from raw log rates. See README
+> "Expected-rate alerting".
 
 The headline question is "is every topic flowing at the rate it *should*" — today the operator
 must eyeball the log. Add an optional spec (`ROS_TOPIC_STATS_EXPECTED=/path/spec.yaml`):

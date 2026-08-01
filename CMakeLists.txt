@@ -57,6 +57,11 @@ file(GLOB ROS2_PULSE_CORE_TEST_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/test/property/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/test/stress/*.cpp")
 
+# pulse-check CLI (ROADMAP R1): offline expected-rate verdict over probe logs. Pure core, no
+# ROS dependency — built in BOTH lanes so the sanitizer lanes cover it too.
+add_executable(pulse-check tools/pulse_check.cpp)
+target_link_libraries(pulse-check PRIVATE ${PROJECT_NAME}_core)
+
 if(ROS2_PULSE_STANDALONE)
   # ---- standalone lane: core + gtest, no ament ----
   enable_testing()
@@ -93,6 +98,8 @@ else()
   install(TARGETS ${PROJECT_NAME}
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin)
+  # `ros2 run ros2_pulse pulse-check`, or invoked by path from watchdogs/CI (no ROS needed).
+  install(TARGETS pulse-check RUNTIME DESTINATION lib/${PROJECT_NAME})
 
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
@@ -134,6 +141,9 @@ else()
       # Publish-side intra counts via rclcpp_intra_publish (jazzy+; humble asserts absence).
       ament_add_pytest_test(integration_intra_publish test/integration/test_intra_publish.py
         TIMEOUT 120)
+      # Expected-rate alerting: WARN lines + first-window grace + pulse-check CLI (ROADMAP R1).
+      ament_add_pytest_test(integration_rate_spec test/integration/test_rate_spec.py
+        TIMEOUT 180)
     endif()
   endif()
 

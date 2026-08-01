@@ -12,6 +12,8 @@
 #     PUB <name> inter=<inter_hz> intra=<intra_hz>     (jazzy+: publish-side intra)
 #     RECV <name> inter=<inter_hz> intra=<intra_hz>
 #     NODE <name>
+#     WARN TOPIC <name> hz=<hz> expected=[lo,hi]       (only with ROS_TOPIC_STATS_EXPECTED)
+#     WARN NODE <name> missing
 #     <blank line>
 
 import os
