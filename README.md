@@ -1,8 +1,10 @@
 # ros2_pulse
 
-**The heartbeat of your ROS 2 graph.** A near-zero-overhead probe that measures per-topic message
-frequency and active-node liveness — for **both inter-process and intra-process** traffic — on
-**stock ROS 2 binaries**, with **no rebuild, no privileges, and zero network cost**.
+**The heartbeat of your ROS 2 graph.** A low-overhead probe (sub-ns counting hot path, ≈2 %
+workload CPU on a deliberately hostile 4,900 msg/s stress — less on real graphs) that measures
+per-topic message frequency and active-node liveness — for **both inter-process and
+intra-process** traffic — on **stock ROS 2 binaries**, with **no rebuild, no privileges, and
+zero network cost**.
 
 [![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-blue)](https://docs.ros.org/en/humble/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
@@ -100,19 +102,22 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 
 ## Benchmarks
 
-Measured on a `ros:humble` container, workload ≈ 4900 msg/s across 53 mixed topics
-(30 light @100 Hz + 8 heavy ~100 KB @50 Hz inter-process + 15 intra @100 Hz). Full harness +
-methodology in [`bench/`](bench/).
+Measured in `ros:humble` / `ros:jazzy` / `ros:kilted` containers, workload ≈ 4900 msg/s across
+53 mixed topics (30 light @100 Hz + 8 heavy ~100 KB @50 Hz inter-process + 15 intra @100 Hz) —
+a deliberately hostile stress. Paired, order-alternated trials (N=10 per distro) with error
+bars; full harness + methodology in [`bench/`](bench/).
 
 | Method | CPU overhead | Monitor's own cost | Disk | Intra-proc | Stock binaries | Privileges |
 |---|---|---|---|---|---|---|
-| **ros2_pulse** | **within noise** (interleaved N=6: −0.2%) | in-process | ~22 KB rolling | ✅ | ✅ | none |
+| **ros2_pulse** | **≈ +2 % at worst-case stress** (pooled +1.9 % ± 0.7 % across humble/jazzy/kilted; ~1 µs/msg all-in) | in-process | ~22 KB rolling | ✅ | ✅ | none |
 | eBPF uprobe | ~noise at this rate¹ | bpftrace proc | 0 | ✅ | ✅ | CAP_SYS_ADMIN + BTF |
 | LTTng / ros2_tracing | — captured **0 events** on stock binaries² | daemons | CTF (large) | ✅ | ❌ needs rebuild | sessiond |
 
-Counting hot path microbench: **~3 ns/op** warm-cache, **~12 ns/op** alternating endpoints
-(hundreds of times cheaper than a naive global-mutex + per-message
-string-hash design).
+Counting hot path microbench: **~0.3 ns/op** warm-cache, **~0.6–1.2 ns/op** alternating
+endpoints — two orders of magnitude under one LTTng-UST tracepoint (~158 ns). The end-to-end
+≈2 % is the diffuse footprint of observing at all (chained tracepoints, cache/TLB residency),
+attributed by controlled experiments in [`bench/RESULTS.md`](bench/RESULTS.md); real graphs
+with lower aggregate rates see proportionally less.
 
 ¹ uprobe = per-event kernel trap (~µs), grows with message rate. ² stock `libtracetools.so` isn't
 always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS.md`](bench/RESULTS.md).

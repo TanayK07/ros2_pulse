@@ -89,3 +89,17 @@ farm to fully distinct slots).
 - Fast / TSan / ASan+UBSan standalone lanes.
 - Paired end-to-end bench (N=10, order-alternated) on ros:jazzy: delta −0.5% ± 1.8% (SEM),
   statistically zero; per-distro numbers re-run for `bench/RESULTS.md` on the fixed probe.
+
+## Outcome addendum (post-merge, PR #19)
+
+The aliasing itself is fixed — regression red→green (3800/3800 fallbacks → 0), bench miss
+counters down 85–91%, microbench alt-4 from ~12 ns/op to 0.6–1.2 ns/op across distros.
+
+The final per-distro paired benchmarks (N=10 each) still measure a **residual ≈+1.9% ± 0.7%
+(pooled)** at the worst-case stress workload. Two further controls attribute it to neither
+the hot path nor the flush side: flushing-vs-not is +0.027 s ± 0.033 (zero), and instrumented
+flush time is 0.7–7 ms per process for the whole run. The single-experiment "statistically
+zero" reading above was underpowered (its CI, −0.116..+0.088 s, never excluded a +0.05 s
+effect) — pooling three independent distro runs resolves it. The residual is the diffuse
+footprint of observation (chained real tracepoints, extra cache/TLB residency across all
+executor threads) and is published as-is in `bench/RESULTS.md` rather than claimed away.

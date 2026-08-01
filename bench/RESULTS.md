@@ -1,81 +1,111 @@
-# Bake-off results
+# Benchmark results
 
-Measured in a `ros:humble` container (16-core x86 host). Workload: 30 light @100 Hz + 8 heavy
-(~100 KB) @50 Hz inter-process + 15 intra-process @100 Hz (~4900 msg/s aggregate). See
-`run_bakeoff.sh` (single-shot 4-leg) and `run_overhead_repeated.sh` (rigorous interleaved trials).
+Measured 2026-08-01 in stock `ros:humble` / `ros:jazzy` / `ros:kilted` containers on a 16-core
+x86 host. Workload: 30 light publishers @100 Hz + 8 heavy (~100 KB) @50 Hz inter-process + 15
+intra-process topics @100 Hz — ≈4,900 msg/s aggregate across 91 endpoints and 3 processes, all
+on `MultiThreadedExecutor`s. Metric: summed workload CPU seconds (`getrusage(RUSAGE_SELF)`).
+Harnesses: `run_overhead_repeated.sh` (paired end-to-end overhead + microbench) and
+`run_bakeoff.sh` (single-shot comparison vs eBPF/LTTng).
 
 ## Headline
 
 | Method | CPU overhead @4900 msg/s | Monitor's own cost | Disk | Intra-proc | Works on stock ROS binaries | Privileges / kernel |
 |---|---|---|---|---|---|---|
-| **ours (LD_PRELOAD tracetools)** | **−0.2 % (within noise)** | in-process, none | ~22 KB rolling file | ✅ | ✅ **yes, as-is** | **none** |
-| eBPF uprobe (bpftrace) | ~+0.2 % (noise) at this rate¹ | bpftrace proc ~0.02 s | 0 (in-kernel map) | ✅ (same hooks) | ✅ | **CAP_SYS_ADMIN + debugfs + BTF + uprobe kernel** |
-| LTTng / ros2_tracing | **n/a — captured 0 events²** | sessiond + consumerd | CTF (large when working) | ✅ | ❌ **needs ROS rebuilt with lttng-ust** | sessiond |
+| **ours (LD_PRELOAD tracetools)** | **≈ +2 % worst-case stress** (pooled +1.9 % ± 0.7 % SEM)¹ | in-process, none | ~22 KB rolling file | ✅ | ✅ **yes, as-is** | **none** |
+| eBPF uprobe (bpftrace) | ~+0.2 % (noise) at this rate² | bpftrace proc ~0.02 s | 0 (in-kernel map) | ✅ (same hooks) | ✅ | **CAP_SYS_ADMIN + debugfs + BTF + uprobe kernel** |
+| LTTng / ros2_tracing | **n/a — captured 0 events³** | sessiond + consumerd | CTF (large when working) | ✅ | ❌ **needs ROS rebuilt with lttng-ust** | sessiond |
 
-¹ uprobe cost is a per-event kernel trap (~1–2 µs). At 4900 msg/s that's ~0.1–0.2 % of a core —
-noise here — but it grows with message rate (point clouds at kHz would make it visible), whereas
-ours is an in-process relaxed atomic (~0.2 ns/op).
-² On this stock `ros:humble` image `libtracetools.so` is **not linked against lttng-ust**, so the
-`ros2:*` tracepoints are no-ops and `lttng` + `babeltrace2` recorded **0 events**. ros2_tracing
-requires ROS rebuilt with instrumentation to capture anything. (Verify separately on the Isaac image.)
+¹ Paired, order-alternated trials (N=10 per distro, methodology below). This workload is a
+deliberately hostile upper bound — 91 endpoints churning at 4,900 msg/s across every core.
+² uprobe cost is a per-event kernel trap (~1–2 µs). At 4900 msg/s that's ~0.1–0.2 % of a core —
+noise here — but it grows with message rate, whereas our in-line count is ~0.3–1.2 ns/op.
+³ On this stock `ros:humble` image `libtracetools.so` is **not linked against lttng-ust**, so
+the `ros2:*` tracepoints are no-ops and `lttng` + `babeltrace2` recorded **0 events**.
+ros2_tracing requires ROS rebuilt with instrumentation to capture anything.
 
-## Rigorous overhead (interleaved, N=6)
+## End-to-end overhead (paired, order-alternated, N=10 per distro)
 
-Single 10 s samples have ~±10 % run-to-run variance (the LTTng no-op leg swung −9 % vs baseline),
-which swamps a <2 % signal. Interleaving baseline/ours across 6 trials and averaging:
+Single samples of this workload swing ±4 % run-to-run — enough to fake (or hide) a ~2 %
+effect. So each trial runs baseline and probe back-to-back with the **arm order alternated
+every trial**, and the statistic is the mean of the per-trial differences with its standard
+error. A delta is only reported as real if it clears ~2× SEM. (This protocol exists because a
+fixed arm order and N=6 means *did* mislead us once — see the KNOWN_ISSUES #15 note.)
 
-```
-trial  baseline   ours
-1      6.306      6.288
-2      6.141      6.133
-3      6.169      6.113
-4      6.114      6.178
-5      6.162      6.173
-6      6.263      6.180
-mean baseline=6.192s  mean ours=6.177s  delta=-0.2%
-```
+Probe config: `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=2.0` (normal flushing).
 
-**Probe overhead is statistically indistinguishable from zero at this workload.**
+| Distro | baseline mean | probe mean | paired diff ± SEM | as % of baseline |
+|---|---|---|---|---|
+| humble | 2.449 s | 2.510 s | +0.061 s ± 0.036 | +2.5 % ± 1.5 % |
+| jazzy  | 2.515 s | 2.579 s | +0.064 s ± 0.041 | +2.5 % ± 1.6 % |
+| kilted | 2.570 s | 2.609 s | +0.039 s ± 0.023 | +1.5 % ± 0.9 % |
+| **pooled (inverse-variance)** | | | **+0.049 s ± 0.018** | **+1.9 % ± 0.7 %** |
+
+Per message that is ≈1 µs of added system cost against ≈51 µs the stack already spends
+delivering it. On realistic graphs (fewer endpoints, lower aggregate rate per process) the
+share is proportionally smaller.
+
+### Where the cost is (and is not) — controlled attributions, ros:jazzy
+
+| Experiment | Result | Conclusion |
+|---|---|---|
+| Null shim (same 8 exported symbols, empty bodies) vs baseline | −0.3 % | LD_PRELOAD interposition itself is free |
+| Probe with flushing disabled (`PERIOD=60`) vs with flushing (`PERIOD=2.0`), paired N=10 | +0.027 s ± 0.033 | flushing is not the cost |
+| Instrumented flush time (6 windows, 3 processes) | 0.7–7 ms wall total | flush work is µs–ms scale |
+| TLS-cache miss counters, pre-fix → post-fix | 31,926 → 6,509 fallbacks (pubfarm) | KNOWN_ISSUES #15 stride-aliasing fixed |
+| Paired bench pre-fix → post-fix | +2.6 % → +1.9 % (pooled) | cache fix reclaimed part of the delta |
+
+The residual ≈2 % does not localize to the hot path (sub-ns/op, below), the flush path, or
+symbol interposition — it is the diffuse footprint of observing at all: the chained call into
+the real tracepoint, extra code/data resident in cache and TLB across all 16 executor
+threads, and one parked flush thread. We report it rather than subtract it.
 
 ## Per-operation microbench (isolated hot path)
 
-Two access patterns per design: *fixed* = each thread hammers one endpoint (best case);
-*alt-4* = each thread alternates across 4 endpoints (the realistic camera-pipeline pattern —
-image + camera_info + compressed from one timer callback). 8 threads, 16-core x86 host,
-2026-07-31 run of `hotpath_bench.cpp`:
+Two access patterns: *fixed* = each thread hammers one endpoint (best case); *alt-4* = each
+thread alternates across 4 endpoints (the realistic camera-pipeline pattern). 8 threads,
+2026-08-01 run of `hotpath_bench.cpp` inside each distro container:
 
-```
-OLD (global mutex + per-msg string hash), fixed  1717.0 ns/op     0.6 M ops/s
-single-entry TLS cache (pre-#13), fixed             3.8 ns/op   259.9 M ops/s
-single-entry TLS cache (pre-#13), alt-4           496.2 ns/op     2.0 M ops/s   <- the thrash
-mini-map TLS cache (current), fixed                 2.9 ns/op   341.7 M ops/s
-mini-map TLS cache (current), alt-4                11.6 ns/op    86.1 M ops/s   -> 43x vs pre-#13
-```
+| Leg | humble | jazzy | kilted |
+|---|---|---|---|
+| OLD design (global mutex + per-msg string hash), fixed | 140.9 ns/op | 167.4 ns/op | 137.0 ns/op |
+| single-entry TLS cache (pre-#13), fixed | 0.3 ns/op | 0.3 ns/op | 0.4 ns/op |
+| single-entry TLS cache (pre-#13), alt-4 | 46.8 ns/op | 52.3 ns/op | 46.6 ns/op |
+| current TLS cache (post-#15), fixed | 0.3 ns/op | 0.3 ns/op | 0.3 ns/op |
+| current TLS cache (post-#15), alt-4 | **0.6 ns/op** | **1.2 ns/op** | **1.1 ns/op** |
 
-The single-entry cache's alternating number is the KNOWN_ISSUES #13 finding: every call missed
-the cache and hit the shared rw-lock, whose cross-core contention dominated. The 16-slot
-direct-mapped mini-map keeps a typical per-thread working set cached; its alt-4 residue
-(11.6 vs 2.9 ns) is occasional same-slot collisions, still an order of magnitude under one
-LTTng-UST tracepoint (~158 ns). Numbers move with host/thread count — treat ratios, not
-absolutes, as the signal. This compares ours to the design it replaces (the earlier
-global-mutex + per-message string-hash stats prototype), not to eBPF/LTTng.
+The alternating-pattern number is the one that matters in practice (KNOWN_ISSUES #13/#15):
+the single-entry cache thrashed to ~50 ns/op, and the 16-slot cache's stride-aliasing pushed
+realistic multi-topic farms onto a contended lock entirely. The current 256-slot
+stride-breaking cache holds alternation at ~1 ns/op — two orders of magnitude under one
+LTTng-UST tracepoint (~158 ns, Bédard et al. 2022). Numbers move with host/thread count —
+treat ratios, not absolutes, as the signal.
 
 ## Verdict
 
-- **CPU is not the differentiator.** At moderate rates ours ≈ eBPF ≈ measurement noise. Claiming
-  ours is dramatically cheaper on CPU than eBPF would be wrong at these rates.
+- **CPU cost is ≈2 % on a worst-case synthetic stress and proportionally less on real
+  graphs.** We publish the paired numbers with error bars instead of a "zero overhead" claim;
+  at moderate rates ours ≈ eBPF ≈ small, and the differentiator is elsewhere.
 - **Ours wins on deployability, and it's measured:**
-  - eBPF **required a privileged container** (CAP_SYS_ADMIN + debugfs + BTF) to attach at all — the
-    Orin/Jetson kernel-portability risk is real, not hypothetical. Ours needs zero privileges.
+  - eBPF **required a privileged container** (CAP_SYS_ADMIN + debugfs + BTF) to attach at all —
+    the Orin/Jetson kernel-portability risk is real, not hypothetical. Ours needs zero privileges.
   - LTTng/ros2_tracing **captured nothing on the stock binaries** — needs a ROS rebuild with
-    lttng-ust, then offline CTF analysis to derive Hz. Ours runs on the exact deployed binaries and
-    emits ready-to-read Hz to a tiny file.
-- **No single off-the-shelf option meets all constraints** (intra-process + zero-network + zero-priv
-  + stock-binary + drop-in file). Ours does — that is the empirically supported "better."
+    lttng-ust, then offline CTF analysis to derive Hz. Ours runs on the exact deployed binaries
+    and emits ready-to-read Hz to a tiny file.
+- **No single off-the-shelf option meets all constraints** (intra-process + zero-network +
+  zero-priv + stock-binary + drop-in file). Ours does — that is the empirically supported
+  "better."
 
 ## Reproduce
 
 ```bash
+# per distro: paired overhead trials + microbench
+docker run --rm -e ROS_DISTRO=humble -v <pkg>:/pkg:ro -v /tmp/bench-humble:/work ros:humble \
+  bash /pkg/bench/run_overhead_repeated.sh
+docker run --rm -e ROS_DISTRO=jazzy  -v <pkg>:/pkg:ro -v /tmp/bench-jazzy:/work  ros:jazzy \
+  bash /pkg/bench/run_overhead_repeated.sh
+docker run --rm -e ROS_DISTRO=kilted -v <pkg>:/pkg:ro -v /tmp/bench-kilted:/work ros:kilted \
+  bash /pkg/bench/run_overhead_repeated.sh
+
+# bake-off vs eBPF / LTTng (needs --privileged for the eBPF leg)
 docker run --rm --privileged -v <pkg>:/pkg -v /tmp/bench:/work ros:humble bash /pkg/bench/run_bakeoff.sh
-docker run --rm            -v <pkg>:/pkg -v /tmp/bench:/work ros:humble bash /pkg/bench/run_overhead_repeated.sh
 ```

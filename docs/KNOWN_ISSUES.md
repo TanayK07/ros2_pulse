@@ -12,7 +12,10 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 > the post-round-1 code; same one-issue-one-PR treatment, fixed in severity order. **All seven
 > fixed and merged** (PRs [#9](https://github.com/TanayK07/ros2_pulse/pull/9)–[#15](https://github.com/TanayK07/ros2_pulse/pull/15)).
 > **Round 3 (issue 15): found 2026-08-01 by the per-distro launch benchmarks** — isolated with
-> controlled experiments ([issue note](issues/issue-15-tls-cache-stride-thrash.md)).
+> controlled experiments ([issue note](issues/issue-15-tls-cache-stride-thrash.md)), **fixed
+> and merged** ([#19](https://github.com/TanayK07/ros2_pulse/pull/19)). The honest post-fix
+> end-to-end numbers (≈+2 % at worst-case stress, with attribution) live in
+> [bench/RESULTS.md](../bench/RESULTS.md).
 > Features/positioning work is tracked separately in [ROADMAP.md](ROADMAP.md).
 
 ## Summary
@@ -33,7 +36,7 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 | 12 | Medium | behaviour | ~~Stalled subscription emits no `RECV` line — stall indistinguishable from absence~~ | [#12](https://github.com/TanayK07/ros2_pulse/pull/12) |
 | 13 | Low | efficiency / claim | ~~Thread-local cache is single-entry; "0.2 ns/op" is the 100%-cache-hit best case only~~ | [#14](https://github.com/TanayK07/ros2_pulse/pull/14) |
 | 14 | Low | build | ~~Probe .so exports every symbol (not just `ros_trace_*`); lint test-deps declared but never wired~~ | [#15](https://github.com/TanayK07/ros2_pulse/pull/15) |
-| 15 | Medium | efficiency / claim | TLS cache hash aliases on allocator strides → ~90% miss under realistic farms → +2–4% workload CPU | — |
+| 15 | Medium | efficiency / claim | ~~TLS cache hash aliases on allocator strides → ~90% miss under realistic farms → +2–4% workload CPU~~ | [#19](https://github.com/TanayK07/ros2_pulse/pull/19) |
 
 ---
 
