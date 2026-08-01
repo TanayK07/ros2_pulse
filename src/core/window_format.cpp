@@ -29,10 +29,9 @@ auto sprintfStr(const char* fmt, T value) -> std::string {
 auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
                   long long ts_ns, double window_s, bool emit_idle,
                   const std::vector<std::string>& warnings) -> std::string {
-    (void)warnings;
     std::string out;
     // Reserve a rough upper bound so the common window is built without reallocating.
-    out.reserve(64 + stats.size() * 96 + nodes.size() * 32);
+    out.reserve(64 + stats.size() * 96 + nodes.size() * 32 + warnings.size() * 64);
 
     out += "# ts_ns=";
     out += sprintfStr("%lld", ts_ns);
@@ -80,6 +79,13 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
     for (const auto& n : nodes) {
         out += "NODE ";
         out += n;
+        out += '\n';
+    }
+
+    // Expected-rate warnings (ROADMAP R1), pre-rendered by evaluateRateSpec. After the NODE
+    // lines so every pre-R1 line kind keeps its position in the block.
+    for (const auto& w : warnings) {
+        out += w;
         out += '\n';
     }
 
