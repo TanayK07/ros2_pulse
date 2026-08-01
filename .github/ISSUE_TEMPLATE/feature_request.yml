@@ -1,0 +1,23 @@
+name: Feature request
+description: A capability the probe should grow (see docs/ROADMAP.md for what's planned).
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What operational question can't you answer today?
+      description: |
+        ros2_pulse exists to answer "is every topic flowing at the rate it should, and which
+        nodes are alive" — describe the gap in that story, not just a mechanism.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: Output lines, env vars, CLI flags — whatever shape you imagine.
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints that matter to you
+      placeholder: e.g. must stay zero-privilege on Jetson, must not add deps, distro X only…

@@ -6,7 +6,8 @@ per-topic message frequency and active-node liveness — for **both inter-proces
 intra-process** traffic — on **stock ROS 2 binaries**, with **no rebuild, no privileges, and
 zero network cost**.
 
-[![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-blue)](https://docs.ros.org/en/humble/)
+[![CI](https://github.com/TanayK07/ros2_pulse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TanayK07/ros2_pulse/actions/workflows/ci.yml)
+[![ROS 2](https://img.shields.io/badge/ROS%202-Humble%20%7C%20Jazzy%20%7C%20Kilted-blue)](https://docs.ros.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
 ---
