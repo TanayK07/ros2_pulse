@@ -26,22 +26,29 @@ sTopicCounter* const kNotASubscription = &g_not_a_subscription;
 // handles and callback objects are distinct live allocations, so the key domains cannot
 // collide). A single-entry cache thrashed on the REALISTIC pattern — one thread alternating
 // between a few endpoints per cycle — pushing every operation onto the shared rw-lock
-// (KNOWN_ISSUES #13). 16 slots cover a typical node's per-thread working set; a same-slot
-// collision merely degrades that key to the shared-lock path (it is a cache, not a map).
-// Entries are scoped by registry id so a recycled instance address can never be served a
-// destroyed registry's counter (same guard the single-entry cache had).
+// (KNOWN_ISSUES #13). A same-slot collision merely degrades that key to the shared-lock path
+// (it is a cache, not a map). Entries are scoped by registry id so a recycled instance address
+// can never be served a destroyed registry's counter (same guard the single-entry cache had).
+//
+// Sizing/hash (KNOWN_ISSUES #15): a bare (ptr>>4) index aliases on uniform allocator strides —
+// same-type handles at a 64-byte stride advanced the index by 4, so a 38-publisher farm shared
+// 4 of 16 slots and missed on ~every event; under a MultiThreadedExecutor each miss is a
+// CONTENDED rw-lock RMW + shared-counter bounce, measured at +2-4% workload CPU. 256 slots
+// (6 KB zero-init TLS per thread) cover a realistic per-thread working set, and xor-folding
+// higher address bits breaks stride aliasing.
 struct sTlsSlot {
     uint64_t id{0};
     const void* key{nullptr};
     sTopicCounter* ctr{nullptr};
 };
-constexpr uintptr_t kTlsSlotMask = 15;
+constexpr uintptr_t kTlsSlotMask = 255;
 thread_local sTlsSlot t_tls_cache[kTlsSlotMask + 1];
 
 inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
-    // Live-object addresses have zeroed alignment bits; >>4 spreads neighbouring allocations
-    // across slots.
-    return t_tls_cache[(reinterpret_cast<uintptr_t>(key) >> 4) & kTlsSlotMask];
+    // Live-object addresses have zeroed alignment bits; >>4 drops them, and folding in >>10
+    // spreads uniform allocation strides across the slot space.
+    const auto p = reinterpret_cast<uintptr_t>(key);
+    return t_tls_cache[((p >> 4) ^ (p >> 10)) & kTlsSlotMask];
 }
 }  // namespace
 
