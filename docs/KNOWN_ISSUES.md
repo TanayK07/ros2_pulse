@@ -11,6 +11,8 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 > **Round 2 (issues 8–14): found in a fresh audit of `main` (2026-07-29)** — verified against
 > the post-round-1 code; same one-issue-one-PR treatment, fixed in severity order. **All seven
 > fixed and merged** (PRs [#9](https://github.com/TanayK07/ros2_pulse/pull/9)–[#15](https://github.com/TanayK07/ros2_pulse/pull/15)).
+> **Round 3 (issue 15): found 2026-08-01 by the per-distro launch benchmarks** — isolated with
+> controlled experiments ([issue note](issues/issue-15-tls-cache-stride-thrash.md)).
 > Features/positioning work is tracked separately in [ROADMAP.md](ROADMAP.md).
 
 ## Summary
@@ -31,6 +33,7 @@ evidence (`file:line`), impact, and a fix direction. Companion docs:
 | 12 | Medium | behaviour | ~~Stalled subscription emits no `RECV` line — stall indistinguishable from absence~~ | [#12](https://github.com/TanayK07/ros2_pulse/pull/12) |
 | 13 | Low | efficiency / claim | ~~Thread-local cache is single-entry; "0.2 ns/op" is the 100%-cache-hit best case only~~ | [#14](https://github.com/TanayK07/ros2_pulse/pull/14) |
 | 14 | Low | build | ~~Probe .so exports every symbol (not just `ros_trace_*`); lint test-deps declared but never wired~~ | [#15](https://github.com/TanayK07/ros2_pulse/pull/15) |
+| 15 | Medium | efficiency / claim | TLS cache hash aliases on allocator strides → ~90% miss under realistic farms → +2–4% workload CPU | — |
 
 ---
 
@@ -286,3 +289,25 @@ collisions in unrelated code; also bloats the dynamic symbol table on the hot lo
 verify with an `nm -D` check in CI (only `ros_trace_*` exported). (b) Wire
 `ament_lint_auto_find_test_dependencies()` under `BUILD_TESTING` and fix what it flags, or drop
 the two deps.
+
+## 15. TLS cache hash aliases on allocator strides → ~90% miss → +2–4% workload CPU — **Medium**
+
+**Evidence.** Full isolation write-up in
+[issues/issue-15-tls-cache-stride-thrash.md](issues/issue-15-tls-cache-stride-thrash.md).
+Slot index is `(ptr >> 4) & 15` (`src/core/topic_registry.cpp:38-45`); same-type handles sit
+at a near-uniform allocator stride, so at a 64-byte stride 38 publisher handles land on only
+4 of the 16 slots and evict each other cyclically. A debug counter run under the stress bench
+measured 31,926 shared-lock fallbacks on ~35,500 publisher-farm events (~90% miss); a paired
+N=10 order-alternated end-to-end run put the probe at **+2.6% workload CPU** (+0.074 s ±
+0.039 SEM) with flushing disabled — the counting hot path alone.
+
+**Impact.** The headline "~ns hot path" held only for few-key single-threaded access. Under a
+`MultiThreadedExecutor` with realistic topic counts, most events took a contended
+`shared_mutex` read-lock plus a shared observability-counter `fetch_add` (two cross-core
+cacheline bounces, ~µs under burst arrival) — +2–4% CPU on the very benchmark meant to prove
+the probe cheap.
+
+**Fix direction.** Grow the cache to 256 slots (6 KB TLS/thread, zero-init) and mix higher
+address bits into the index — `((ptr >> 4) ^ (ptr >> 10)) & 255` — so uniform strides stop
+aliasing. Verified: misses collapse ~90%, paired bench delta −0.014 s ± 0.051 (statistically
+zero). Regression: stride-64 publisher-farm leg in `test/unit/test_tls_cache.cpp`.

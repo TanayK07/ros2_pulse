@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,46 @@ TEST(TlsMiniMap, AlternatingCallbacksStayLockFree) {
     }
     EXPECT_LE(reg.sharedLockLookups() - before, 4u)
         << "alternating callbacks fell off the thread-local cache onto the shared lock";
+}
+
+// A realistic publisher farm (KNOWN_ISSUES #15): many same-type handles sit at a uniform
+// allocator stride. The 16-slot cache's (ptr>>4) index aliases uniform strides — at stride 64
+// the index advances by 4 (mod 16), so 38 handles shared 4 slots and evicted each other on
+// ~every publish. Each miss is a contended shared_mutex read-lock + a shared-counter
+// fetch_add, measured at +2–4% workload CPU under a MultiThreadedExecutor (see the issue
+// note). Steady state must stay on the thread-local cache: fallbacks under 10% of accesses.
+TEST(TlsMiniMap, StridedPublisherFarmStaysLockFree) {
+    constexpr int kPubs = 38;
+    constexpr int kStride = 64;
+    constexpr int kRounds = 100;
+    alignas(4096) static std::byte arena[kPubs * kStride];
+
+    TopicRegistry reg;
+    for (int i = 0; i < kPubs; ++i) {
+        reg.onPublisherInit(&arena[i * kStride], nullptr, ("/farm" + std::to_string(i)).c_str());
+    }
+    for (int i = 0; i < kPubs; ++i) {
+        reg.onPublish(&arena[i * kStride]);  // warm-up pass
+    }
+
+    const uint64_t before = reg.sharedLockLookups();
+    for (int round = 0; round < kRounds; ++round) {
+        for (int i = 0; i < kPubs; ++i) {
+            reg.onPublish(&arena[i * kStride]);
+        }
+    }
+    const uint64_t fallbacks = reg.sharedLockLookups() - before;
+    EXPECT_LE(fallbacks, kPubs * kRounds / 10)
+        << "allocator-stride publisher farm fell off the thread-local cache onto the shared "
+           "lock (" << fallbacks << " of " << kPubs * kRounds << " accesses)";
+
+    auto snap = reg.snapshot(1.0);
+    for (int i = 0; i < kPubs; ++i) {
+        const auto* s = findTopic(snap, "/farm" + std::to_string(i));
+        ASSERT_NE(s, nullptr);
+        EXPECT_EQ(s->pub_inter_count, static_cast<uint64_t>(kRounds) + 1)
+            << "count lost or doubled for /farm" << i;
+    }
 }
 
 // Correctness under alternation: replace-on-collision must never lose or double a count.
