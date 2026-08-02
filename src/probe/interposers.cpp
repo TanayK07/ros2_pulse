@@ -394,7 +394,7 @@ ROS2_PULSE_EXPORT void ros_trace_rcl_publish(const void* pub_handle, const void*
     if (fn) fn(pub_handle, message);
 }
 
-// jazzy+ only: rclcpp publishes an intra-process message through the IntraProcessManager. On
+// iron+ only: rclcpp publishes an intra-process message through the IntraProcessManager. On
 // humble this symbol is exported but never called (the tracepoint doesn't exist there) — the
 // probe stays a single binary across distros.
 ROS2_PULSE_EXPORT void ros_trace_rclcpp_intra_publish(const void* publisher_handle,

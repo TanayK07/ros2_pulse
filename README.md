@@ -41,7 +41,7 @@ writes ready-to-read Hz to a small rolling file.
 ```
 # ts_ns=1782887153899445923 window_s=5.000
 TOPIC /scan 20.000000                      # publish-side, inter-process
-PUB   /points inter=0.000000 intra=30.000000   # publish-side incl. intra (Jazzy+)
+PUB   /points inter=0.000000 intra=30.000000   # publish-side incl. intra (Iron+)
 RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
 RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools on Humble
 NODE  /perception
@@ -182,7 +182,7 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 ## Limitations
 
 - On ROS 2 Humble there is no intra-process *publish* tracepoint, so intra rate is measured
-  **receive-side** (per subscription) — the signal you usually want. On Jazzy+ the probe also
+  **receive-side** (per subscription) — the signal you usually want. On Iron+ the probe also
   hooks `rclcpp_intra_publish` and emits an additive `PUB` line with publish-side intra rates.
 - **Node liveness is traffic-derived.** There is no node-teardown tracepoint on stock Humble, so a
   node appears in the `NODE` lines only while a topic it publishes or subscribes to has carried
@@ -208,7 +208,7 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 | Iron | ❌ not targeted | EOL December 2024 |
 
 Middleware-agnostic (hooks sit above the DDS vendor): validated with FastRTPS and CycloneDDS on
-Humble. On Jazzy+ the probe additionally hooks the dedicated `rclcpp_intra_publish` tracepoint:
+Humble. On Iron+ the probe additionally hooks the dedicated `rclcpp_intra_publish` tracepoint:
 **publish-side** intra rates appear on an additive `PUB` line; on Humble intra stays
 receive-side (the tracepoint does not exist there).
 

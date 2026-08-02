@@ -27,7 +27,7 @@ struct sTopicCounter {
     // explicit RECV 0.0 line instead of dropping the topic (KNOWN_ISSUES #12).
     bool recv_endpoint_seen{false};
     std::atomic<uint64_t> pub_inter{0};   // inter-process publishes (rcl_publish)
-    std::atomic<uint64_t> pub_intra{0};   // intra-process publishes (rclcpp_intra_publish, jazzy+)
+    std::atomic<uint64_t> pub_intra{0};   // intra-process publishes (rclcpp_intra_publish, iron+)
     std::atomic<uint64_t> recv_inter{0};  // inter-process receives (callback_start, intra=false)
     std::atomic<uint64_t> recv_intra{0};  // intra-process receives (callback_start, intra=true)
 };
@@ -87,7 +87,7 @@ public:
 
     // --- hot path ---
     void onPublish(const void* pub_handle);       // inter-process publish (rcl_publish)
-    void onIntraPublish(const void* pub_handle);  // intra-process publish (jazzy+ tracepoint)
+    void onIntraPublish(const void* pub_handle);  // intra-process publish (iron+ tracepoint)
     void onCallbackStart(const void* callback, bool is_intra_process);  // any-transport receive
 
     // --- aggregation ---

@@ -42,7 +42,7 @@ become *resolvable*, retiring the negative-cache sentinel path for them (KNOWN_I
   removal on rolling).
 - ✅ Interposer signatures verified per distro: all hooked events plain-called by rcl/rclcpp on
   jazzy/kilted; full suite green on both.
-- ✅ `rclcpp_intra_publish` hooked → **publish-side intra** counts on Jazzy+ (additive `PUB`
+- ✅ `rclcpp_intra_publish` hooked → **publish-side intra** counts on Iron+ (additive `PUB`
   line; symbol exported-but-never-called on Humble).
 - ⬜ Remaining: integration assertion that the probe and a **live LTTng session** coexist on
   Jazzy+ (we forward via `dlsym(RTLD_NEXT)`, so both should fire — assert it).
