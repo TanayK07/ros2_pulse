@@ -105,8 +105,23 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool
     return {};
 }
 
-// The rate field a rule constrains. kAny sums both transports: "how fast is this topic,
-// however it travels" — the split is a transport detail the operator usually doesn't spec.
+// The rate field a rule constrains. kAny means "how fast is this topic, however it travels" —
+// the split is a transport detail the operator usually doesn't spec. How the two buckets combine
+// differs by side, because only one of them counts disjoint events:
+//
+//   recv: DISJOINT. callback_start fires once per delivery and its is_intra_process flag selects
+//         exactly one bucket, so inter + intra IS the delivery rate.
+//
+//   pub:  NOT disjoint on iron+. One publish() on an intra-process-enabled publisher fires
+//         rclcpp_intra_publish AND, whenever a non-intra subscriber is matched (or the QoS is
+//         TransientLocal, jazzy+), rcl_publish for the SAME message — rclcpp publisher.hpp
+//         computes `inter_process_publish_needed = get_subscription_count() >
+//         get_intra_process_subscription_count() || buffer_` and calls BOTH helpers on the true
+//         branch. Both tracepoints carry the same rcl_publisher_t*, so both land on one counter
+//         and a sum would report 2x the produce rate. max() is exact instead: it equals the one
+//         live bucket when only one path fires, and the single produce rate when both do.
+//         "Just read pub_inter" does not work — the all-in-process branch never calls rcl at all,
+//         so pub_inter is 0 there. (No-op on humble, which has no intra-publish tracepoint.)
 auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double {
     const double inter = rule.side == eRateSide::kPub ? s.pub_inter_hz : s.recv_inter_hz;
     const double intra = rule.side == eRateSide::kPub ? s.pub_intra_hz : s.recv_intra_hz;
@@ -115,7 +130,10 @@ auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double {
             return inter;
         case eRateTransport::kIntra:
             return intra;
-        default:
+        default:  // kAny
+            if (rule.side == eRateSide::kPub) {
+                return inter > intra ? inter : intra;
+            }
             return inter + intra;
     }
 }

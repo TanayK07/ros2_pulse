@@ -18,7 +18,9 @@ namespace ros2_pulse::core {
 /// Which endpoint of a topic a rate rule constrains.
 enum class eRateSide { kRecv, kPub };
 
-/// Which transport's rate a rule constrains. kAny sums inter + intra.
+/// Which transport's rate a rule constrains. kAny is the topic's rate however it travels: recv
+/// sums the two (disjoint) buckets, pub takes the larger — one publish() can fire both the
+/// intra-process and the RMW tracepoint for the same message (iron+), so summing would double it.
 enum class eRateTransport { kAny, kInter, kIntra };
 
 /// One expected-rate rule for a topic (ROADMAP R1).

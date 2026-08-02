@@ -200,3 +200,33 @@ TEST(RateSpecEval, DeterministicOrder) {
     EXPECT_EQ(w[1], "WARN TOPIC /a hz=0.000000 expected=[10,inf]");
     EXPECT_EQ(w[2], "WARN NODE /n missing");
 }
+// pub + any takes the LARGER bucket, not the sum: on iron+ one publish() fires
+// rclcpp_intra_publish AND rcl_publish for the same message whenever a non-intra subscriber is
+// matched (or the QoS is TransientLocal on jazzy+), so both pub buckets carry the same produce
+// rate. Summing would report 2x and invert max_hz. recv is unaffected — its buckets are
+// disjoint deliveries — and that must stay true.
+TEST(RateSpecEval, PubAnyTakesMaxNotSumAcrossTransports) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /image: {min_hz: 45, max_hz: 55, side: pub}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    // Both tracepoints fired for one 50 Hz stream (IPC on, mixed subscribers): 50, not 100.
+    EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 50.0, 50.0)}, {}, {}).empty());
+    // Only the intra path fired (all subscribers in-process — rcl_publish never called).
+    EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 0.0, 50.0)}, {}, {}).empty());
+    // Only the RMW path fired (intra-process comms off).
+    EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 50.0, 0.0)}, {}, {}).empty());
+
+    // max() must not rescue a genuinely slow publisher.
+    auto slow = evaluateRateSpec(*spec, {pubStat("/image", 10.0, 10.0)}, {}, {});
+    ASSERT_EQ(slow.size(), 1u);
+    EXPECT_EQ(slow[0], "WARN TOPIC /image hz=10.000000 expected=[45,55]");
+
+    // recv/any still SUMS: 10 + 20 = 30 is over max, and must stay that way.
+    auto recv_spec = parseRateSpec("topics:\n  /points: {min_hz: 5, max_hz: 25}\n", err);
+    ASSERT_TRUE(recv_spec.has_value()) << err;
+    auto summed = evaluateRateSpec(*recv_spec, {recvStat("/points", 10.0, 20.0)}, {}, {});
+    ASSERT_EQ(summed.size(), 1u);
+    EXPECT_EQ(summed[0], "WARN TOPIC /points hz=30.000000 expected=[5,25]");
+}
+

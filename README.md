@@ -116,6 +116,11 @@ nodes: [/perception, /planner]                    # expected alive
 ```
 
 ```bash
+`transport: any` is the topic's rate however it travels. On the receive side the two buckets are
+disjoint deliveries, so they are summed. On the publish side one `publish()` can fire both the
+intra-process and the RMW tracepoint for the same message (Iron+, and always under TransientLocal
+QoS on Jazzy+), so the larger bucket is used rather than the sum.
+
 export ROS_TOPIC_STATS_EXPECTED=/etc/pulse/expected.yaml
 ```
 
