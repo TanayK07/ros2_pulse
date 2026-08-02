@@ -44,8 +44,10 @@ become *resolvable*, retiring the negative-cache sentinel path for them (KNOWN_I
   jazzy/kilted; full suite green on both.
 - ✅ `rclcpp_intra_publish` hooked → **publish-side intra** counts on Iron+ (additive `PUB`
   line; symbol exported-but-never-called on Humble).
-- ⬜ Remaining: integration assertion that the probe and a **live LTTng session** coexist on
-  Jazzy+ (we forward via `dlsym(RTLD_NEXT)`, so both should fire — assert it).
+- ⬜ Remaining: integration assertion that the probe and a **live LTTng session** coexist
+  (we forward via `dlsym(RTLD_NEXT)`, so both should fire — assert it). Testable on any distro
+  whose binaries carry the lttng-ust backend: Iron+ out of the box, Humble only if ROS was
+  rebuilt for it.
 
 ## R4. Positioning docs (ALTERNATIVES.md gaps)
 
