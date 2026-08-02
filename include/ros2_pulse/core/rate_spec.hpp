@@ -58,7 +58,9 @@ struct sRateSpec {
 /// Topic entries must use the inline flow-map form with at least one of min_hz / max_hz.
 /// Keys: min_hz, max_hz (non-negative finite numbers), side (pub|recv, default recv),
 /// transport (inter|intra|any, default any). Unknown keys, malformed numbers, min_hz > max_hz,
-/// or duplicate topics are hard errors.
+/// a key repeated within one rule, or two rules measuring the same thing (same topic + side +
+/// transport) are hard errors. A topic MAY appear more than once when the rules constrain
+/// different endpoints — "publishes at 20 Hz and we receive it at 20 Hz" is one spec.
 ///
 /// @param text  the spec file contents.
 /// @param error on failure, receives "line N: <reason>".
@@ -66,8 +68,6 @@ struct sRateSpec {
 ///         a bad spec must never take the host process down).
 auto parseRateSpec(const std::string& text, std::string& error) -> std::optional<sRateSpec>;
 
-/// @brief Evaluate a spec against one window's stats; returns WARN lines (no trailing '\n').
-///
 /// Upper bound on a spec file. A spec with hundreds of topics is a few tens of KB; anything past
 /// this is not a spec, so it is refused rather than read.
 constexpr size_t kMaxSpecBytes = 1u << 20;  // 1 MiB
@@ -90,6 +90,8 @@ constexpr size_t kMaxSpecBytes = 1u << 20;  // 1 MiB
 /// CI job fails fast instead of hanging the runner.
 auto readSpecFile(const char* path, std::string& out, std::string& error) -> bool;
 
+/// @brief Evaluate a spec against one window's stats; returns WARN lines (no trailing '\n').
+///
 /// Line grammar (additive to the window format, pinned by unit tests):
 /// @code
 /// WARN TOPIC <name> hz=<observed to 6dp> expected=[<min>,<max>]   // max renders 'inf' when unbounded

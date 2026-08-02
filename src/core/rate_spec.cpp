@@ -67,15 +67,23 @@ auto fail(std::string& error, int line_no, const std::string& msg) -> std::optio
 enum class eSection { kNone, kTopics, kNodes };
 
 // "min_hz: 18" / "side: pub" — one flow-map item into the rule. Returns an error message, or
-// empty on success. has_min/has_max let the caller enforce "a rule must constrain something".
-auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool& has_max)
-    -> std::string {
+// empty on success. has_min/has_max let the caller enforce "a rule must constrain something",
+// and double as the repeat guard for those two keys.
+auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool& has_max,
+                   bool& has_side, bool& has_transport) -> std::string {
     const auto colon = item.find(':');
     if (colon == std::string::npos) {
         return "expected 'key: value', got '" + item + "'";
     }
     const std::string key = trim(item.substr(0, colon));
     const std::string val = trim(item.substr(colon + 1));
+    // A key given twice in one flow map used to silently last-win ({min_hz: 1, min_hz: 2} -> 2),
+    // which is the one place the "duplicates are hard errors" contract leaked.
+    const bool repeated = (key == "min_hz" && has_min) || (key == "max_hz" && has_max) ||
+                          (key == "side" && has_side) || (key == "transport" && has_transport);
+    if (repeated) {
+        return "duplicate key '" + key + "' in one rule";
+    }
     if (key == "min_hz") {
         if (!parseHz(val, rule.min_hz)) {
             return "bad min_hz '" + val + "' (need a non-negative number)";
@@ -94,6 +102,7 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool
         } else {
             return "side must be 'pub' or 'recv', got '" + val + "'";
         }
+        has_side = true;
     } else if (key == "transport") {
         if (val == "inter") {
             rule.transport = eRateTransport::kInter;
@@ -104,6 +113,7 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool
         } else {
             return "transport must be 'inter', 'intra' or 'any', got '" + val + "'";
         }
+        has_transport = true;
     } else {
         return "unknown key '" + key + "' (expected min_hz, max_hz, side, transport)";
     }
@@ -165,16 +175,6 @@ auto contains(const std::vector<std::string>& v, const std::string& s) -> bool {
 
 }  // namespace
 
-auto parseRateSpec(const std::string& text, std::string& error) -> std::optional<sRateSpec> {
-    sRateSpec spec;
-    std::unordered_set<std::string> seen_topics;
-    eSection section = eSection::kNone;
-    int line_no = 0;
-    size_t pos = 0;
-    while (pos <= text.size()) {
-        const auto nl = text.find('\n', pos);
-        std::string raw =
-            text.substr(pos, (nl == std::string::npos ? text.size() : nl) - pos);
 auto readSpecFile(const char* path, std::string& out, std::string& error) -> bool {
     if (path == nullptr || *path == '\0') {
         error = "empty path";
@@ -224,12 +224,12 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
     return true;
 }
 
-        pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
-        ++line_no;
-
-        const auto hash = raw.find('#');
-        if (hash != std::string::npos) {
-            raw.resize(hash);
+auto parseRateSpec(const std::string& text, std::string& error) -> std::optional<sRateSpec> {
+    sRateSpec spec;
+    std::unordered_set<std::string> seen_rules;
+    eSection section = eSection::kNone;
+    int line_no = 0;
+    size_t pos = 0;
     // A leading UTF-8 BOM is a signature, not content (Unicode 23.8.1; YAML 1.2 §5.2 consumes
     // c-byte-order-mark as a document prefix, and libyaml/PyYAML/SnakeYAML all strip it). Without
     // this, a spec saved by Windows Notepad or PowerShell fails as
@@ -239,6 +239,16 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) {
         pos = 3;
     }
+    while (pos <= text.size()) {
+        const auto nl = text.find('\n', pos);
+        std::string raw =
+            text.substr(pos, (nl == std::string::npos ? text.size() : nl) - pos);
+        pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
+        ++line_no;
+
+        const auto hash = raw.find('#');
+        if (hash != std::string::npos) {
+            raw.resize(hash);
         }
         const bool indented = !raw.empty() && (raw[0] == ' ' || raw[0] == '\t');
         const std::string line = trim(raw);
@@ -298,16 +308,16 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
                 if (name.empty()) {
                     return fail(error, line_no, "empty topic name");
                 }
-                if (!seen_topics.insert(name).second) {
-                    return fail(error, line_no, "duplicate topic '" + name + "'");
-                }
                 sRateRule rule;
                 bool has_min = false;
                 bool has_max = false;
+                bool has_side = false;
+                bool has_transport = false;
                 const std::string body = trim(line.substr(brace + 1, line.size() - brace - 2));
                 if (!body.empty()) {
                     for (const auto& item : splitCommas(body)) {
-                        const std::string item_err = applyRuleItem(item, rule, has_min, has_max);
+                        const std::string item_err =
+                            applyRuleItem(item, rule, has_min, has_max, has_side, has_transport);
                         if (!item_err.empty()) {
                             return fail(error, line_no, item_err);
                         }
@@ -319,6 +329,17 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
                 }
                 if (rule.min_hz > rule.max_hz) {
                     return fail(error, line_no, "min_hz > max_hz for '" + name + "'");
+                }
+                // Dedup on the measurement domain, not the name: constraining both ends of one
+                // topic ("the driver publishes ~20 Hz AND we receive ~20 Hz") is a first-class
+                // use case, and evaluateRateSpec already walks the vector rule by rule. Two
+                // entries that measure the SAME thing are still a copy-paste error.
+                const std::string rule_key = name + '\x01' +
+                                             std::to_string(static_cast<int>(rule.side)) + '\x01' +
+                                             std::to_string(static_cast<int>(rule.transport));
+                if (!seen_rules.insert(rule_key).second) {
+                    return fail(error, line_no,
+                                "duplicate rule for '" + name + "' (same side and transport)");
                 }
                 spec.topics.emplace_back(name, rule);
                 break;
