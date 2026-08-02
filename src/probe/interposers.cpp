@@ -128,9 +128,19 @@ public:
     void ensureStarted() {
         bool expected = false;
         if (m_started.compare_exchange_strong(expected, true)) {
+            // Report whether a spec armed: "why am I getting no WARNs?" is otherwise invisible,
+            // and every disabling path (unset, unreadable, malformed, zero-rule) lands on
+            // spec=none. snprintf into a fixed buffer keeps the banner allocation-free.
+            char spec_desc[64];
+            if (m_spec.has_value()) {
+                std::snprintf(spec_desc, sizeof(spec_desc), "%zu topics, %zu nodes",
+                              m_spec->topics.size(), m_spec->nodes.size());
+            } else {
+                std::snprintf(spec_desc, sizeof(spec_desc), "none");
+            }
             std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
-                                 "(out=%s, period=%.1fs)\n",
-                         m_out_path.c_str(), m_period_s);
+                                 "(out=%s, period=%.1fs, spec=%s)\n",
+                         m_out_path.c_str(), m_period_s, spec_desc);
             // Counting effectively begins here (first tracepoint) — stamp the window start
             // before the flush thread exists so the first window's denominator is measured
             // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
