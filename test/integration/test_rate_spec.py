@@ -163,3 +163,40 @@ def test_pulse_check_cli_verdicts():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v", "-s"]))
+def test_pulse_check_skip_last_ignores_exit_window():
+    """--skip-last judges the second-to-last window, and refuses a log too short to have one."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "run.log")
+        ph.run_single("talker", out, run_s=6.0, period="1.0")
+        cli = pulse_check_path()
+        passing = _write(d, "pass.yaml", PASSING_SPEC)
+
+        ok = subprocess.run([cli, "--spec", passing, "--skip-last", out],
+                            capture_output=True, text=True)
+        assert ok.returncode == 0, f"expected pass, got {ok.returncode}\n{ok.stdout}{ok.stderr}"
+        assert ok.stdout == ""
+
+        # a single-window log must error, not silently fall back to the ramp-up window
+        short = _write(d, "short.log", "# ts_ns=1 window_s=5.000000\n"
+                                       "TOPIC /chatter 50.000000\n"
+                                       "PUB /chatter inter=50.000000 intra=0.000000\n")
+        few = subprocess.run([cli, "--spec", passing, "--skip-last", short],
+                             capture_output=True, text=True)
+        assert few.returncode == 2, f"expected exit 2\n{few.stdout}{few.stderr}"
+        assert "--skip-last" in few.stderr
+
+
+def test_pulse_check_rejects_non_spec_paths_fast():
+    """`--spec /dev/zero` must fail the CI gate it guards, not hang the runner reading it."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "run.log")
+        ph.run_single("talker", out, run_s=4.0, period="1.0")
+        cli = pulse_check_path()
+
+        for spec in ("/dev/zero", d):
+            r = subprocess.run([cli, "--spec", spec, out], capture_output=True, text=True,
+                               timeout=30)
+            assert r.returncode == 2, f"expected exit 2 for {spec}\n{r.stdout}{r.stderr}"
+            assert "not a regular file" in r.stderr, r.stderr
+
+

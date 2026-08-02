@@ -141,11 +141,22 @@ systemd or CI — it re-derives the verdict from the raw rates of the LAST windo
 
 ```bash
 pulse-check --spec /etc/pulse/expected.yaml /tmp/pulse.*.log && echo healthy
+# live watchdog — the last window IS the current state
 # exit 0: pass   1: violations (printed)   2: bad input
+
+# post-run CI gate — the stack has exited, so skip its atexit window
+pulse-check --spec /etc/pulse/expected.yaml --skip-last /tmp/pulse.*.log
+
 # offline it owns the whole picture: a spec topic in NO log is reported at 0 Hz
 ```
 
 ## Benchmarks
+Use `--skip-last` on logs from a stack that has already stopped: the probe's final window is the
+atexit flush, a sub-period sliver whose rate is a one-sample estimate, so gating on it can go red
+on a healthy shutdown. It needs ≥2 windows per log (≥3 to also clear the ramp-up window). Note
+recv rates sum across logs, so `max_hz` belongs on `side: pub` — K subscriber processes on one
+topic legitimately report K× the publish rate.
+
 
 Measured in `ros:humble` / `ros:jazzy` / `ros:kilted` containers, workload ≈ 4900 msg/s across
 53 mixed topics (30 light @100 Hz + 8 heavy ~100 KB @50 Hz inter-process + 15 intra @100 Hz) —
