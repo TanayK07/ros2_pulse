@@ -308,7 +308,36 @@ Emit the field iff `last_ts != 0`, never based on a message count.
 - Do **not** test `max_dt != 0` — two arrivals inside one 20 ns clock tick yield a legitimate
   `dt == 0`.
 
-## Land first, separately: `alignas(64)`
+## ~~Land first, separately: `alignas(64)`~~ — measured, rejected
+
+**This section is kept as a negative result so nobody redoes the analysis. Do not do this.**
+
+The claim below (a pre-existing false-sharing bug worth 4.5×) came out of the design research and
+**does not reproduce**. Three measurements killed it:
+
+```
+8 threads, own endpoint      packed 1.967 / aligned 1.720 ns/op   1.14x  (SEM 0.012 / 0.023)
+8 threads, ADJACENT endpoints packed 1.981 / aligned 2.015 ns/op  0.98x  (SEM 0.113 / 0.014)
+8 threads, full R5 hot path  packed 29.07 / aligned 28.75 ns/op   1.011x (SEM 0.37 / 0.35)
+```
+
+Why the premise was wrong:
+
+1. **The hot path touches ONE atomic per message, not four.** `onPublish` does
+   `bucket.fetch_add(...)` on *either* `pub_intra` or `pub_inter`; `onCallbackStart` likewise on
+   one recv bucket. "The four count-atomics straddle a line" is therefore irrelevant to the
+   per-message path — it would only matter to code touching several at once, which is `snapshot()`,
+   once per window.
+2. **The allocator already separates them.** `sizeof` is 72 and the observed `make_unique` stride
+   is a uniform **80 bytes**, which exceeds the 64-byte line, so consecutive counters' hot fields
+   land on distinct lines anyway (measured: 8 adjacent endpoints → 8 distinct lines).
+3. **With R5 the clock read dominates completely.** At ~21 ns for `steady_clock::now()`, a layout
+   difference of ~0.3 ns is inside the SEM.
+
+So the 63/128 "straddling" figure is real but inert, and `alignas(64)` buys nothing for 56 extra
+bytes per topic. R5 adds its fields to `sTopicCounter` as plain members with no layout change.
+
+The original reasoning, retained for the record:
 
 `sizeof(sTopicCounter)` is 72 with alignof 8, and there is no alignment discipline anywhere
 (`grep -c alignas` over `include/ros2_pulse/core/` and `src/core/` returns 0). Measured over 128
@@ -344,8 +373,8 @@ over-aligned `new` in C++17.
 Do **not** side-allocate the jitter fields: it saves a few KB when jitter is off and buys a
 dependent pointer load on the hot path before the clock read.
 
-This is independently justified and independently testable, so it lands as its own `perf:`
-commit ahead of R5.
+~~This is independently justified and independently testable, so it lands as its own `perf:`
+commit ahead of R5.~~ **Retracted — see the measurements at the top of this section.**
 
 ## Compatibility
 
@@ -441,8 +470,8 @@ keys on anyway, but this must be documented as a limitation rather than quietly 
 
 ## Implementation order
 
-1. `perf: align sTopicCounter to a cache line` — `alignas(64)` + hot-field reorder. Independent
-   of R5, fixes the pre-existing 63/128 split. Verify with the bench.
+1. ~~`perf: align sTopicCounter to a cache line`~~ — **dropped**, measured at 1.01x (inside the
+   SEM). See the rejected-prerequisite section.
 2. `feat(jitter): per-endpoint max inter-arrival gap` — `last_ts`/`max_dt`, the `m_jitter` gate,
    the open-gap fold with exit suppression, `JITTER` lines, log-reader branches.
 3. `feat(rate-spec): max_gap_ms rules` — spec grammar, WARN line, auto-enable, `pulse-check`
