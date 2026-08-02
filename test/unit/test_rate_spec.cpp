@@ -89,6 +89,53 @@ TEST(RateSpecParse, BlockNodesCommentsAndPubSide) {
     EXPECT_EQ(spec->nodes[1], "/rectifier");
 }
 
+// Windows-authored specs must parse. A leading UTF-8 BOM is a signature, not content — and its
+// bytes render invisibly, so without the strip the error reads "unknown top-level entry
+// 'topics:'", indistinguishable from the correct spelling, and alerting silently turns off.
+TEST(RateSpecParse, LeadingUtf8BomIgnored) {
+    std::string err;
+    auto spec = parseRateSpec("\xEF\xBB\xBF"
+                              "topics:\n  /x: {min_hz: 1}\n",
+                              err);
+    ASSERT_TRUE(spec.has_value()) << err;
+    ASSERT_EQ(spec->topics.size(), 1u);
+    EXPECT_EQ(spec->topics[0].first, "/x");
+
+    // ...on the nodes: key too, and line numbers must survive the strip.
+    auto nodes = parseRateSpec("\xEF\xBB\xBF"
+                               "nodes: [/a]\n",
+                               err);
+    ASSERT_TRUE(nodes.has_value()) << err;
+    ASSERT_EQ(nodes->nodes.size(), 1u);
+    EXPECT_FALSE(parseRateSpec("\xEF\xBB\xBF"
+                               "topics:\n  /x: {min_hz: bad}\n",
+                               err)
+                     .has_value());
+    EXPECT_NE(err.find("line 2"), std::string::npos) << err;
+}
+
+// CRLF is already handled by trim(), but pin it in every position so the Windows path stays
+// green as the parser evolves: top-level keys, flow-map bodies, flow lists and block items.
+TEST(RateSpecParse, CrlfLineEndings) {
+    std::string err;
+    auto spec = parseRateSpec(
+        "topics:\r\n"
+        "  /scan: {min_hz: 18, max_hz: 22, side: pub}\r\n"
+        "nodes: [/a, /b]\r\n",
+        err);
+    ASSERT_TRUE(spec.has_value()) << err;
+    ASSERT_EQ(spec->topics.size(), 1u);
+    EXPECT_DOUBLE_EQ(spec->topics[0].second.max_hz, 22.0);
+    EXPECT_EQ(spec->topics[0].second.side, eRateSide::kPub);
+    ASSERT_EQ(spec->nodes.size(), 2u);
+    EXPECT_EQ(spec->nodes[1], "/b");
+
+    auto block = parseRateSpec("nodes:\r\n  - /camera\r\n", err);
+    ASSERT_TRUE(block.has_value()) << err;
+    ASSERT_EQ(block->nodes.size(), 1u);
+    EXPECT_EQ(block->nodes[0], "/camera");
+}
+
 // A rule must constrain something: at least one of min_hz / max_hz.
 TEST(RateSpecParse, RejectsRuleWithoutBounds) {
     std::string err;
@@ -109,6 +156,55 @@ TEST(RateSpecParse, RejectsMalformedInput) {
     EXPECT_FALSE(parseRateSpec("topics:\n  /x: {min_hz: 1, side: down}\n", err).has_value());
     EXPECT_FALSE(parseRateSpec("bogus: 1\n", err).has_value());
     EXPECT_FALSE(parseRateSpec("  /x: {min_hz: 1}\n", err).has_value());  // rule outside topics:
+}
+
+// One topic may carry several rules as long as they measure different things — constraining both
+// ends of a topic ("the driver publishes ~20 Hz AND we receive ~20 Hz") is a first-class spec.
+// Rules that measure the SAME thing are still a copy-paste error.
+TEST(RateSpecParse, TwoSidedRulesOnOneTopic) {
+    std::string err;
+    auto spec = parseRateSpec(
+        "topics:\n"
+        "  /scan: {min_hz: 18, side: pub}\n"
+        "  /scan: {min_hz: 18, side: recv}\n",
+        err);
+    ASSERT_TRUE(spec.has_value()) << err;
+    ASSERT_EQ(spec->topics.size(), 2u);
+    EXPECT_EQ(spec->topics[0].first, "/scan");
+    EXPECT_EQ(spec->topics[0].second.side, eRateSide::kPub);
+    EXPECT_EQ(spec->topics[1].first, "/scan");
+    EXPECT_EQ(spec->topics[1].second.side, eRateSide::kRecv);
+
+    // differing only in transport is also a distinct measurement
+    auto by_transport = parseRateSpec(
+        "topics:\n"
+        "  /points: {min_hz: 25, transport: inter}\n"
+        "  /points: {min_hz: 25, transport: intra}\n",
+        err);
+    ASSERT_TRUE(by_transport.has_value()) << err;
+    EXPECT_EQ(by_transport->topics.size(), 2u);
+
+    // same side AND same transport (both defaulted) is still rejected
+    EXPECT_FALSE(
+        parseRateSpec("topics:\n  /x: {min_hz: 1}\n  /x: {min_hz: 2}\n", err).has_value());
+    EXPECT_NE(err.find("same side and transport"), std::string::npos) << err;
+    // ...including when the duplicated side is spelled out on only one of them
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {min_hz: 1}\n  /x: {max_hz: 9, side: recv}\n", err)
+                     .has_value());
+}
+
+// A key repeated inside one flow map used to silently last-win, the one hole in the parser's
+// "duplicates are hard errors" contract.
+TEST(RateSpecParse, RejectsRepeatedKeyInOneRule) {
+    std::string err;
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {min_hz: 1, min_hz: 2}\n", err).has_value());
+    EXPECT_NE(err.find("duplicate key 'min_hz'"), std::string::npos) << err;
+    EXPECT_FALSE(
+        parseRateSpec("topics:\n  /x: {min_hz: 1, side: pub, side: recv}\n", err).has_value());
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {max_hz: 5, max_hz: 5}\n", err).has_value());
+    EXPECT_FALSE(
+        parseRateSpec("topics:\n  /x: {min_hz: 1, transport: any, transport: intra}\n", err)
+            .has_value());
 }
 
 // ---- evaluator ----
@@ -148,6 +244,36 @@ TEST(RateSpecEval, SideAndTransportSelection) {
     auto w = evaluateRateSpec(*spec, {pubStat("/image", 5.0, 100.0)}, {}, {});
     ASSERT_EQ(w.size(), 1u);
     EXPECT_EQ(w[0], "WARN TOPIC /image hz=5.000000 expected=[28,inf]");
+}
+
+// pub + any takes the LARGER bucket, not the sum: on iron+ one publish() fires
+// rclcpp_intra_publish AND rcl_publish for the same message whenever a non-intra subscriber is
+// matched (or the QoS is TransientLocal on jazzy+), so both pub buckets carry the same produce
+// rate. Summing would report 2x and invert max_hz. recv is unaffected — its buckets are
+// disjoint deliveries — and that must stay true.
+TEST(RateSpecEval, PubAnyTakesMaxNotSumAcrossTransports) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /image: {min_hz: 45, max_hz: 55, side: pub}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    // Both tracepoints fired for one 50 Hz stream (IPC on, mixed subscribers): 50, not 100.
+    EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 50.0, 50.0)}, {}, {}).empty());
+    // Only the intra path fired (all subscribers in-process — rcl_publish never called).
+    EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 0.0, 50.0)}, {}, {}).empty());
+    // Only the RMW path fired (intra-process comms off).
+    EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 50.0, 0.0)}, {}, {}).empty());
+
+    // max() must not rescue a genuinely slow publisher.
+    auto slow = evaluateRateSpec(*spec, {pubStat("/image", 10.0, 10.0)}, {}, {});
+    ASSERT_EQ(slow.size(), 1u);
+    EXPECT_EQ(slow[0], "WARN TOPIC /image hz=10.000000 expected=[45,55]");
+
+    // recv/any still SUMS: 10 + 20 = 30 is over max, and must stay that way.
+    auto recv_spec = parseRateSpec("topics:\n  /points: {min_hz: 5, max_hz: 25}\n", err);
+    ASSERT_TRUE(recv_spec.has_value()) << err;
+    auto summed = evaluateRateSpec(*recv_spec, {recvStat("/points", 10.0, 20.0)}, {}, {});
+    ASSERT_EQ(summed.size(), 1u);
+    EXPECT_EQ(summed[0], "WARN TOPIC /points hz=30.000000 expected=[5,25]");
 }
 
 // Probe mode: a spec topic this process doesn't host is another process's business — no

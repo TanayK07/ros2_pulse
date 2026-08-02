@@ -42,7 +42,7 @@ writes ready-to-read Hz to a small rolling file.
 ```
 # ts_ns=1782887153899445923 window_s=5.000
 TOPIC /scan 20.000000                      # publish-side, inter-process
-PUB   /points inter=0.000000 intra=30.000000   # publish-side incl. intra (Jazzy+)
+PUB   /points inter=0.000000 intra=30.000000   # publish-side incl. intra (Iron+)
 RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
 RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools on Humble
 NODE  /perception
@@ -112,9 +112,15 @@ Declare what "healthy" means and let the probe say when reality disagrees — no
 # /etc/pulse/expected.yaml — a documented YAML subset (flow-map topic rules; no YAML lib in the probe)
 topics:
   /scan:   {min_hz: 18, max_hz: 22, side: recv}   # side: pub|recv (default recv)
-  /points: {min_hz: 25, transport: intra}         # transport: inter|intra|any (default any = sum)
+  /scan:   {min_hz: 18, side: pub}                # same topic, other end — allowed
+  /points: {min_hz: 25, transport: intra}         # transport: inter|intra|any (default any)
 nodes: [/perception, /planner]                    # expected alive
 ```
+
+`transport: any` is the topic's rate however it travels. On the receive side the two buckets are
+disjoint deliveries, so they are summed. On the publish side one `publish()` can fire both the
+intra-process and the RMW tracepoint for the same message (Iron+, and always under TransientLocal
+QoS on Jazzy+), so the larger bucket is used rather than the sum.
 
 ```bash
 export ROS_TOPIC_STATS_EXPECTED=/etc/pulse/expected.yaml
@@ -127,17 +133,30 @@ WARN TOPIC /scan hz=1.200000 expected=[18,22]
 WARN NODE /planner missing
 ```
 
-Evaluation happens only at flush time (the hot path never sees the spec), the first window is
-grace-skipped (attach ramp-up), and each probed process only judges endpoints it hosts.
+Evaluation happens only at flush time (the hot path never sees the spec) and each probed process
+only judges endpoints it hosts. Both lifecycle transients are grace-skipped — the first window
+(attach ramp-up) and the final atexit window (a sub-period sliver whose rate is a one-sample
+estimate) — so a healthy start or stop never raises an alert. Their rates are still logged.
 
 **`pulse-check`** turns any log (or set of per-process logs) into an exit code for watchdogs,
 systemd or CI — it re-derives the verdict from the raw rates of the LAST window, no ROS needed:
 
 ```bash
+# live watchdog — the last window IS the current state
 pulse-check --spec /etc/pulse/expected.yaml /tmp/pulse.*.log && echo healthy
+
+# post-run CI gate — the stack has exited, so skip its atexit window
+pulse-check --spec /etc/pulse/expected.yaml --skip-last /tmp/pulse.*.log
+
 # exit 0: pass   1: violations (printed)   2: bad input
 # offline it owns the whole picture: a spec topic in NO log is reported at 0 Hz
 ```
+
+Use `--skip-last` on logs from a stack that has already stopped: the probe's final window is the
+atexit flush, a sub-period sliver whose rate is a one-sample estimate, so gating on it can go red
+on a healthy shutdown. It needs ≥2 windows per log (≥3 to also clear the ramp-up window). Note
+recv rates sum across logs, so `max_hz` belongs on `side: pub` — K subscriber processes on one
+topic legitimately report K× the publish rate.
 
 ## Benchmarks
 
@@ -164,7 +183,7 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 ## Limitations
 
 - On ROS 2 Humble there is no intra-process *publish* tracepoint, so intra rate is measured
-  **receive-side** (per subscription) — the signal you usually want. On Jazzy+ the probe also
+  **receive-side** (per subscription) — the signal you usually want. On Iron+ the probe also
   hooks `rclcpp_intra_publish` and emits an additive `PUB` line with publish-side intra rates.
 - **Node liveness is traffic-derived.** There is no node-teardown tracepoint on stock Humble, so a
   node appears in the `NODE` lines only while a topic it publishes or subscribes to has carried
@@ -190,7 +209,7 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 | Iron | ❌ not targeted | EOL December 2024 |
 
 Middleware-agnostic (hooks sit above the DDS vendor): validated with FastRTPS and CycloneDDS on
-Humble. On Jazzy+ the probe additionally hooks the dedicated `rclcpp_intra_publish` tracepoint:
+Humble. On Iron+ the probe additionally hooks the dedicated `rclcpp_intra_publish` tracepoint:
 **publish-side** intra rates appear on an additive `PUB` line; on Humble intra stays
 receive-side (the tracepoint does not exist there).
 

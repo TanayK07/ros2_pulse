@@ -50,7 +50,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += sprintfStr("%.6f", s.pub_inter_hz);
             out += '\n';
         }
-        // Publish-side intra line (jazzy+: the rclcpp_intra_publish tracepoint) — ADDITIVE,
+        // Publish-side intra line (iron+: the rclcpp_intra_publish tracepoint) — ADDITIVE,
         // like RECV, so legacy TOPIC parsers stay valid. Emitted only when intra publishes
         // happened this window (impossible on humble: the tracepoint doesn't exist there).
         if (s.pub_intra_count > 0) {
