@@ -81,6 +81,25 @@ void mergeStat(std::vector<sTopicStat>& stats, const sTopicStat& add) {
             s.recv_inter_hz += add.recv_inter_hz;
             s.recv_intra_hz += add.recv_intra_hz;
             s.recv_endpoint_seen = s.recv_endpoint_seen || add.recv_endpoint_seen;
+            // Gap fields are MAX, not sum. "Some endpoint of this topic saw a gap this big" is
+            // the alertable statement; adding two logs' gaps would be meaningless. This also
+            // behaves better than the rate fields across logs, which sum to K x the publish rate
+            // for K subscriber processes.
+            if (add.has_pub_max_dt) {
+                s.pub_max_dt_ms = s.has_pub_max_dt
+                                      ? (add.pub_max_dt_ms > s.pub_max_dt_ms ? add.pub_max_dt_ms
+                                                                             : s.pub_max_dt_ms)
+                                      : add.pub_max_dt_ms;
+                s.has_pub_max_dt = true;
+            }
+            if (add.has_recv_max_dt) {
+                s.recv_max_dt_ms = s.has_recv_max_dt
+                                       ? (add.recv_max_dt_ms > s.recv_max_dt_ms
+                                              ? add.recv_max_dt_ms
+                                              : s.recv_max_dt_ms)
+                                       : add.recv_max_dt_ms;
+                s.has_recv_max_dt = true;
+            }
             return;
         }
     }
@@ -172,8 +191,21 @@ int main(int argc, char** argv) {
         }
     }
 
-    const auto warnings =
-        evaluateRateSpec(*spec, stats, active_nodes, known_nodes, /*missing_as_zero=*/true);
+    std::vector<std::string> unmeasured;
+    const auto warnings = evaluateRateSpec(*spec, stats, active_nodes, known_nodes,
+                                           /*missing_as_zero=*/true, &unmeasured);
+    // A gap rule the logs cannot answer is bad input, not a verdict: exit 0 would claim it was
+    // checked and healthy, exit 1 would send someone chasing a stall that was never measured.
+    if (!unmeasured.empty()) {
+        for (const auto& t : unmeasured) {
+            std::fprintf(stderr,
+                         "pulse-check: spec sets max_gap_ms for '%s' but the logs carry no "
+                         "JITTER line for it — was the probe run with "
+                         "ROS_TOPIC_STATS_JITTER=1?\n",
+                         t.c_str());
+        }
+        return 2;
+    }
     for (const auto& w : warnings) {
         std::printf("%s\n", w.c_str());
     }

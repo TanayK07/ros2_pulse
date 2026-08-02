@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -257,7 +258,20 @@ private:
         // a core at 4900 msg/s but still 25x the counting path, so it stays opt-in. Set in the
         // ctor BODY, not an initializer: m_registry is declared before m_spec, and a later
         // revision will also enable this when the spec carries a max_gap_ms rule.
-        m_registry.setGapTracking(envFlag("ROS_TOPIC_STATS_JITTER"));
+        // A declared max_gap_ms rule is a stronger statement of intent than the absence of an
+        // env var, and silently not checking a declared rule is the failure mode this project
+        // fights everywhere else (zero-rule spec, malformed spec -> warn and disable).
+        bool spec_wants_gap = false;
+        if (m_spec.has_value()) {
+            for (const auto& [name, rule] : m_spec->topics) {
+                (void)name;
+                if (!std::isinf(rule.max_gap_ms)) {
+                    spec_wants_gap = true;
+                    break;
+                }
+            }
+        }
+        m_registry.setGapTracking(envFlag("ROS_TOPIC_STATS_JITTER") || spec_wants_gap);
     }
 
     void flush(bool exiting = false) {
