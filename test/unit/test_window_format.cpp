@@ -128,6 +128,28 @@ TEST(WindowFormat, StalledTopicEmitsRecvZeroLine) {
     EXPECT_EQ(got, want);
 }
 
+// Expected-rate warnings (ROADMAP R1) render verbatim after the NODE lines, before the blank
+// line — additive, so TOPIC/PUB/RECV/NODE parsers never see a changed prefix.
+TEST(WindowFormat, WarningsRenderAfterNodes) {
+    std::vector<sTopicStat> stats = {stat("/scan", 6, 0, 0, 1.2, 0.0, 0.0)};
+    std::vector<std::string> nodes = {"/perception"};
+    const std::vector<std::string> warnings = {
+        "WARN TOPIC /scan hz=1.200000 expected=[18,22]",
+        "WARN NODE /planner missing",
+    };
+
+    const std::string got = formatWindow(stats, nodes, 42LL, 5.0, /*emit_idle=*/false, warnings);
+
+    const std::string want =
+        "# ts_ns=42 window_s=5.000\n"
+        "TOPIC /scan 1.200000\n"
+        "NODE /perception\n"
+        "WARN TOPIC /scan hz=1.200000 expected=[18,22]\n"
+        "WARN NODE /planner missing\n"
+        "\n";
+    EXPECT_EQ(got, want);
+}
+
 // Nodes-only window (no topics yet) still emits a valid, closed block.
 TEST(WindowFormat, NodesOnlyWindow) {
     std::vector<sTopicStat> stats = {};

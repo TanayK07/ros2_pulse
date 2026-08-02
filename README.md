@@ -47,6 +47,7 @@ RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
 RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools on Humble
 NODE  /perception
 NODE  /planner
+WARN  TOPIC /scan hz=1.200000 expected=[18,22]  # only with an expected-rate spec (see below)
 ```
 
 ## How it works
@@ -60,10 +61,10 @@ tracing session** and adds no DDS traffic.
 
 - **Intra-process visibility** comes from `callback_start(callback, is_intra_process)`, which fires
   for every subscription callback regardless of transport.
-- **Hot path** is a per-endpoint relaxed atomic increment behind a 16-slot thread-local cache —
-  no global lock, no per-message string hashing. Counting costs a few ns/op with a warm cache
-  (~3 ns fixed-endpoint, ~12 ns alternating across a 4-topic working set on the reference box) —
-  one to two orders of magnitude under a single LTTng-UST tracepoint (~158 ns).
+- **Hot path** is a per-endpoint relaxed atomic increment behind a 256-slot thread-local cache
+  with a stride-breaking hash — no global lock, no per-message string hashing. Counting costs
+  ~0.3 ns/op fixed-endpoint and ~0.6–1.2 ns alternating across a working set (reference box) —
+  two orders of magnitude under a single LTTng-UST tracepoint (~158 ns).
 - A background timer snapshots + resets counts every `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` seconds
   and appends Hz to `ROS_TOPIC_STATS_OUTPUT_FILE`.
 
@@ -100,6 +101,43 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 | `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` | `5.0` | Flush/snapshot window, in seconds. |
 | `ROS_TOPIC_STATS_MAX_BYTES` | `10485760` (10 MiB) | Size cap: at/over it the file rotates to `<path>.1` (single generation, worst-case disk = 2× cap per process). `0` disables rotation (pure append). Reopen-per-window is kept, so external logrotate also works. |
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a **stalled** upstream stays visible) and omits never-active topics. |
+| `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting — never crash the host. |
+
+### Expected-rate alerting
+
+Declare what "healthy" means and let the probe say when reality disagrees — no per-node
+`diagnostic_updater` code, whole process tree at once:
+
+```yaml
+# /etc/pulse/expected.yaml — a documented YAML subset (flow-map topic rules; no YAML lib in the probe)
+topics:
+  /scan:   {min_hz: 18, max_hz: 22, side: recv}   # side: pub|recv (default recv)
+  /points: {min_hz: 25, transport: intra}         # transport: inter|intra|any (default any = sum)
+nodes: [/perception, /planner]                    # expected alive
+```
+
+```bash
+export ROS_TOPIC_STATS_EXPECTED=/etc/pulse/expected.yaml
+```
+
+Violations render inside the normal window block (additive — existing parsers unaffected):
+
+```
+WARN TOPIC /scan hz=1.200000 expected=[18,22]
+WARN NODE /planner missing
+```
+
+Evaluation happens only at flush time (the hot path never sees the spec), the first window is
+grace-skipped (attach ramp-up), and each probed process only judges endpoints it hosts.
+
+**`pulse-check`** turns any log (or set of per-process logs) into an exit code for watchdogs,
+systemd or CI — it re-derives the verdict from the raw rates of the LAST window, no ROS needed:
+
+```bash
+pulse-check --spec /etc/pulse/expected.yaml /tmp/pulse.*.log && echo healthy
+# exit 0: pass   1: violations (printed)   2: bad input
+# offline it owns the whole picture: a spec topic in NO log is reported at 0 Hz
+```
 
 ## Benchmarks
 

@@ -3,6 +3,9 @@ build/
 install/
 log/
 
+# standalone CMake lanes (cmake -B build-<lane>)
+build-*/
+
 # CMake
 CMakeCache.txt
 CMakeFiles/

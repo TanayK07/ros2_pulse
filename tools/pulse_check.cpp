@@ -1,0 +1,149 @@
+// Copyright 2026 ros2_pulse contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License").
+//
+// pulse-check: offline expected-rate verdict for probe logs (ROADMAP R1). No ROS dependency —
+// links only the pure ros2_pulse core, so watchdogs, CI jobs and systemd units can gate on it
+// anywhere the log files land.
+//
+//   pulse-check --spec <spec.yaml> <log> [<log> ...]
+//
+// Each log is one probed process (the per-PID default output). The verdict is computed from
+// the LAST window of every log — "the system's current state" — with per-topic rates summed
+// across logs (a publisher's process and a subscriber's process both report the same topic).
+// Node knowledge is the union over all windows, so a node that died mid-log is reported
+// missing rather than forgotten. Unlike the in-probe alerting, a spec topic that appears in
+// NO log is a violation here (0 Hz): the log set is the whole picture.
+//
+// Exit codes: 0 = all checks pass, 1 = violations (printed to stdout, one per line),
+//             2 = usage / unreadable file / invalid spec / no windows.
+
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+#include "ros2_pulse/core/log_reader.hpp"
+#include "ros2_pulse/core/rate_spec.hpp"
+
+namespace {
+
+using ros2_pulse::core::evaluateRateSpec;
+using ros2_pulse::core::parseLog;
+using ros2_pulse::core::parseRateSpec;
+using ros2_pulse::core::sTopicStat;
+
+auto readFile(const char* path, std::string& out) -> bool {
+    std::FILE* f = std::fopen(path, "r");
+    if (f == nullptr) {
+        return false;
+    }
+    char buf[4096];
+    size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        out.append(buf, n);
+    }
+    std::fclose(f);
+    return true;
+}
+
+void addUnique(std::vector<std::string>& v, const std::string& s) {
+    for (const auto& x : v) {
+        if (x == s) {
+            return;
+        }
+    }
+    v.push_back(s);
+}
+
+// Sum rate fields per topic across logs: each log is one process, and the system-wide rate of
+// a topic is what all its endpoints saw combined.
+void mergeStat(std::vector<sTopicStat>& stats, const sTopicStat& add) {
+    for (auto& s : stats) {
+        if (s.topic == add.topic) {
+            s.pub_inter_hz += add.pub_inter_hz;
+            s.pub_intra_hz += add.pub_intra_hz;
+            s.recv_inter_hz += add.recv_inter_hz;
+            s.recv_intra_hz += add.recv_intra_hz;
+            s.recv_endpoint_seen = s.recv_endpoint_seen || add.recv_endpoint_seen;
+            return;
+        }
+    }
+    stats.push_back(add);
+}
+
+void usage(std::FILE* to) {
+    std::fprintf(to,
+                 "usage: pulse-check --spec <spec.yaml> <log> [<log> ...]\n"
+                 "  Checks the LAST window of each ros2_pulse log against an expected-rate\n"
+                 "  spec. Prints one WARN line per violation.\n"
+                 "  exit 0: all checks pass   1: violations   2: bad input\n");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    const char* spec_path = nullptr;
+    std::vector<const char*> log_paths;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--spec") == 0 && i + 1 < argc) {
+            spec_path = argv[++i];
+        } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
+            usage(stdout);
+            return 0;
+        } else {
+            log_paths.push_back(argv[i]);
+        }
+    }
+    if (spec_path == nullptr || log_paths.empty()) {
+        usage(stderr);
+        return 2;
+    }
+
+    std::string spec_text;
+    if (!readFile(spec_path, spec_text)) {
+        std::fprintf(stderr, "pulse-check: cannot read spec '%s'\n", spec_path);
+        return 2;
+    }
+    std::string err;
+    auto spec = parseRateSpec(spec_text, err);
+    if (!spec.has_value()) {
+        std::fprintf(stderr, "pulse-check: invalid spec '%s': %s\n", spec_path, err.c_str());
+        return 2;
+    }
+
+    std::vector<sTopicStat> stats;
+    std::vector<std::string> active_nodes;
+    std::vector<std::string> known_nodes;
+    for (const char* path : log_paths) {
+        std::string text;
+        if (!readFile(path, text)) {
+            std::fprintf(stderr, "pulse-check: cannot read log '%s'\n", path);
+            return 2;
+        }
+        const auto windows = parseLog(text);
+        if (windows.empty()) {
+            std::fprintf(stderr, "pulse-check: no probe windows in '%s'\n", path);
+            return 2;
+        }
+        for (const auto& w : windows) {
+            for (const auto& n : w.nodes) {
+                addUnique(known_nodes, n);
+            }
+        }
+        const auto& last = windows.back();
+        for (const auto& n : last.nodes) {
+            addUnique(active_nodes, n);
+        }
+        for (const auto& s : last.stats) {
+            mergeStat(stats, s);
+        }
+    }
+
+    const auto warnings =
+        evaluateRateSpec(*spec, stats, active_nodes, known_nodes, /*missing_as_zero=*/true);
+    for (const auto& w : warnings) {
+        std::printf("%s\n", w.c_str());
+    }
+    return warnings.empty() ? 0 : 1;
+}

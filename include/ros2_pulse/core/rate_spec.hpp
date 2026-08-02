@@ -1,0 +1,87 @@
+// Copyright 2026 ros2_pulse contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License").
+
+#ifndef ROS2_PULSE__CORE__RATE_SPEC_HPP_
+#define ROS2_PULSE__CORE__RATE_SPEC_HPP_
+
+#include <limits>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "ros2_pulse/core/topic_registry.hpp"
+
+namespace ros2_pulse::core {
+
+/// Which endpoint of a topic a rate rule constrains.
+enum class eRateSide { kRecv, kPub };
+
+/// Which transport's rate a rule constrains. kAny sums inter + intra.
+enum class eRateTransport { kAny, kInter, kIntra };
+
+/// One expected-rate rule for a topic (ROADMAP R1).
+struct sRateRule {
+    double min_hz{0.0};
+    double max_hz{std::numeric_limits<double>::infinity()};
+    eRateSide side{eRateSide::kRecv};
+    eRateTransport transport{eRateTransport::kAny};
+};
+
+/// A parsed expected-rate spec: per-topic rules plus a list of nodes expected alive.
+/// Topics keep spec order so WARN output is deterministic.
+struct sRateSpec {
+    std::vector<std::pair<std::string, sRateRule>> topics;
+    std::vector<std::string> nodes;
+};
+
+/// @brief Parse the restricted-YAML expected-rate spec (ROS_TOPIC_STATS_EXPECTED).
+///
+/// Accepted grammar — a deliberate, documented YAML subset so the LD_PRELOAD probe needs no
+/// YAML library (see README "Expected-rate alerting"):
+/// @code
+/// # comments and blank lines anywhere
+/// topics:
+///   /scan:   {min_hz: 18, max_hz: 22, side: recv}
+///   /points: {min_hz: 25, transport: intra}
+/// nodes: [/perception, /planner]     # flow list...
+/// nodes:                             # ...or block list
+///   - /perception
+/// @endcode
+///
+/// Topic entries must use the inline flow-map form with at least one of min_hz / max_hz.
+/// Keys: min_hz, max_hz (non-negative finite numbers), side (pub|recv, default recv),
+/// transport (inter|intra|any, default any). Unknown keys, malformed numbers, min_hz > max_hz,
+/// or duplicate topics are hard errors.
+///
+/// @param text  the spec file contents.
+/// @param error on failure, receives "line N: <reason>".
+/// @return the parsed spec, or std::nullopt on any error (the probe then runs unspecced —
+///         a bad spec must never take the host process down).
+auto parseRateSpec(const std::string& text, std::string& error) -> std::optional<sRateSpec>;
+
+/// @brief Evaluate a spec against one window's stats; returns WARN lines (no trailing '\n').
+///
+/// Line grammar (additive to the window format, pinned by unit tests):
+/// @code
+/// WARN TOPIC <name> hz=<observed to 6dp> expected=[<min>,<max>]   // max renders 'inf' when unbounded
+/// WARN NODE <name> missing
+/// @endcode
+///
+/// A spec topic with no entry in @p stats, or a spec node absent from @p known_nodes, belongs
+/// to some OTHER process and is skipped — unless @p missing_as_zero is set (pulse-check mode,
+/// where the log set IS the whole picture): then a missing topic is evaluated at 0 Hz and a
+/// missing node is warned about. Node warnings fire for known-but-inactive nodes (aged out by
+/// the liveness window).
+///
+/// Pure and I/O-free: the probe calls it at flush time only (zero hot-path cost) and the
+/// pulse-check CLI reuses it verbatim on offline logs.
+auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
+                      const std::vector<std::string>& active_nodes,
+                      const std::vector<std::string>& known_nodes,
+                      bool missing_as_zero = false) -> std::vector<std::string>;
+
+}  // namespace ros2_pulse::core
+
+#endif  // ROS2_PULSE__CORE__RATE_SPEC_HPP_
