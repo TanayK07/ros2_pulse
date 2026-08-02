@@ -326,3 +326,108 @@ TEST(RateSpecEval, DeterministicOrder) {
     EXPECT_EQ(w[1], "WARN TOPIC /a hz=0.000000 expected=[10,inf]");
     EXPECT_EQ(w[2], "WARN NODE /n missing");
 }
+
+// ---- gap rules (ROADMAP R5) ----
+
+// max_gap_ms is a first-class constraint: a rule may carry it ALONE. The whole point of R5 is
+// that min_hz is the weak detector, so forcing a redundant rate bound on every gap rule would
+// have the tool contradicting its own documentation.
+TEST(RateSpecParse, MaxGapMsAloneIsAValidRule) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /cmd_vel: {max_gap_ms: 30, side: pub}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+    ASSERT_EQ(spec->topics.size(), 1u);
+    EXPECT_DOUBLE_EQ(spec->topics[0].second.max_gap_ms, 30.0);
+    EXPECT_TRUE(std::isinf(spec->topics[0].second.max_hz)) << "rate bounds stay unconstrained";
+    EXPECT_EQ(spec->topics[0].second.side, eRateSide::kPub);
+
+    // ...and combines with rate bounds in one rule
+    auto both = parseRateSpec("topics:\n  /scan: {min_hz: 45, max_gap_ms: 60}\n", err);
+    ASSERT_TRUE(both.has_value()) << err;
+    EXPECT_DOUBLE_EQ(both->topics[0].second.min_hz, 45.0);
+    EXPECT_DOUBLE_EQ(both->topics[0].second.max_gap_ms, 60.0);
+}
+
+// A rule still has to constrain SOMETHING, and an unsatisfiable gap bound is rejected up front
+// rather than warning on every window forever.
+TEST(RateSpecParse, RejectsBadGapRules) {
+    std::string err;
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {side: pub}\n", err).has_value());
+    EXPECT_NE(err.find("max_gap_ms"), std::string::npos) << "error should name all three keys";
+
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {max_gap_ms: 0}\n", err).has_value());
+    EXPECT_NE(err.find("must be > 0"), std::string::npos) << err;
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {max_gap_ms: -5}\n", err).has_value());
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {max_gap_ms: soon}\n", err).has_value());
+    EXPECT_FALSE(parseRateSpec("topics:\n  /x: {max_gap_ms: 5, max_gap_ms: 9}\n", err).has_value());
+    EXPECT_NE(err.find("duplicate key 'max_gap_ms'"), std::string::npos) << err;
+
+    // transport picks a rate bucket; the gap series is transport-merged, so pairing them alone
+    // constrains nothing.
+    EXPECT_FALSE(
+        parseRateSpec("topics:\n  /x: {max_gap_ms: 5, transport: intra}\n", err).has_value());
+    EXPECT_NE(err.find("no effect"), std::string::npos) << err;
+}
+
+// The pinned WARN line, and the fact that a rule can violate rate AND gap independently.
+TEST(RateSpecEval, GapWarnLineAndDualViolation) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /scan: {min_hz: 45, max_gap_ms: 60, side: recv}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    auto in_range = recvStat("/scan", 50.0, 0.0);
+    in_range.recv_max_dt_ms = 21.0;
+    in_range.has_recv_max_dt = true;
+    EXPECT_TRUE(evaluateRateSpec(*spec, {in_range}, {}, {}).empty());
+
+    // healthy mean rate, but a freeze — exactly the case a windowed mean cannot see
+    auto frozen = recvStat("/scan", 50.0, 0.0);
+    frozen.recv_max_dt_ms = 812.4;
+    frozen.has_recv_max_dt = true;
+    auto w = evaluateRateSpec(*spec, {frozen}, {}, {});
+    ASSERT_EQ(w.size(), 1u);
+    EXPECT_EQ(w[0], "WARN TOPIC /scan max_dt_ms=812.400 expected_max_gap_ms=60");
+
+    // slow AND frozen: two distinct faults, two lines, rate first
+    auto both = recvStat("/scan", 10.0, 0.0);
+    both.recv_max_dt_ms = 812.4;
+    both.has_recv_max_dt = true;
+    auto w2 = evaluateRateSpec(*spec, {both}, {}, {});
+    ASSERT_EQ(w2.size(), 2u);
+    EXPECT_EQ(w2[0], "WARN TOPIC /scan hz=10.000000 expected=[45,inf]");
+    EXPECT_EQ(w2[1], "WARN TOPIC /scan max_dt_ms=812.400 expected_max_gap_ms=60");
+}
+
+// A gap rule reads its own side's accumulator.
+TEST(RateSpecEval, GapRuleRespectsSide) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /image: {max_gap_ms: 50, side: pub}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    auto s = pubStat("/image", 20.0, 0.0);
+    s.pub_max_dt_ms = 900.0;
+    s.has_pub_max_dt = true;
+    s.recv_max_dt_ms = 1.0;  // a healthy recv side must not rescue a frozen pub side
+    s.has_recv_max_dt = true;
+    auto w = evaluateRateSpec(*spec, {s}, {}, {});
+    ASSERT_EQ(w.size(), 1u);
+    EXPECT_NE(w[0].find("max_dt_ms=900.000"), std::string::npos) << w[0];
+}
+
+// Measurement absence is not a health verdict. In probe mode an unmeasured gap is silently
+// skipped (another process's endpoint); offline it is collected so pulse-check can exit 2
+// rather than claim the check passed.
+TEST(RateSpecEval, UnmeasuredGapIsReportedNotPassed) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /scan: {max_gap_ms: 60}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    auto no_jitter = recvStat("/scan", 50.0, 0.0);  // has_recv_max_dt stays false
+    EXPECT_TRUE(evaluateRateSpec(*spec, {no_jitter}, {}, {}).empty()) << "probe mode: skip";
+
+    std::vector<std::string> unmeasured;
+    auto w = evaluateRateSpec(*spec, {no_jitter}, {}, {}, /*missing_as_zero=*/true, &unmeasured);
+    EXPECT_TRUE(w.empty()) << "must not fabricate a violation it could not measure";
+    ASSERT_EQ(unmeasured.size(), 1u);
+    EXPECT_EQ(unmeasured[0], "/scan");
+}

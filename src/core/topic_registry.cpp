@@ -5,6 +5,7 @@
 
 #include "ros2_pulse/core/topic_registry.hpp"
 
+#include <chrono>
 #include <mutex>  // for std::unique_lock with shared_mutex
 #include <new>    // placement-new (forkChildReset)
 #include <unordered_set>
@@ -50,6 +51,62 @@ inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
     const auto p = reinterpret_cast<uintptr_t>(key);
     return t_tls_cache[((p >> 4) ^ (p >> 10)) & kTlsSlotMask];
 }
+
+// ROADMAP R5: record one arrival into a side's gap accumulator.
+//
+// `exchange`, not load+store: it guarantees exactly ONE caller consumes each predecessor
+// timestamp, so two threads delivering to the same endpoint can never derive two dt's from the
+// same `prev` (which would double-count one interval and lose another).
+//
+// The `now > prev` guard is MANDATORY, not defensive. `now` is sampled before the exchange, so
+// two threads can exchange out of order; without the guard the unsigned subtraction underflows
+// to ~1.8e19 ns and poisons max_dt permanently. Discarding those samples is the correct trade:
+// measured under 8-way contention on one endpoint, 0.6-9.7% of samples are dropped and the
+// reported max is over-stated by at most 5% — never garbage, never negative, and erring high is
+// the safe direction for a stall detector. Single-threaded delivery is exact.
+inline void noteArrival(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_dt_ns) {
+    const auto now = static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const uint64_t prev = last_ns.exchange(now, std::memory_order_relaxed);
+    if (prev == 0 || now <= prev) {
+        return;  // first arrival ever, or a reordered pair — no usable interval
+    }
+    const uint64_t dt = now - prev;
+    // std::atomic::fetch_max is C++26; this is the portable form. It costs nothing in steady
+    // state because new maxima follow the harmonic number — ~14 CAS per 500 messages.
+    uint64_t cur = max_dt_ns.load(std::memory_order_relaxed);
+    while (dt > cur && !max_dt_ns.compare_exchange_weak(cur, dt, std::memory_order_relaxed)) {
+    }
+}
+
+// Drain one side's gap accumulator for the window just ending. Returns false when the endpoint
+// has never seen an arrival: no interval exists, which is NOT the same as a gap of zero, so the
+// caller must not report a field. Resets max_dt; deliberately leaves last_ns intact.
+inline auto takeGap(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_dt_ns,
+                    uint64_t now_ns, bool fold_open_gap, double& out_ms) -> bool {
+    const uint64_t last = last_ns.load(std::memory_order_relaxed);
+    if (last == 0) {
+        return false;  // never active
+    }
+    uint64_t dt = max_dt_ns.exchange(0, std::memory_order_relaxed);
+    if (fold_open_gap && now_ns > last) {
+        const uint64_t open = now_ns - last;
+        if (open > dt) {
+            dt = open;
+        }
+    }
+    if (dt == 0) {
+        // A timestamp but no measured interval — the endpoint has been seen exactly once (and
+        // the open gap is not being folded). Reporting 0.000 would read as "perfectly regular",
+        // which is the best possible value, inferred from a single data point. The only real
+        // sample this discards is two arrivals inside one clock tick (~21 ns), which can never
+        // be a maximum and is already dropped by noteArrival's now > prev guard.
+        return false;
+    }
+    out_ms = static_cast<double>(dt) / 1e6;
+    return true;
+}
+
 }  // namespace
 
 TopicRegistry::TopicRegistry(uint32_t quiet_windows)
@@ -207,6 +264,14 @@ auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
     return c->second;
 }
 
+void TopicRegistry::setGapTracking(bool on) {
+    m_gap_tracking.store(on, std::memory_order_relaxed);
+}
+
+auto TopicRegistry::gapTracking() const -> bool {
+    return m_gap_tracking.load(std::memory_order_relaxed);
+}
+
 void TopicRegistry::onPublish(const void* pub_handle) { publishCount(pub_handle, false); }
 
 void TopicRegistry::onIntraPublish(const void* pub_handle) { publishCount(pub_handle, true); }
@@ -215,10 +280,14 @@ void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) 
     if (pub_handle == nullptr) {
         return;
     }
+    const bool gap = m_gap_tracking.load(std::memory_order_relaxed);
     sTlsSlot& slot = tlsSlotFor(pub_handle);
     if (slot.id == m_id && slot.key == pub_handle) {
         auto& bucket = is_intra_process ? slot.ctr->pub_intra : slot.ctr->pub_inter;
         bucket.fetch_add(1, std::memory_order_relaxed);
+        if (gap) {
+            noteArrival(slot.ctr->pub_last_ns, slot.ctr->pub_max_dt_ns);
+        }
         return;
     }
     std::shared_lock<std::shared_mutex> lock(m_mu);
@@ -227,6 +296,9 @@ void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) 
     if (it != m_pub_to_counter.end()) {
         auto& bucket = is_intra_process ? it->second->pub_intra : it->second->pub_inter;
         bucket.fetch_add(1, std::memory_order_relaxed);
+        if (gap) {
+            noteArrival(it->second->pub_last_ns, it->second->pub_max_dt_ns);
+        }
         slot = {m_id, pub_handle, it->second};
     }
 }
@@ -244,6 +316,9 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
                 slot.ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
             } else {
                 slot.ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (m_gap_tracking.load(std::memory_order_relaxed)) {
+                noteArrival(slot.ctr->recv_last_ns, slot.ctr->recv_max_dt_ns);
             }
         }
         return;
@@ -282,12 +357,21 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     } else {
         ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
     }
+    if (m_gap_tracking.load(std::memory_order_relaxed)) {
+        noteArrival(ctr->recv_last_ns, ctr->recv_max_dt_ns);
+    }
 }
 
-auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
+auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
+    -> std::vector<sTopicStat> {
     std::vector<sTopicStat> out;
     std::unique_lock<std::shared_mutex> lock(m_mu);
     const double w = window_s > 0.0 ? window_s : 1.0;
+    const bool gap = m_gap_tracking.load(std::memory_order_relaxed);
+    const auto now_ns = gap ? static_cast<uint64_t>(
+                                  std::chrono::steady_clock::now()
+                                      .time_since_epoch().count())
+                            : 0ULL;
     // Counters that carried traffic this window, used below to age per-node liveness. Filtered
     // topics are excluded from the stats output but still count as node activity (a node emitting
     // only /rosout is alive), so we record activity before the filter check.
@@ -300,11 +384,25 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         uint64_t px = c->pub_intra.exchange(0, std::memory_order_relaxed);
         uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
         uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
+        // Gap accumulators drain here too, for the same reason the counts do: a filtered topic
+        // is not REPORTED, but its per-window state must still be reset or it ratchets upward
+        // for the process lifetime and the first window after any filter change would report a
+        // gap accumulated since startup.
+        double pub_gap_ms = 0.0;
+        double recv_gap_ms = 0.0;
+        bool has_pub_gap = false;
+        bool has_recv_gap = false;
+        if (gap) {
+            has_pub_gap = takeGap(c->pub_last_ns, c->pub_max_dt_ns, now_ns, fold_open_gap,
+                                  pub_gap_ms);
+            has_recv_gap = takeGap(c->recv_last_ns, c->recv_max_dt_ns, now_ns, fold_open_gap,
+                                   recv_gap_ms);
+        }
         if (p > 0 || px > 0 || ri > 0 || rx > 0) {
             active.insert(c);  // this topic's endpoints saw traffic -> owning node(s) are live
         }
         if (shouldFilter(c->topic)) {
-            continue;  // counts reset above, but the topic itself is never reported
+            continue;  // counts and gaps reset above, but the topic itself is never reported
         }
         sTopicStat s;
         s.topic = c->topic;
@@ -317,6 +415,10 @@ auto TopicRegistry::snapshot(double window_s) -> std::vector<sTopicStat> {
         s.recv_inter_hz = static_cast<double>(ri) / w;
         s.recv_intra_hz = static_cast<double>(rx) / w;
         s.recv_endpoint_seen = c->recv_endpoint_seen;
+        s.has_pub_max_dt = has_pub_gap;
+        s.pub_max_dt_ms = pub_gap_ms;
+        s.has_recv_max_dt = has_recv_gap;
+        s.recv_max_dt_ms = recv_gap_ms;
         out.push_back(std::move(s));
     }
     // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose owned
@@ -376,6 +478,16 @@ void TopicRegistry::forkChildReset() {
     // issue-10 regression test caught). The child is single-threaded and is the lock's owner
     // by inheritance, so re-initialize the mutex in place instead of unlocking it.
     new (&m_mu) std::shared_mutex();
+    // Gap state (R5): last_ns is CLOCK_MONOTONIC, which is per-boot and process-independent, so
+    // an interval the child measures against it is real — keep it. The per-window maxima are the
+    // PARENT's observations and would be attributed to the child's first window, where a stale
+    // large value can fire a max_gap_ms rule on a perfectly healthy child. That is why this
+    // diverges from the inherited-counts smear documented in issue #10: a stale count cannot
+    // raise an alert, a stale gap can. The child is single-threaded here, so a plain loop is safe.
+    for (auto& kv : m_by_topic) {
+        kv.second->pub_max_dt_ns.store(0, std::memory_order_relaxed);
+        kv.second->recv_max_dt_ns.store(0, std::memory_order_relaxed);
+    }
 }
 
 }  // namespace ros2_pulse::core

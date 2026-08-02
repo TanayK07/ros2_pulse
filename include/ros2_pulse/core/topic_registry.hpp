@@ -30,6 +30,20 @@ struct sTopicCounter {
     std::atomic<uint64_t> pub_intra{0};   // intra-process publishes (rclcpp_intra_publish, iron+)
     std::atomic<uint64_t> recv_inter{0};  // inter-process receives (callback_start, intra=false)
     std::atomic<uint64_t> recv_intra{0};  // intra-process receives (callback_start, intra=true)
+
+    // --- gap tracking (ROADMAP R5), only written when the registry has it enabled ---
+    // Transport-merged, one accumulator per SIDE: a windowed mean cannot see a stall (a 400 ms
+    // freeze on a 50 Hz topic still averages 46 Hz over 5 s), so the max inter-arrival gap is the
+    // window-length-independent detector. Nanoseconds, integer: lock-free everywhere and exact.
+    //
+    // last_* is the timestamp of the previous arrival and is deliberately NOT reset by snapshot():
+    // the first message of window N+1 must measure its gap back into window N, or a stall that
+    // straddles a flush would be silently discarded — precisely the case this exists to catch.
+    // 0 means "no arrival ever", which is how a never-active endpoint stays unreported.
+    std::atomic<uint64_t> pub_last_ns{0};
+    std::atomic<uint64_t> recv_last_ns{0};
+    std::atomic<uint64_t> pub_max_dt_ns{0};   // reset per window by snapshot()
+    std::atomic<uint64_t> recv_max_dt_ns{0};  // reset per window by snapshot()
 };
 
 /// @brief Aggregated, windowed view of one topic (returned by snapshot()).
@@ -46,6 +60,13 @@ struct sTopicStat {
     // A subscription for this topic has delivered at least once — emit RECV even at zero so a
     // dead upstream reads 0.0 instead of vanishing (KNOWN_ISSUES #12).
     bool recv_endpoint_seen{false};
+    // Largest inter-arrival gap seen this window, per side (ROADMAP R5). Valid only when the
+    // matching has_* flag is set: gap tracking is opt-in, and an endpoint that has never seen a
+    // message has no gap to report (which is NOT the same as a gap of zero).
+    double pub_max_dt_ms{0.0};
+    double recv_max_dt_ms{0.0};
+    bool has_pub_max_dt{false};
+    bool has_recv_max_dt{false};
 };
 
 /// @brief One initialized node plus its recent-activity bookkeeping.
@@ -90,9 +111,23 @@ public:
     void onIntraPublish(const void* pub_handle);  // intra-process publish (iron+ tracepoint)
     void onCallbackStart(const void* callback, bool is_intra_process);  // any-transport receive
 
+    /// Enable per-endpoint inter-arrival gap tracking (ROADMAP R5). Off by default: it costs one
+    /// clock read per message (~21 ns, vs ~0.3 ns for the counting path alone), so it is opt-in
+    /// via ROS_TOPIC_STATS_JITTER=1 or implied by a max_gap_ms spec rule. Set once at startup,
+    /// before any tracepoint can fire; atomic so the read in the hot path stays race-free.
+    void setGapTracking(bool on);
+    auto gapTracking() const -> bool;
+
     // --- aggregation ---
     /// Compute Hz over the given window and RESET all counts. Filtered topics excluded.
-    auto snapshot(double window_s) -> std::vector<sTopicStat>;
+    ///
+    /// @p fold_open_gap closes the currently-open interval into each side's reported gap, i.e.
+    /// reports max(observed gaps, now - last arrival). Without it an endpoint that has gone
+    /// completely silent produces no inter-arrival pair at all and would vanish from the gap
+    /// report — missing the TOTAL stall, the worst case R5 exists to catch. Pass false for the
+    /// atexit window: rclcpp teardown stops traffic before the process exits, so the open gap
+    /// there measures the shutdown sequence and would fire every gap rule on a healthy stop.
+    auto snapshot(double window_s, bool fold_open_gap = true) -> std::vector<sTopicStat>;
     auto activeNodes() const -> std::vector<std::string>;
     /// Every node ever initialized in this process, active or quiet. Lets the expected-rate
     /// evaluator (ROADMAP R1) tell "aged out, warn" from "never ours, skip".
@@ -177,6 +212,9 @@ private:
     // Count of hot-path escalations to the exclusive lock (see writeLockResolutions()).
     std::atomic<uint64_t> m_write_lock_resolutions{0};
     std::atomic<uint64_t> m_shared_lock_lookups{0};
+    // Gap tracking gate (R5). Relaxed-loaded once per message; the branch is perfectly predicted
+    // and measured at under 0.02 ns/op when off, so there is no second code path.
+    std::atomic<bool> m_gap_tracking{false};
 
     // Node liveness: owned records in insertion order, plus dedup-by-name and handle->node indexes.
     std::vector<std::unique_ptr<sNode>> m_nodes;
