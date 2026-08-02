@@ -131,6 +131,29 @@ def test_invalid_spec_disables_alerting_without_crashing():
                               note="(alerting disabled, measurement intact)")
 
 
+def test_hostile_spec_paths_disable_alerting_without_stalling():
+    """A spec path that isn't a spec must degrade instantly, not stall or balloon the host.
+
+    All three used to be read unbounded inside the singleton constructor reached from
+    rcl_node_init: /dev/zero never reaches EOF, a directory yields empty text that parses as a
+    valid zero-rule spec (alerting silently armed as a no-op), and an oversize file costs
+    seconds of startup and GBs of RSS in every preloaded process.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        oversize = os.path.join(d, "big.yaml")
+        with open(oversize, "w") as f:
+            f.write("#" * (1024 * 1024 + 1))  # one byte past the 1 MiB cap
+
+        for label, spec in (("oversize", oversize), ("chardev", "/dev/zero"), ("directory", d)):
+            out = os.path.join(d, f"{label}.log")
+            text = ph.run_single("talker", out, run_s=4.0, period="1.0",
+                                 extra_env={"ROS_TOPIC_STATS_EXPECTED": spec})
+            assert not _warn_lines(text), f"{label} spec should disable alerting\n{text}"
+            # the probe must still have measured normally throughout
+            ph.assert_rate_within(text, "/chatter", ph.KNOWN_RATE_HZ, field="topic", rel_tol=0.30,
+                                  note=f"({label} spec: alerting disabled, measurement intact)")
+
+
 def test_pulse_check_cli_verdicts():
     """pulse-check: exit 1 + WARN on stdout for violations, 0 for a pass, 2 for bad input.
     Offline mode owns the whole picture: a topic in NO log IS a violation."""
@@ -161,8 +184,6 @@ def test_pulse_check_cli_verdicts():
         assert nolog.returncode == 2
 
 
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__, "-v", "-s"]))
 def test_pulse_check_skip_last_ignores_exit_window():
     """--skip-last judges the second-to-last window, and refuses a log too short to have one."""
     with tempfile.TemporaryDirectory() as d:
@@ -200,3 +221,5 @@ def test_pulse_check_rejects_non_spec_paths_fast():
             assert "not a regular file" in r.stderr, r.stderr
 
 
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v", "-s"]))

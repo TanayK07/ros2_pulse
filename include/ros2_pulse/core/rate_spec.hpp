@@ -68,6 +68,28 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
 /// Line grammar (additive to the window format, pinned by unit tests):
 /// @code
 /// WARN TOPIC <name> hz=<observed to 6dp> expected=[<min>,<max>]   // max renders 'inf' when unbounded
+/// Upper bound on a spec file. A spec with hundreds of topics is a few tens of KB; anything past
+/// this is not a spec, so it is refused rather than read.
+constexpr size_t kMaxSpecBytes = 1u << 20;  // 1 MiB
+
+/// @brief Slurp a spec file into @p out, bounded. Returns false and sets @p error on refusal.
+///
+/// Refuses, before reading a byte, anything that is not a regular file under @ref kMaxSpecBytes.
+/// The probe loads specs inside a tracepoint-reached constructor, so an operator typo in
+/// ROS_TOPIC_STATS_EXPECTED must not be able to stall or balloon the host process:
+///   - a FIFO would block forever in open() — with O_NONBLOCK it is rejected instead;
+///   - a directory opens fine but reads EISDIR, yielding empty text that parses as a valid
+///     zero-rule spec (alerting silently armed as a permanent no-op);
+///   - /dev/urandom and /dev/zero never signal EOF, so an unbounded read loop never terminates;
+///   - a mistyped rosbag path (run1.bag vs run1.yaml) costs seconds of startup and GBs of RSS
+///     in EVERY preloaded process before the parse rejects it.
+/// This bounds RSS and startup latency. It is deliberately NOT a no-throw guarantee — it fills a
+/// std::string, and parseRateSpec allocates too; the surrounding ctor already can throw.
+///
+/// Shared verbatim by the probe and the pulse-check CLI, so `pulse-check --spec /dev/zero` in a
+/// CI job fails fast instead of hanging the runner.
+auto readSpecFile(const char* path, std::string& out, std::string& error) -> bool;
+
 /// WARN NODE <name> missing
 /// @endcode
 ///

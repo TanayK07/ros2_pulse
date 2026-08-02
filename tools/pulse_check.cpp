@@ -41,8 +41,12 @@ namespace {
 using ros2_pulse::core::evaluateRateSpec;
 using ros2_pulse::core::parseLog;
 using ros2_pulse::core::parseRateSpec;
+using ros2_pulse::core::readSpecFile;
 using ros2_pulse::core::sTopicStat;
 
+// Logs are written by the probe itself and can legitimately be large (rotation caps them at
+// ROS_TOPIC_STATS_MAX_BYTES, default 10 MiB), so they keep the plain slurp — unlike the spec
+// path, which is operator-supplied and goes through the bounded core helper.
 auto readFile(const char* path, std::string& out) -> bool {
     std::FILE* f = std::fopen(path, "r");
     if (f == nullptr) {
@@ -88,28 +92,28 @@ void usage(std::FILE* to) {
                  "usage: pulse-check --spec <spec.yaml> [--skip-last] <log> [<log> ...]\n"
                  "  Checks the LAST window of each ros2_pulse log against an expected-rate\n"
                  "  spec. Prints one WARN line per violation.\n"
-                 "  exit 0: all checks pass   1: violations   2: bad input\n");
-}
-
-}  // namespace
                  "  --skip-last  judge the second-to-last window instead. For logs from an\n"
                  "               EXITED stack: the final window is the atexit flush, a\n"
                  "               sub-period sliver whose rate is a one-sample estimate.\n"
                  "               Needs >=2 windows per log (>=3 to clear the ramp-up one).\n"
+                 "  exit 0: all checks pass   1: violations   2: bad input\n");
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     const char* spec_path = nullptr;
+    bool skip_last = false;
     std::vector<const char*> log_paths;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--spec") == 0 && i + 1 < argc) {
             spec_path = argv[++i];
-    bool skip_last = false;
+        } else if (std::strcmp(argv[i], "--skip-last") == 0) {
+            skip_last = true;
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             usage(stdout);
             return 0;
         } else {
-        } else if (std::strcmp(argv[i], "--skip-last") == 0) {
-            skip_last = true;
             log_paths.push_back(argv[i]);
         }
     }
@@ -119,11 +123,13 @@ int main(int argc, char** argv) {
     }
 
     std::string spec_text;
-    if (!readFile(spec_path, spec_text)) {
-        std::fprintf(stderr, "pulse-check: cannot read spec '%s'\n", spec_path);
+    std::string err;
+    // Bounded, regular-files-only (shared with the probe): --spec /dev/zero must fail fast, not
+    // hang the CI runner it was meant to gate.
+    if (!readSpecFile(spec_path, spec_text, err)) {
+        std::fprintf(stderr, "pulse-check: cannot read spec '%s': %s\n", spec_path, err.c_str());
         return 2;
     }
-    std::string err;
     auto spec = parseRateSpec(spec_text, err);
     if (!spec.has_value()) {
         std::fprintf(stderr, "pulse-check: invalid spec '%s': %s\n", spec_path, err.c_str());

@@ -44,6 +44,7 @@ using ros2_pulse::core::formatWindow;
 using ros2_pulse::core::parseMaxBytes;
 using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::parseRateSpec;
+using ros2_pulse::core::readSpecFile;
 using ros2_pulse::core::sRateSpec;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
@@ -75,28 +76,33 @@ auto loadRateSpec() -> std::optional<sRateSpec> {
     if (path == nullptr || *path == '\0') {
         return std::nullopt;
     }
-    std::FILE* f = std::fopen(path, "r");
-    if (f == nullptr) {
+    // Bounded, regular-files-only read (core helper): an operator typo pointing at a rosbag, a
+    // directory, a FIFO or /dev/urandom must not stall or balloon the host inside rcl_node_init.
+    std::string text;
+    std::string err;
+    if (!readSpecFile(path, text, err)) {
         std::fprintf(stderr,
                      "[ros2_pulse] cannot read ROS_TOPIC_STATS_EXPECTED '%s' (%s) — "
                      "expected-rate alerting disabled\n",
-                     path, std::strerror(errno));
+                     path, err.c_str());
         return std::nullopt;
     }
-    std::string text;
-    char buf[4096];
-    size_t n = 0;
-    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
-        text.append(buf, n);
-    }
-    std::fclose(f);
-    std::string err;
     auto spec = parseRateSpec(text, err);
     if (!spec.has_value()) {
         std::fprintf(stderr,
                      "[ros2_pulse] invalid ROS_TOPIC_STATS_EXPECTED '%s' (%s) — "
                      "expected-rate alerting disabled\n",
                      path, err.c_str());
+        return std::nullopt;
+    }
+    // An empty (or all-comment) spec parses cleanly into zero rules, which would arm alerting as
+    // a permanent no-op — the silent absence of monitoring this feature exists to prevent. Say so.
+    if (spec->topics.empty() && spec->nodes.empty()) {
+        std::fprintf(stderr,
+                     "[ros2_pulse] ROS_TOPIC_STATS_EXPECTED '%s' declares no topics and no "
+                     "nodes — expected-rate alerting disabled\n",
+                     path);
+        return std::nullopt;
     }
     return spec;
 }

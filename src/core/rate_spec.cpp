@@ -4,10 +4,15 @@
 
 #include "ros2_pulse/core/rate_spec.hpp"
 
+#include <fcntl.h>     // open
+#include <sys/stat.h>  // fstat, S_ISREG
+#include <unistd.h>    // read, close
+
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <unordered_set>
 
 namespace ros2_pulse::core {
@@ -170,6 +175,55 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
         const auto nl = text.find('\n', pos);
         std::string raw =
             text.substr(pos, (nl == std::string::npos ? text.size() : nl) - pos);
+auto readSpecFile(const char* path, std::string& out, std::string& error) -> bool {
+    if (path == nullptr || *path == '\0') {
+        error = "empty path";
+        return false;
+    }
+    // O_NONBLOCK so a FIFO cannot park the host process inside open() forever.
+    const int fd = ::open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        error = std::strerror(errno);
+        return false;
+    }
+    struct stat st {};
+    if (::fstat(fd, &st) != 0) {
+        error = std::strerror(errno);
+        ::close(fd);
+        return false;
+    }
+    // Everything that is not a plain file is refused here: directories (which read EISDIR into
+    // an empty-but-"valid" spec), FIFOs, and character devices that never reach EOF.
+    if (!S_ISREG(st.st_mode)) {
+        error = "not a regular file";
+        ::close(fd);
+        return false;
+    }
+    if (static_cast<unsigned long long>(st.st_size) > kMaxSpecBytes) {
+        error = "larger than " + std::to_string(kMaxSpecBytes) + " bytes — not a spec?";
+        ::close(fd);
+        return false;
+    }
+    out.reserve(static_cast<size_t>(st.st_size));
+    char buf[4096];
+    ssize_t n = 0;
+    while ((n = ::read(fd, buf, sizeof(buf))) > 0) {
+        if (out.size() + static_cast<size_t>(n) > kMaxSpecBytes) {
+            error = "grew past the size cap while being read";  // raced with a writer
+            ::close(fd);
+            return false;
+        }
+        out.append(buf, static_cast<size_t>(n));
+    }
+    const int read_errno = errno;
+    ::close(fd);
+    if (n < 0) {
+        error = std::strerror(read_errno);
+        return false;
+    }
+    return true;
+}
+
         pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
         ++line_no;
 
