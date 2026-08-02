@@ -89,6 +89,53 @@ TEST(RateSpecParse, BlockNodesCommentsAndPubSide) {
     EXPECT_EQ(spec->nodes[1], "/rectifier");
 }
 
+// Windows-authored specs must parse. A leading UTF-8 BOM is a signature, not content — and its
+// bytes render invisibly, so without the strip the error reads "unknown top-level entry
+// 'topics:'", indistinguishable from the correct spelling, and alerting silently turns off.
+TEST(RateSpecParse, LeadingUtf8BomIgnored) {
+    std::string err;
+    auto spec = parseRateSpec("\xEF\xBB\xBF"
+                              "topics:\n  /x: {min_hz: 1}\n",
+                              err);
+    ASSERT_TRUE(spec.has_value()) << err;
+    ASSERT_EQ(spec->topics.size(), 1u);
+    EXPECT_EQ(spec->topics[0].first, "/x");
+
+    // ...on the nodes: key too, and line numbers must survive the strip.
+    auto nodes = parseRateSpec("\xEF\xBB\xBF"
+                               "nodes: [/a]\n",
+                               err);
+    ASSERT_TRUE(nodes.has_value()) << err;
+    ASSERT_EQ(nodes->nodes.size(), 1u);
+    EXPECT_FALSE(parseRateSpec("\xEF\xBB\xBF"
+                               "topics:\n  /x: {min_hz: bad}\n",
+                               err)
+                     .has_value());
+    EXPECT_NE(err.find("line 2"), std::string::npos) << err;
+}
+
+// CRLF is already handled by trim(), but pin it in every position so the Windows path stays
+// green as the parser evolves: top-level keys, flow-map bodies, flow lists and block items.
+TEST(RateSpecParse, CrlfLineEndings) {
+    std::string err;
+    auto spec = parseRateSpec(
+        "topics:\r\n"
+        "  /scan: {min_hz: 18, max_hz: 22, side: pub}\r\n"
+        "nodes: [/a, /b]\r\n",
+        err);
+    ASSERT_TRUE(spec.has_value()) << err;
+    ASSERT_EQ(spec->topics.size(), 1u);
+    EXPECT_DOUBLE_EQ(spec->topics[0].second.max_hz, 22.0);
+    EXPECT_EQ(spec->topics[0].second.side, eRateSide::kPub);
+    ASSERT_EQ(spec->nodes.size(), 2u);
+    EXPECT_EQ(spec->nodes[1], "/b");
+
+    auto block = parseRateSpec("nodes:\r\n  - /camera\r\n", err);
+    ASSERT_TRUE(block.has_value()) << err;
+    ASSERT_EQ(block->nodes.size(), 1u);
+    EXPECT_EQ(block->nodes[0], "/camera");
+}
+
 // A rule must constrain something: at least one of min_hz / max_hz.
 TEST(RateSpecParse, RejectsRuleWithoutBounds) {
     std::string err;
@@ -199,7 +246,6 @@ TEST(RateSpecEval, DeterministicOrder) {
     EXPECT_EQ(w[0], "WARN TOPIC /b hz=0.000000 expected=[10,inf]");
     EXPECT_EQ(w[1], "WARN TOPIC /a hz=0.000000 expected=[10,inf]");
     EXPECT_EQ(w[2], "WARN NODE /n missing");
-}
 // pub + any takes the LARGER bucket, not the sum: on iron+ one publish() fires
 // rclcpp_intra_publish AND rcl_publish for the same message whenever a non-intra subscriber is
 // matched (or the QoS is TransientLocal on jazzy+), so both pub buckets carry the same produce
@@ -230,3 +276,4 @@ TEST(RateSpecEval, PubAnyTakesMaxNotSumAcrossTransports) {
     EXPECT_EQ(summed[0], "WARN TOPIC /points hz=30.000000 expected=[5,25]");
 }
 
+}

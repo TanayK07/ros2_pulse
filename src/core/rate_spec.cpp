@@ -230,6 +230,15 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
         const auto hash = raw.find('#');
         if (hash != std::string::npos) {
             raw.resize(hash);
+    // A leading UTF-8 BOM is a signature, not content (Unicode 23.8.1; YAML 1.2 §5.2 consumes
+    // c-byte-order-mark as a document prefix, and libyaml/PyYAML/SnakeYAML all strip it). Without
+    // this, a spec saved by Windows Notepad or PowerShell fails as
+    // "line 1: unknown top-level entry 'topics:'" — bytes the terminal renders invisibly, so the
+    // message looks identical to the correct spelling and alerting silently turns off.
+    // line_no still starts at 1, so error line numbers are unaffected. CRLF is handled by trim().
+    if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) {
+        pos = 3;
+    }
         }
         const bool indented = !raw.empty() && (raw[0] == ' ' || raw[0] == '\t');
         const std::string line = trim(raw);

@@ -52,6 +52,9 @@ struct sRateSpec {
 ///   - /perception
 /// @endcode
 ///
+/// A leading UTF-8 BOM is ignored (Unicode 23.8.1) and CRLF line endings are accepted, so a spec
+/// authored on Windows parses unchanged.
+///
 /// Topic entries must use the inline flow-map form with at least one of min_hz / max_hz.
 /// Keys: min_hz, max_hz (non-negative finite numbers), side (pub|recv, default recv),
 /// transport (inter|intra|any, default any). Unknown keys, malformed numbers, min_hz > max_hz,
@@ -65,9 +68,6 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
 
 /// @brief Evaluate a spec against one window's stats; returns WARN lines (no trailing '\n').
 ///
-/// Line grammar (additive to the window format, pinned by unit tests):
-/// @code
-/// WARN TOPIC <name> hz=<observed to 6dp> expected=[<min>,<max>]   // max renders 'inf' when unbounded
 /// Upper bound on a spec file. A spec with hundreds of topics is a few tens of KB; anything past
 /// this is not a spec, so it is refused rather than read.
 constexpr size_t kMaxSpecBytes = 1u << 20;  // 1 MiB
@@ -90,6 +90,9 @@ constexpr size_t kMaxSpecBytes = 1u << 20;  // 1 MiB
 /// CI job fails fast instead of hanging the runner.
 auto readSpecFile(const char* path, std::string& out, std::string& error) -> bool;
 
+/// Line grammar (additive to the window format, pinned by unit tests):
+/// @code
+/// WARN TOPIC <name> hz=<observed to 6dp> expected=[<min>,<max>]   // max renders 'inf' when unbounded
 /// WARN NODE <name> missing
 /// @endcode
 ///
