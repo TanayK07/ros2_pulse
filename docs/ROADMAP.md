@@ -142,13 +142,27 @@ an overrun count, Nav2 logs per-miss events, CARET plots period and frequency hi
 weakest. Percentiles don't rescue a mean either: with 250 samples a single 2 s gap sits at the
 99.6th percentile, so you need max, not p99.
 
-Shape: `ROS_TOPIC_STATS_JITTER=1` (default OFF, cost documented), per-endpoint min/max
-inter-arrival per window, and a `max_gap_ms:` rule in the expected-rate spec so `pulse-check`
-can gate on it. Exact line grammar, spec extension, cross-log merge semantics and hot-path
-design are being specified separately — the open questions are the clock cost, lock-free
-min/max accumulation across callback threads, whether the first message of a window measures
-its gap across the window boundary (it must — a stall that straddles a flush is exactly the
-interesting case), and how a gap field merges in `pulse-check` (max-of-max, never a sum).
+**Specified in [design-r5-gap-visibility.md](design-r5-gap-visibility.md)** — line grammar, spec
+extension, hot-path design, cross-log merge semantics, and a test plan, with measured numbers.
+
+Summary of what that settles: `ROS_TOPIC_STATS_JITTER=1` (default OFF) adds a `JITTER <topic>
+<side> max_dt_ms=…` line and a `max_gap_ms:` spec rule. **`max_dt_ms` only** — `min_dt_ms` is
+cut, because the Iron+ publish double-fire makes it read ~0.001 ms on a healthy topic forever.
+**No overrun count** — every way to derive the expected period is unsound. Cost is
+**+24.4 ± 0.02 ns/msg** measured (96% of it the vDSO clock read), which is 0.012% of a core at
+4900 msg/s and 1/15th of one SEM of our own benchmark — below what `run_overhead_repeated.sh`
+can resolve, and the docs should say so rather than invent an end-to-end figure.
+
+Two holes in the sketch above, both found during design and both load-bearing: a fully-dead
+endpoint produces no inter-arrival pair, so the gap detector misses the *total* stall unless
+flush folds in `now - last_ts`; and that fold must be suppressed in the exit window, or healthy
+rclcpp teardown fires every gap rule deterministically. `last_ts` must also survive the window
+boundary, or every window's first message discards its dt — exactly the straddling stall.
+
+Prerequisite, independently justified: **`alignas(64)` on `sTopicCounter`**. 63 of 128 counters
+currently have their count-atomics straddling a cache line (measured), a latent repeat of
+KNOWN_ISSUES #15 that costs 4.5× on neighbouring endpoints under 8 threads. Lands as its own
+`perf:` commit before R5.
 
 ## R6. Output & ecosystem (small, independent)
 
