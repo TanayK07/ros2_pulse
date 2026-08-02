@@ -78,8 +78,13 @@ cd ~/ros2_ws/src && git clone https://github.com/TanayK07/ros2_pulse.git
 cd ~/ros2_ws && colcon build --packages-select ros2_pulse && source install/setup.bash
 ```
 
-Requires: ROS 2 Humble, a `libtracetools.so` with instrumentation compiled in (the default on
-Humble/Isaac binaries — verify with `nm -D $(ros2 pkg prefix tracetools)/lib/libtracetools.so* | grep -c ros_trace`).
+Requires ROS 2 **Humble, Jazzy or Kilted** (all three CI-tested on stock `ros:<distro>` images —
+see [Compatibility](#compatibility)) and a `libtracetools.so` with instrumentation compiled in,
+which is the default on stock and Isaac binaries. Verify with:
+
+```bash
+nm -D $(ros2 pkg prefix tracetools)/lib/libtracetools.so* | grep -c ros_trace
+```
 
 ## Usage
 
