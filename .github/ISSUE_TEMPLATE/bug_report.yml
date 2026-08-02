@@ -1,0 +1,44 @@
+name: Bug report
+description: Something misbehaves — wrong rates, missing lines, a crash, a hang.
+labels: [bug]
+body:
+  - type: input
+    id: distro
+    attributes:
+      label: ROS 2 distro
+      placeholder: humble / jazzy / kilted / rolling
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: e.g. x86_64 Ubuntu 22.04, Jetson Orin (L4T 36.x)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: |
+        If rates look wrong, include the relevant window blocks from the output file and how
+        you produced the traffic (publisher rate, intra/inter, executor type).
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest launch/commands that show it. Docker `ros:<distro>` repros are gold.
+      render: shell
+  - type: textarea
+    id: env
+    attributes:
+      label: Probe configuration
+      description: The ROS_TOPIC_STATS_* / ROS_PULSE_* environment you set, plus the stderr banner line.
+      render: shell
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output file excerpt / stderr
+      render: text

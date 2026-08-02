@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security report (private)
+    url: https://github.com/TanayK07/ros2_pulse/security/advisories/new
+    about: Please report security-sensitive issues privately — see SECURITY.md.
