@@ -216,7 +216,9 @@ private:
         if (m_timer) {
             m_timer->stop();  // join the flush thread; periodic flushing ends here
         }
-        flush();  // final partial window (measured window_s keeps its Hz honest, issue #8)
+        // Final partial window: still MEASURED and logged (window_s keeps its Hz honest,
+        // issue #8), but not alert-judged — see the exiting guard in flush().
+        flush(/*exiting=*/true);
     }
 
     ProbeRuntime()
@@ -234,7 +236,7 @@ private:
           m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")),
           m_spec(loadRateSpec()) {}
 
-    void flush() {
+    void flush(bool exiting = false) {
         // Hz must divide by the MEASURED window, not the configured period: the first window is
         // longer than the period (probe attaches before the timer's first fire) and any window
         // can be stretched by flush latency or scheduler jitter (KNOWN_ISSUES #8b). steady_clock
@@ -256,11 +258,19 @@ private:
         // and the TOPIC emit decision (incl. the idle-topic policy gated by ROS_PULSE_EMIT_IDLE)
         // lives in the pure core so it stays unit-testable (issue #7).
         // Expected-rate alerting (ROADMAP R1): evaluated here at flush time only — the hot path
-        // never sees the spec. The FIRST non-empty window is grace-skipped: the probe attaches
-        // mid-flight, so that window's rates are ramp-up partials that would cry wolf on start.
+        // never sees the spec. BOTH lifecycle transients are grace-skipped, because a window
+        // shorter than the period makes count/window_s a 1-2 sample estimate (+-1/window_s Hz,
+        // in either direction, and exactly 0 Hz when the sliver caught no message):
+        //  - ATTACH: the FIRST non-empty window. The probe attaches mid-flight, so its rates are
+        //    ramp-up partials that would cry wolf on start.
+        //  - DETACH: the atexit window. rclcpp teardown ends traffic before the process does, and
+        //    a run whose duration lands near a multiple of the period leaves a few-millisecond
+        //    tail — reproducibly `WARN TOPIC ... hz=0.000000` on a perfectly healthy shutdown.
+        // The rates themselves are still logged for both; only the alert judgement is suppressed.
+        // (A `for: N consecutive windows` debounce would cover these generally — ROADMAP R1.1.)
         const uint64_t window_index = m_windows_flushed.fetch_add(1, std::memory_order_relaxed);
         std::vector<std::string> warnings;
-        if (m_spec.has_value() && window_index > 0) {
+        if (m_spec.has_value() && window_index > 0 && !exiting) {
             warnings = evaluateRateSpec(*m_spec, stats, nodes, m_registry.knownNodes());
         }
         const std::string block = formatWindow(stats, nodes, static_cast<long long>(ns),
@@ -296,7 +306,8 @@ private:
     bool m_emit_idle;
     // Expected-rate spec (ROADMAP R1); nullopt when unset/unreadable/invalid (warned once).
     std::optional<sRateSpec> m_spec;
-    // Windows flushed so far — the first non-empty window is grace-skipped for alerting.
+    // Non-empty windows flushed so far (incremented past the empty-window early-out above), so
+    // the first one is grace-skipped for alerting; the exit window is skipped via flush(exiting).
     std::atomic<uint64_t> m_windows_flushed{0};
     // Start of the current stats window. Written in ensureStarted() (before the flush thread is
     // created — the thread creation orders it) and thereafter only by flush() on the timer thread.

@@ -84,6 +84,30 @@ def test_underrate_topic_warns_with_first_window_grace():
             + "\n".join(blocks[0]))
 
 
+def test_exit_flush_window_is_not_alert_judged():
+    """The final atexit window is logged but never judged — a healthy stop must not alert.
+
+    The tail window is truncated by process exit, so count/window_s over a sliver is a one- or
+    two-sample estimate that swings in both directions (and reads 0 Hz when the sliver caught no
+    message). The spec here is violated in EVERY window regardless of length, so an unguarded
+    exit flush would always warn: the assertion is the invariant, not a timing race.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        spec = _write(d, "spec.yaml", "topics:\n  /chatter: {min_hz: 500, side: pub}\n")
+        out = os.path.join(d, "exit.log")
+        text = ph.run_single("talker", out, run_s=4.0, period="1.0",
+                             extra_env={"ROS_TOPIC_STATS_EXPECTED": spec})
+        blocks = _windows_blocks(text)
+        assert len(blocks) >= 3, f"need >=3 windows (first, interior, exit)\n{text}"
+        # an interior window must warn — otherwise the test proves nothing
+        assert any(ln.startswith("WARN ") for ln in blocks[1]), (
+            f"interior window should have warned\n--- block 1 ---\n" + "\n".join(blocks[1]))
+        assert not any(ln.startswith("WARN ") for ln in blocks[-1]), (
+            f"exit window must be grace-skipped\n--- last block ---\n" + "\n".join(blocks[-1]))
+        # the tail window is still MEASURED and logged, just not judged
+        assert blocks[-1], f"exit window should still be emitted\n{text}"
+
+
 def test_satisfied_spec_stays_silent():
     """50 Hz talker vs [35,65] + its own node expected: zero WARN lines."""
     with tempfile.TemporaryDirectory() as d:

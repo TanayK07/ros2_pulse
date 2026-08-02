@@ -131,8 +131,10 @@ WARN TOPIC /scan hz=1.200000 expected=[18,22]
 WARN NODE /planner missing
 ```
 
-Evaluation happens only at flush time (the hot path never sees the spec), the first window is
-grace-skipped (attach ramp-up), and each probed process only judges endpoints it hosts.
+Evaluation happens only at flush time (the hot path never sees the spec) and each probed process
+only judges endpoints it hosts. Both lifecycle transients are grace-skipped — the first window
+(attach ramp-up) and the final atexit window (a sub-period sliver whose rate is a one-sample
+estimate) — so a healthy start or stop never raises an alert. Their rates are still logged.
 
 **`pulse-check`** turns any log (or set of per-process logs) into an exit code for watchdogs,
 systemd or CI — it re-derives the verdict from the raw rates of the LAST window, no ROS needed:
