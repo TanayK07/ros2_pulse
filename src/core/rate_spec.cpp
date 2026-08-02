@@ -44,8 +44,9 @@ auto splitCommas(const std::string& s) -> std::vector<std::string> {
 }
 
 // Whole-token, non-negative, finite. Same defensive stance as env_config (KNOWN_ISSUES #5):
-// the probe loads specs inside a tracepoint-reached constructor, so no exceptions.
-auto parseHz(const std::string& tok, double& out) -> bool {
+// the probe loads specs inside a tracepoint-reached constructor, so no exceptions. Not named
+// parseHz: it also parses max_gap_ms, and a function named for one unit parsing another rots.
+auto parseNonNegative(const std::string& tok, double& out) -> bool {
     if (tok.empty()) {
         return false;
     }
@@ -66,11 +67,20 @@ auto fail(std::string& error, int line_no, const std::string& msg) -> std::optio
 
 enum class eSection { kNone, kTopics, kNodes };
 
+// Which keys a rule has supplied. Lets the caller enforce "a rule must constrain something"
+// and doubles as the repeat guard. A struct rather than N bool& out-params: max_gap_ms would
+// have made it seven parameters.
+struct sSeenKeys {
+    bool min{false};
+    bool max{false};
+    bool gap{false};
+    bool side{false};
+    bool transport{false};
+};
+
 // "min_hz: 18" / "side: pub" — one flow-map item into the rule. Returns an error message, or
-// empty on success. has_min/has_max let the caller enforce "a rule must constrain something",
-// and double as the repeat guard for those two keys.
-auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool& has_max,
-                   bool& has_side, bool& has_transport) -> std::string {
+// empty on success.
+auto applyRuleItem(const std::string& item, sRateRule& rule, sSeenKeys& seen) -> std::string {
     const auto colon = item.find(':');
     if (colon == std::string::npos) {
         return "expected 'key: value', got '" + item + "'";
@@ -79,21 +89,32 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool
     const std::string val = trim(item.substr(colon + 1));
     // A key given twice in one flow map used to silently last-win ({min_hz: 1, min_hz: 2} -> 2),
     // which is the one place the "duplicates are hard errors" contract leaked.
-    const bool repeated = (key == "min_hz" && has_min) || (key == "max_hz" && has_max) ||
-                          (key == "side" && has_side) || (key == "transport" && has_transport);
+    const bool repeated = (key == "min_hz" && seen.min) || (key == "max_hz" && seen.max) ||
+                          (key == "max_gap_ms" && seen.gap) || (key == "side" && seen.side) ||
+                          (key == "transport" && seen.transport);
     if (repeated) {
         return "duplicate key '" + key + "' in one rule";
     }
     if (key == "min_hz") {
-        if (!parseHz(val, rule.min_hz)) {
+        if (!parseNonNegative(val, rule.min_hz)) {
             return "bad min_hz '" + val + "' (need a non-negative number)";
         }
-        has_min = true;
+        seen.min = true;
     } else if (key == "max_hz") {
-        if (!parseHz(val, rule.max_hz)) {
+        if (!parseNonNegative(val, rule.max_hz)) {
             return "bad max_hz '" + val + "' (need a non-negative number)";
         }
-        has_max = true;
+        seen.max = true;
+    } else if (key == "max_gap_ms") {
+        if (!parseNonNegative(val, rule.max_gap_ms)) {
+            return "bad max_gap_ms '" + val + "' (need a non-negative number)";
+        }
+        // A gap bound of zero can never be satisfied — same class of unsatisfiable rule as
+        // min_hz > max_hz, so reject it rather than emit a WARN on every window forever.
+        if (rule.max_gap_ms <= 0.0) {
+            return "max_gap_ms must be > 0";
+        }
+        seen.gap = true;
     } else if (key == "side") {
         if (val == "pub") {
             rule.side = eRateSide::kPub;
@@ -102,7 +123,7 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool
         } else {
             return "side must be 'pub' or 'recv', got '" + val + "'";
         }
-        has_side = true;
+        seen.side = true;
     } else if (key == "transport") {
         if (val == "inter") {
             rule.transport = eRateTransport::kInter;
@@ -113,9 +134,9 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool
         } else {
             return "transport must be 'inter', 'intra' or 'any', got '" + val + "'";
         }
-        has_transport = true;
+        seen.transport = true;
     } else {
-        return "unknown key '" + key + "' (expected min_hz, max_hz, side, transport)";
+        return "unknown key '" + key + "' (expected min_hz, max_hz, max_gap_ms, side, transport)";
     }
     return {};
 }
@@ -309,23 +330,27 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
                     return fail(error, line_no, "empty topic name");
                 }
                 sRateRule rule;
-                bool has_min = false;
-                bool has_max = false;
-                bool has_side = false;
-                bool has_transport = false;
+                sSeenKeys seen;
                 const std::string body = trim(line.substr(brace + 1, line.size() - brace - 2));
                 if (!body.empty()) {
                     for (const auto& item : splitCommas(body)) {
-                        const std::string item_err =
-                            applyRuleItem(item, rule, has_min, has_max, has_side, has_transport);
+                        const std::string item_err = applyRuleItem(item, rule, seen);
                         if (!item_err.empty()) {
                             return fail(error, line_no, item_err);
                         }
                     }
                 }
-                if (!has_min && !has_max) {
+                if (!seen.min && !seen.max && !seen.gap) {
                     return fail(error, line_no,
-                                "rule for '" + name + "' needs min_hz and/or max_hz");
+                                "rule for '" + name +
+                                    "' needs at least one of min_hz, max_hz, max_gap_ms");
+                }
+                // transport selects which rate bucket a rate bound reads; the gap series is
+                // transport-merged, so pairing it ONLY with transport constrains nothing.
+                if (seen.gap && !seen.min && !seen.max && seen.transport) {
+                    return fail(error, line_no,
+                                "transport has no effect on max_gap_ms for '" + name +
+                                    "' (the gap series is transport-merged)");
                 }
                 if (rule.min_hz > rule.max_hz) {
                     return fail(error, line_no, "min_hz > max_hz for '" + name + "'");
@@ -352,7 +377,8 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
 auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
                       const std::vector<std::string>& active_nodes,
                       const std::vector<std::string>& known_nodes,
-                      bool missing_as_zero) -> std::vector<std::string> {
+                      bool missing_as_zero,
+                      std::vector<std::string>* unmeasured_gaps) -> std::vector<std::string> {
     std::vector<std::string> out;
     for (const auto& [name, rule] : spec.topics) {
         const sTopicStat* found = nullptr;
@@ -373,6 +399,33 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
             std::snprintf(hz_buf, sizeof(hz_buf), "%.6f", hz);
             out.push_back("WARN TOPIC " + name + " hz=" + hz_buf + " expected=[" +
                           formatBound(rule.min_hz) + "," + formatBound(rule.max_hz) + "]");
+        }
+        // Gap bound, evaluated independently: one rule can violate BOTH (a topic that is slow
+        // AND freezes), and the two are different faults, so both lines are emitted. Rate first,
+        // preserving spec order.
+        if (std::isinf(rule.max_gap_ms)) {
+            continue;  // no gap bound on this rule
+        }
+        const bool measured = rule.side == eRateSide::kPub
+                                  ? (found != nullptr && found->has_pub_max_dt)
+                                  : (found != nullptr && found->has_recv_max_dt);
+        if (!measured) {
+            if (missing_as_zero) {
+                // Offline the log set is the whole picture: a spec topic nobody measured is a
+                // violation at an unbounded gap, not a silent pass.
+                if (unmeasured_gaps != nullptr) {
+                    unmeasured_gaps->push_back(name);
+                }
+            }
+            continue;  // probe mode: some other process's endpoint, or tracking is off
+        }
+        const double gap = rule.side == eRateSide::kPub ? found->pub_max_dt_ms
+                                                        : found->recv_max_dt_ms;
+        if (gap > rule.max_gap_ms) {
+            char gap_buf[32];
+            std::snprintf(gap_buf, sizeof(gap_buf), "%.3f", gap);
+            out.push_back("WARN TOPIC " + name + " max_dt_ms=" + gap_buf +
+                          " expected_max_gap_ms=" + formatBound(rule.max_gap_ms));
         }
     }
     for (const auto& name : spec.nodes) {

@@ -64,6 +64,14 @@ auto parseLog(const std::string& text) -> std::vector<sLogWindow> {
             s.recv_inter_hz = a;
             s.recv_intra_hz = b;
             s.recv_endpoint_seen = true;
+        } else if (std::sscanf(line.c_str(), "JITTER %511s pub max_dt_ms=%lf", name, &a) == 2) {
+            auto& s = statFor(*cur, name);
+            s.pub_max_dt_ms = a;
+            s.has_pub_max_dt = true;
+        } else if (std::sscanf(line.c_str(), "JITTER %511s recv max_dt_ms=%lf", name, &a) == 2) {
+            auto& s = statFor(*cur, name);
+            s.recv_max_dt_ms = a;
+            s.has_recv_max_dt = true;
         } else if (std::sscanf(line.c_str(), "NODE %511s", name) == 1) {
             cur->nodes.emplace_back(name);
         }

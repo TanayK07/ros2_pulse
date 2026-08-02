@@ -62,6 +62,19 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += sprintfStr("%.6f", s.pub_intra_hz);
             out += '\n';
         }
+        // Publish-side gap line (ROADMAP R5), only when gap tracking is on and this endpoint has
+        // ever published. A NEW line kind rather than fields appended to TOPIC/PUB/RECV: several
+        // in-tree parsers anchor those with '$', so appending would break them silently.
+        // Milliseconds at 3dp, not the %.6f Hz convention — 1 us is the physical floor here
+        // (the clock read itself is ~21 ns and scheduler noise is microseconds), and %.6f would
+        // print three guaranteed-zero bytes on every stalled line.
+        if (s.has_pub_max_dt) {
+            out += "JITTER ";
+            out += s.topic;
+            out += " pub max_dt_ms=";
+            out += sprintfStr("%.3f", s.pub_max_dt_ms);
+            out += '\n';
+        }
         // Additive receive-side line incl. intra-process, independent of the publish counter so
         // a same-process pub+sub is not double-counted. Proven receive endpoints emit an
         // explicit zero line when idle — stall visibility (KNOWN_ISSUES #12).
@@ -72,6 +85,13 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += sprintfStr("%.6f", s.recv_inter_hz);
             out += " intra=";
             out += sprintfStr("%.6f", s.recv_intra_hz);
+            out += '\n';
+        }
+        if (s.has_recv_max_dt) {
+            out += "JITTER ";
+            out += s.topic;
+            out += " recv max_dt_ms=";
+            out += sprintfStr("%.3f", s.recv_max_dt_ms);
             out += '\n';
         }
     }

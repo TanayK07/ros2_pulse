@@ -5,6 +5,19 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Gap visibility (ROADMAP R5):** `ROS_TOPIC_STATS_JITTER=1` measures the largest inter-arrival
+  gap per endpoint per side and emits `JITTER <topic> <side> max_dt_ms=…`, plus a `max_gap_ms:`
+  spec rule, `WARN TOPIC <name> max_dt_ms=… expected_max_gap_ms=…`, and `pulse-check` gating.
+  This closes a soundness hole in the 0.2.0 rate alerting: a windowed mean cannot see a stall, so
+  at 50 Hz a `min_hz: 45` rule needs >0.5 s of dead time to fire and a 400 ms freeze passes at
+  46 Hz. Max gap is window-length-independent, and it also covers `Rate`-driven control loops
+  (ros2_control, Nav2, MoveIt Servo) that emit no timer tracepoint, via the topics they publish.
+  Costs +24 ns per message when on (~0.012% of a core at 4900 msg/s); default off, and a
+  `max_gap_ms` rule enables it implicitly so a declared rule is never silently unchecked.
+- `pulse-check` exits 2 when a spec requires a gap the logs cannot answer — measurement absence
+  is not a health verdict. Violations it *did* measure are still printed.
+
 ## [0.2.0] - 2026-08-02
 
 Hardening + honesty release: two full test-first audit rounds (15 issues found, fixed and

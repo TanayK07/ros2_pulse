@@ -29,6 +29,11 @@ struct sRateRule {
     double max_hz{std::numeric_limits<double>::infinity()};
     eRateSide side{eRateSide::kRecv};
     eRateTransport transport{eRateTransport::kAny};
+    /// Largest tolerated inter-arrival gap, milliseconds; infinity means unconstrained. This is
+    /// the detector a windowed mean cannot be: at 50 Hz a `min_hz: 45` rule needs >0.5 s of dead
+    /// time to fire, so a 400 ms freeze reports 46 Hz and passes. Requires gap tracking
+    /// (ROADMAP R5) — a spec carrying this key turns it on.
+    double max_gap_ms{std::numeric_limits<double>::infinity()};
 };
 
 /// A parsed expected-rate spec: per-topic rules plus a list of nodes expected alive.
@@ -56,8 +61,9 @@ struct sRateSpec {
 /// authored on Windows parses unchanged.
 ///
 /// Topic entries must use the inline flow-map form with at least one of min_hz / max_hz.
-/// Keys: min_hz, max_hz (non-negative finite numbers), side (pub|recv, default recv),
-/// transport (inter|intra|any, default any). Unknown keys, malformed numbers, min_hz > max_hz,
+/// Keys: min_hz, max_hz, max_gap_ms (non-negative finite numbers; max_gap_ms must be > 0),
+/// side (pub|recv, default recv), transport (inter|intra|any, default any). A rule must carry at
+/// least one of min_hz / max_hz / max_gap_ms. Unknown keys, malformed numbers, min_hz > max_hz,
 /// a key repeated within one rule, or two rules measuring the same thing (same topic + side +
 /// transport) are hard errors. A topic MAY appear more than once when the rules constrain
 /// different endpoints — "publishes at 20 Hz and we receive it at 20 Hz" is one spec.
@@ -104,12 +110,18 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
 /// missing node is warned about. Node warnings fire for known-but-inactive nodes (aged out by
 /// the liveness window).
 ///
+/// @p unmeasured_gaps (offline mode only) collects topics whose rule carries max_gap_ms but
+/// whose logs have no JITTER line for the required side. That is a measurement gap, not a health
+/// verdict, so pulse-check reports it as bad input rather than passing or failing the check.
+///
 /// Pure and I/O-free: the probe calls it at flush time only (zero hot-path cost) and the
 /// pulse-check CLI reuses it verbatim on offline logs.
 auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
                       const std::vector<std::string>& active_nodes,
                       const std::vector<std::string>& known_nodes,
-                      bool missing_as_zero = false) -> std::vector<std::string>;
+                      bool missing_as_zero = false,
+                      std::vector<std::string>* unmeasured_gaps = nullptr)
+    -> std::vector<std::string>;
 
 }  // namespace ros2_pulse::core
 
