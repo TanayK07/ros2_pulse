@@ -139,8 +139,9 @@ public:
                 std::snprintf(spec_desc, sizeof(spec_desc), "none");
             }
             std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
-                                 "(out=%s, period=%.1fs, spec=%s)\n",
-                         m_out_path.c_str(), m_period_s, spec_desc);
+                                 "(out=%s, period=%.1fs, spec=%s, jitter=%s)\n",
+                         m_out_path.c_str(), m_period_s, spec_desc,
+                         m_registry.gapTracking() ? "on" : "off");
             // Counting effectively begins here (first tracepoint) — stamp the window start
             // before the flush thread exists so the first window's denominator is measured
             // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
@@ -250,7 +251,14 @@ private:
           // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
           // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
           m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")),
-          m_spec(loadRateSpec()) {}
+          m_spec(loadRateSpec()) {
+        // Per-endpoint inter-arrival gap tracking (ROADMAP R5). Off by default: it costs one
+        // clock read per message (~21 ns against ~0.3 ns for counting alone), which is 0.012% of
+        // a core at 4900 msg/s but still 25x the counting path, so it stays opt-in. Set in the
+        // ctor BODY, not an initializer: m_registry is declared before m_spec, and a later
+        // revision will also enable this when the spec carries a max_gap_ms rule.
+        m_registry.setGapTracking(envFlag("ROS_TOPIC_STATS_JITTER"));
+    }
 
     void flush(bool exiting = false) {
         // Hz must divide by the MEASURED window, not the configured period: the first window is
@@ -260,7 +268,11 @@ private:
         const auto now_mono = std::chrono::steady_clock::now();
         const double window_s = std::chrono::duration<double>(now_mono - m_window_start).count();
         m_window_start = now_mono;
-        auto stats = m_registry.snapshot(window_s);
+        // Gap tracking (R5): fold the still-open interval into each endpoint's reported
+        // max, EXCEPT on the exit window — rclcpp teardown stops traffic before the
+        // process exits, so the open gap there measures the shutdown sequence and would
+        // fire every max_gap_ms rule on a perfectly healthy stop.
+        auto stats = m_registry.snapshot(window_s, /*fold_open_gap=*/!exiting);
         auto nodes = m_registry.activeNodes();
         if (stats.empty() && nodes.empty()) {
             return;
