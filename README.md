@@ -45,6 +45,7 @@ TOPIC /scan 20.000000                      # publish-side, inter-process
 PUB   /points inter=0.000000 intra=30.000000   # publish-side incl. intra (Iron+)
 RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
 RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools on Humble
+JITTER /scan recv max_dt_ms=21.284             # largest inter-arrival gap (opt-in, see below)
 NODE  /perception
 NODE  /planner
 WARN  TOPIC /scan hz=1.200000 expected=[18,22]  # only with an expected-rate spec (see below)
@@ -105,6 +106,7 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 | `ROS_TOPIC_STATS_OUTPUT_FILE` | `/root/ssd2tb/logs/topic_freq.<pid>.log` | Where the stats file is appended (per-process by default; set an explicit path to share one file deliberately). |
 | `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` | `5.0` | Flush/snapshot window, in seconds. |
 | `ROS_TOPIC_STATS_MAX_BYTES` | `10485760` (10 MiB) | Size cap: at/over it the file rotates to `<path>.1` (single generation, worst-case disk = 2× cap per process). `0` disables rotation (pure append). Reopen-per-window is kept, so external logrotate also works. |
+| `ROS_TOPIC_STATS_JITTER` | `0` | When `1`, measure per-endpoint inter-arrival gaps and emit a `JITTER <topic> <side> max_dt_ms=…` line for each side that saw traffic. Also switched on implicitly by any `max_gap_ms` rule in the spec, so a declared rule is never silently unchecked. Costs one clock read per message (+24 ns measured, ~0.012% of a core at 4900 msg/s) — hence opt-in. |
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a **stalled** upstream stays visible) and omits never-active topics. |
 | `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting — never crash the host. |
 
@@ -138,6 +140,32 @@ WARN TOPIC /scan hz=1.200000 expected=[18,22]
 WARN NODE /planner missing
 ```
 
+#### Catching stalls a rate bound cannot see
+
+A windowed mean cannot detect a freeze. At 50 Hz with `min_hz: 45` and the default 5 s window,
+the rule fires only below 225 messages — **more than half a second of dead time**. So a 400 ms
+freeze, which is 20 lost cycles and catastrophic for a control loop, reports 46 Hz and passes.
+Widening the window makes it worse, not better: the same 2 s stall at a 20 s window averages to
+exactly 45.0 Hz and never fires. One 500 ms freeze and 500 spread-out 1 ms hiccups are
+indistinguishable — both 45.0 Hz.
+
+`max_gap_ms` bounds the largest inter-arrival gap instead, which is independent of window length:
+
+```yaml
+topics:
+  /scan:    {min_hz: 45, max_gap_ms: 60, side: recv}   # too slow AND frozen are different faults
+  /cmd_vel: {max_gap_ms: 30, side: pub}                # gap-only rules are valid on their own
+```
+
+```
+WARN TOPIC /scan max_dt_ms=812.400 expected_max_gap_ms=60
+```
+
+A rule may violate the rate bound and the gap bound independently, producing two lines. Setting
+`max_gap_ms` turns measurement on by itself — you do not also need `ROS_TOPIC_STATS_JITTER=1`.
+This also covers control loops driven by `rclcpp::Rate` or a raw `sleep_until` rather than a
+timer (`ros2_control`, Nav2, MoveIt Servo): they publish, so their stalls show up here.
+
 Evaluation happens only at flush time (the hot path never sees the spec) and each probed process
 only judges endpoints it hosts. Both lifecycle transients are grace-skipped — the first window
 (attach ramp-up) and the final atexit window (a sub-period sliver whose rate is a one-sample
@@ -154,6 +182,8 @@ pulse-check --spec /etc/pulse/expected.yaml /tmp/pulse.*.log && echo healthy
 pulse-check --spec /etc/pulse/expected.yaml --skip-last /tmp/pulse.*.log
 
 # exit 0: pass   1: violations (printed)   2: bad input
+# a max_gap_ms rule whose logs carry no JITTER line is exit 2, not a pass: the check could not
+# be performed, and reporting that as healthy would be a lie. Measured violations still print.
 # offline it owns the whole picture: a spec topic in NO log is reported at 0 Hz
 ```
 

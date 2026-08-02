@@ -32,6 +32,11 @@ _HEADER_RE = re.compile(r"^# ts_ns=(\d+)\s+window_s=([\d.]+)", re.M)
 _TOPIC_RE = re.compile(r"^TOPIC (\S+) ([\d.]+)$")
 _PUB_RE = re.compile(r"^PUB (\S+) inter=([\d.]+) intra=([\d.]+)$")
 _RECV_RE = re.compile(r"^RECV (\S+) inter=([\d.]+) intra=([\d.]+)$")
+# Deliberately NOT $-anchored, unlike the three above: R5 may grow this line (min_dt_ms was cut
+# but is re-addable), and an anchored regex here would silently stop matching every JITTER line
+# the day a field is appended — which is exactly how appending to RECV would have broken this
+# harness. Keep it prefix-matching.
+_JITTER_RE = re.compile(r"^JITTER (\S+) (pub|recv) max_dt_ms=([\d.]+)")
 
 
 def probe_paths():
@@ -107,10 +112,15 @@ def measured_rate(windows, topic, field):
     return max(vals) if vals else None
 
 
-def run_single(mode, out_path, run_s=6.0, period="1.0", extra_env=None):
-    """Run one probed node (mode = talker|listener|intra) for run_s seconds; return its log text."""
+def run_single(mode, out_path, run_s=6.0, period="1.0", extra_env=None, mode_args=()):
+    """Run one probed node for run_s seconds; return its log text.
+
+    mode = talker|listener|intra|stall_pub|... ; mode_args are extra argv for the node
+    (stall_pub takes <stall_ms> <stall_at_s>).
+    """
     so, node = probe_paths()
-    p = subprocess.Popen([node, mode], env=make_env(so, out_path, period, extra_env))
+    p = subprocess.Popen([node, mode, *(str(a) for a in mode_args)],
+                         env=make_env(so, out_path, period, extra_env))
     try:
         time.sleep(run_s)
     finally:

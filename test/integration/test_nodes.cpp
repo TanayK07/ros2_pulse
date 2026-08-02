@@ -2,6 +2,7 @@
 //
 // Test nodes for the ros2_pulse integration test. Modes:
 //   talker     : publishes std_msgs/String on /chatter at 50 Hz (separate process)
+//   stall_pub <ms> <at_s> : same, but freezes the executor once mid-run for <ms> (ROADMAP R5)
 //   listener   : subscribes /chatter (separate process)          -> inter-process receive
 //   intra      : single process, intra-process comms ON, self pub+sub on /intra_topic at 50 Hz
 //                                                                -> intra-process receive
@@ -14,6 +15,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <thread>
@@ -51,6 +53,38 @@ private:
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr m_pub;
     rclcpp::TimerBase::SharedPtr m_timer;
     size_t m_n = 0;
+};
+
+// Like Talker, but freezes the executor once, mid-run, by sleeping INSIDE the timer callback.
+// Under the default single-threaded spin this blocks everything, so publishing stops for exactly
+// the requested duration — deterministic, unlike killing a process and racing the flush boundary.
+// The point is a stall a windowed mean cannot see: 800 ms out of a 5 s window at 50 Hz still
+// averages ~42 Hz, so a min_hz rule passes while the gap detector fires (ROADMAP R5).
+class StallTalker : public rclcpp::Node {
+public:
+    StallTalker(const rclcpp::NodeOptions& o, int stall_ms, double stall_at_s)
+        : Node("poc_talker", o), m_stall_ms(stall_ms),
+          m_stall_at(std::chrono::steady_clock::now() +
+                     std::chrono::milliseconds(static_cast<long>(stall_at_s * 1000.0))) {
+        m_pub = create_publisher<std_msgs::msg::String>("chatter", qos());
+        m_timer = create_wall_timer(20ms, [this]() {
+            if (!m_stalled && std::chrono::steady_clock::now() >= m_stall_at) {
+                m_stalled = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(m_stall_ms));
+            }
+            std_msgs::msg::String m;
+            m.data = "hello " + std::to_string(m_n++);
+            m_pub->publish(m);
+        });
+    }
+
+private:
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr m_pub;
+    rclcpp::TimerBase::SharedPtr m_timer;
+    size_t m_n = 0;
+    int m_stall_ms;
+    std::chrono::steady_clock::time_point m_stall_at;
+    bool m_stalled = false;
 };
 
 class Listener : public rclcpp::Node {
@@ -124,6 +158,10 @@ int main(int argc, char** argv) {
     rclcpp::Node::SharedPtr node;
     if (mode == "talker") {
         node = std::make_shared<Talker>(plain);
+    } else if (mode == "stall_pub") {
+        const int stall_ms = argc > 2 ? std::atoi(argv[2]) : 800;
+        const double stall_at_s = argc > 3 ? std::atof(argv[3]) : 7.0;
+        node = std::make_shared<StallTalker>(plain, stall_ms, stall_at_s);
     } else if (mode == "listener") {
         node = std::make_shared<Listener>(plain);
     } else if (mode == "intra") {

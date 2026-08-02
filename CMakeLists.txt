@@ -144,6 +144,10 @@ else()
       # Expected-rate alerting: WARN lines + first-window grace + pulse-check CLI (ROADMAP R1).
       ament_add_pytest_test(integration_rate_spec test/integration/test_rate_spec.py
         TIMEOUT 180)
+      # Gap visibility (ROADMAP R5). Longer timeout: the R5-thesis case needs a 16 s run to fit
+      # a deliberate 800 ms stall inside a 5 s window and still leave clean windows either side.
+      ament_add_pytest_test(integration_jitter test/integration/test_jitter.py
+        TIMEOUT 240)
     endif()
   endif()
 

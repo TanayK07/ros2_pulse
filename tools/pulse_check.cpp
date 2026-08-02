@@ -196,6 +196,12 @@ int main(int argc, char** argv) {
                                            /*missing_as_zero=*/true, &unmeasured);
     // A gap rule the logs cannot answer is bad input, not a verdict: exit 0 would claim it was
     // checked and healthy, exit 1 would send someone chasing a stall that was never measured.
+    // Print every violation we DID measure first. An unmeasurable gap rule on one topic says
+    // nothing about a measured failure on another, and swallowing those would report a broken
+    // stack as "bad input" — someone fixes the env var, reruns, and only then finds the fault.
+    for (const auto& w : warnings) {
+        std::printf("%s\n", w.c_str());
+    }
     if (!unmeasured.empty()) {
         for (const auto& t : unmeasured) {
             std::fprintf(stderr,
@@ -204,10 +210,7 @@ int main(int argc, char** argv) {
                          "ROS_TOPIC_STATS_JITTER=1?\n",
                          t.c_str());
         }
-        return 2;
-    }
-    for (const auto& w : warnings) {
-        std::printf("%s\n", w.c_str());
+        return 2;  // the verdict is incomplete either way, so bad-input dominates
     }
     return warnings.empty() ? 0 : 1;
 }

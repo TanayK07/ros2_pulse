@@ -95,6 +95,14 @@ inline auto takeGap(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_d
             dt = open;
         }
     }
+    if (dt == 0) {
+        // A timestamp but no measured interval — the endpoint has been seen exactly once (and
+        // the open gap is not being folded). Reporting 0.000 would read as "perfectly regular",
+        // which is the best possible value, inferred from a single data point. The only real
+        // sample this discards is two arrivals inside one clock tick (~21 ns), which can never
+        // be a maximum and is already dropped by noteArrival's now > prev guard.
+        return false;
+    }
     out_ms = static_cast<double>(dt) / 1e6;
     return true;
 }
@@ -376,11 +384,25 @@ auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
         uint64_t px = c->pub_intra.exchange(0, std::memory_order_relaxed);
         uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
         uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
+        // Gap accumulators drain here too, for the same reason the counts do: a filtered topic
+        // is not REPORTED, but its per-window state must still be reset or it ratchets upward
+        // for the process lifetime and the first window after any filter change would report a
+        // gap accumulated since startup.
+        double pub_gap_ms = 0.0;
+        double recv_gap_ms = 0.0;
+        bool has_pub_gap = false;
+        bool has_recv_gap = false;
+        if (gap) {
+            has_pub_gap = takeGap(c->pub_last_ns, c->pub_max_dt_ns, now_ns, fold_open_gap,
+                                  pub_gap_ms);
+            has_recv_gap = takeGap(c->recv_last_ns, c->recv_max_dt_ns, now_ns, fold_open_gap,
+                                   recv_gap_ms);
+        }
         if (p > 0 || px > 0 || ri > 0 || rx > 0) {
             active.insert(c);  // this topic's endpoints saw traffic -> owning node(s) are live
         }
         if (shouldFilter(c->topic)) {
-            continue;  // counts reset above, but the topic itself is never reported
+            continue;  // counts and gaps reset above, but the topic itself is never reported
         }
         sTopicStat s;
         s.topic = c->topic;
@@ -393,16 +415,10 @@ auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
         s.recv_inter_hz = static_cast<double>(ri) / w;
         s.recv_intra_hz = static_cast<double>(rx) / w;
         s.recv_endpoint_seen = c->recv_endpoint_seen;
-        if (gap) {
-            // Reset the per-window max but NOT last_*: the next window's first message must
-            // measure its gap back into this one, or a stall straddling the flush is lost.
-            // Folding the still-open interval is what makes a fully-silent endpoint report a
-            // GROWING number instead of dropping out of the report entirely.
-            s.has_pub_max_dt = takeGap(c->pub_last_ns, c->pub_max_dt_ns, now_ns, fold_open_gap,
-                                       s.pub_max_dt_ms);
-            s.has_recv_max_dt = takeGap(c->recv_last_ns, c->recv_max_dt_ns, now_ns,
-                                        fold_open_gap, s.recv_max_dt_ms);
-        }
+        s.has_pub_max_dt = has_pub_gap;
+        s.pub_max_dt_ms = pub_gap_ms;
+        s.has_recv_max_dt = has_recv_gap;
+        s.recv_max_dt_ms = recv_gap_ms;
         out.push_back(std::move(s));
     }
     // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose owned
@@ -462,6 +478,16 @@ void TopicRegistry::forkChildReset() {
     // issue-10 regression test caught). The child is single-threaded and is the lock's owner
     // by inheritance, so re-initialize the mutex in place instead of unlocking it.
     new (&m_mu) std::shared_mutex();
+    // Gap state (R5): last_ns is CLOCK_MONOTONIC, which is per-boot and process-independent, so
+    // an interval the child measures against it is real — keep it. The per-window maxima are the
+    // PARENT's observations and would be attributed to the child's first window, where a stale
+    // large value can fire a max_gap_ms rule on a perfectly healthy child. That is why this
+    // diverges from the inherited-counts smear documented in issue #10: a stale count cannot
+    // raise an alert, a stale gap can. The child is single-threaded here, so a plain loop is safe.
+    for (auto& kv : m_by_topic) {
+        kv.second->pub_max_dt_ns.store(0, std::memory_order_relaxed);
+        kv.second->recv_max_dt_ns.store(0, std::memory_order_relaxed);
+    }
 }
 
 }  // namespace ros2_pulse::core
