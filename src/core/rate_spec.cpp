@@ -1,0 +1,288 @@
+// Copyright 2026 ros2_pulse contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License").
+
+#include "ros2_pulse/core/rate_spec.hpp"
+
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <unordered_set>
+
+namespace ros2_pulse::core {
+
+namespace {
+
+auto trim(const std::string& s) -> std::string {
+    const auto b = s.find_first_not_of(" \t\r");
+    if (b == std::string::npos) {
+        return {};
+    }
+    const auto e = s.find_last_not_of(" \t\r");
+    return s.substr(b, e - b + 1);
+}
+
+auto splitCommas(const std::string& s) -> std::vector<std::string> {
+    std::vector<std::string> out;
+    size_t pos = 0;
+    while (pos <= s.size()) {
+        const auto comma = s.find(',', pos);
+        const auto end = comma == std::string::npos ? s.size() : comma;
+        out.push_back(trim(s.substr(pos, end - pos)));
+        pos = end + 1;
+        if (comma == std::string::npos) {
+            break;
+        }
+    }
+    return out;
+}
+
+// Whole-token, non-negative, finite. Same defensive stance as env_config (KNOWN_ISSUES #5):
+// the probe loads specs inside a tracepoint-reached constructor, so no exceptions.
+auto parseHz(const std::string& tok, double& out) -> bool {
+    if (tok.empty()) {
+        return false;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const double v = std::strtod(tok.c_str(), &end);
+    if (end != tok.c_str() + tok.size() || errno != 0 || !std::isfinite(v) || v < 0.0) {
+        return false;
+    }
+    out = v;
+    return true;
+}
+
+auto fail(std::string& error, int line_no, const std::string& msg) -> std::optional<sRateSpec> {
+    error = "line " + std::to_string(line_no) + ": " + msg;
+    return std::nullopt;
+}
+
+enum class eSection { kNone, kTopics, kNodes };
+
+// "min_hz: 18" / "side: pub" — one flow-map item into the rule. Returns an error message, or
+// empty on success. has_min/has_max let the caller enforce "a rule must constrain something".
+auto applyRuleItem(const std::string& item, sRateRule& rule, bool& has_min, bool& has_max)
+    -> std::string {
+    const auto colon = item.find(':');
+    if (colon == std::string::npos) {
+        return "expected 'key: value', got '" + item + "'";
+    }
+    const std::string key = trim(item.substr(0, colon));
+    const std::string val = trim(item.substr(colon + 1));
+    if (key == "min_hz") {
+        if (!parseHz(val, rule.min_hz)) {
+            return "bad min_hz '" + val + "' (need a non-negative number)";
+        }
+        has_min = true;
+    } else if (key == "max_hz") {
+        if (!parseHz(val, rule.max_hz)) {
+            return "bad max_hz '" + val + "' (need a non-negative number)";
+        }
+        has_max = true;
+    } else if (key == "side") {
+        if (val == "pub") {
+            rule.side = eRateSide::kPub;
+        } else if (val == "recv") {
+            rule.side = eRateSide::kRecv;
+        } else {
+            return "side must be 'pub' or 'recv', got '" + val + "'";
+        }
+    } else if (key == "transport") {
+        if (val == "inter") {
+            rule.transport = eRateTransport::kInter;
+        } else if (val == "intra") {
+            rule.transport = eRateTransport::kIntra;
+        } else if (val == "any") {
+            rule.transport = eRateTransport::kAny;
+        } else {
+            return "transport must be 'inter', 'intra' or 'any', got '" + val + "'";
+        }
+    } else {
+        return "unknown key '" + key + "' (expected min_hz, max_hz, side, transport)";
+    }
+    return {};
+}
+
+// The rate field a rule constrains. kAny sums both transports: "how fast is this topic,
+// however it travels" — the split is a transport detail the operator usually doesn't spec.
+auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double {
+    const double inter = rule.side == eRateSide::kPub ? s.pub_inter_hz : s.recv_inter_hz;
+    const double intra = rule.side == eRateSide::kPub ? s.pub_intra_hz : s.recv_intra_hz;
+    switch (rule.transport) {
+        case eRateTransport::kInter:
+            return inter;
+        case eRateTransport::kIntra:
+            return intra;
+        default:
+            return inter + intra;
+    }
+}
+
+// Bounds render compactly ("18", "22.5", "inf") — they echo the spec, unlike observed rates
+// which keep the window format's 6dp.
+auto formatBound(double v) -> std::string {
+    if (std::isinf(v)) {
+        return "inf";
+    }
+    char buf[32];
+    const int n = std::snprintf(buf, sizeof(buf), "%g", v);
+    return n > 0 ? std::string(buf, static_cast<size_t>(n)) : std::string();
+}
+
+auto contains(const std::vector<std::string>& v, const std::string& s) -> bool {
+    for (const auto& x : v) {
+        if (x == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
+auto parseRateSpec(const std::string& text, std::string& error) -> std::optional<sRateSpec> {
+    sRateSpec spec;
+    std::unordered_set<std::string> seen_topics;
+    eSection section = eSection::kNone;
+    int line_no = 0;
+    size_t pos = 0;
+    while (pos <= text.size()) {
+        const auto nl = text.find('\n', pos);
+        std::string raw =
+            text.substr(pos, (nl == std::string::npos ? text.size() : nl) - pos);
+        pos = nl == std::string::npos ? text.size() + 1 : nl + 1;
+        ++line_no;
+
+        const auto hash = raw.find('#');
+        if (hash != std::string::npos) {
+            raw.resize(hash);
+        }
+        const bool indented = !raw.empty() && (raw[0] == ' ' || raw[0] == '\t');
+        const std::string line = trim(raw);
+        if (line.empty()) {
+            continue;
+        }
+
+        if (!indented) {
+            if (line == "topics:") {
+                section = eSection::kTopics;
+                continue;
+            }
+            if (line == "nodes:") {
+                section = eSection::kNodes;  // block list follows
+                continue;
+            }
+            if (line.rfind("nodes:", 0) == 0) {
+                const std::string rest = trim(line.substr(6));
+                if (rest.size() >= 2 && rest.front() == '[' && rest.back() == ']') {
+                    for (const auto& n : splitCommas(rest.substr(1, rest.size() - 2))) {
+                        if (!n.empty()) {
+                            spec.nodes.push_back(n);
+                        }
+                    }
+                    section = eSection::kNone;
+                    continue;
+                }
+                return fail(error, line_no, "nodes: needs a [flow list] or an indented '- /name' block");
+            }
+            return fail(error, line_no,
+                        "unknown top-level entry '" + line + "' (expected 'topics:' or 'nodes:')");
+        }
+
+        switch (section) {
+            case eSection::kNone:
+                return fail(error, line_no, "indented entry outside a 'topics:'/'nodes:' section");
+            case eSection::kNodes: {
+                if (line.rfind("-", 0) != 0) {
+                    return fail(error, line_no, "expected '- /node_name' inside 'nodes:'");
+                }
+                const std::string name = trim(line.substr(1));
+                if (name.empty()) {
+                    return fail(error, line_no, "empty node entry");
+                }
+                spec.nodes.push_back(name);
+                break;
+            }
+            case eSection::kTopics: {
+                const auto colon = line.find(':');
+                const auto brace = line.find('{');
+                if (colon == std::string::npos || brace == std::string::npos ||
+                    line.back() != '}' || brace < colon) {
+                    return fail(error, line_no,
+                                "expected '<topic>: {min_hz: ..., ...}' inside 'topics:'");
+                }
+                const std::string name = trim(line.substr(0, colon));
+                if (name.empty()) {
+                    return fail(error, line_no, "empty topic name");
+                }
+                if (!seen_topics.insert(name).second) {
+                    return fail(error, line_no, "duplicate topic '" + name + "'");
+                }
+                sRateRule rule;
+                bool has_min = false;
+                bool has_max = false;
+                const std::string body = trim(line.substr(brace + 1, line.size() - brace - 2));
+                if (!body.empty()) {
+                    for (const auto& item : splitCommas(body)) {
+                        const std::string item_err = applyRuleItem(item, rule, has_min, has_max);
+                        if (!item_err.empty()) {
+                            return fail(error, line_no, item_err);
+                        }
+                    }
+                }
+                if (!has_min && !has_max) {
+                    return fail(error, line_no,
+                                "rule for '" + name + "' needs min_hz and/or max_hz");
+                }
+                if (rule.min_hz > rule.max_hz) {
+                    return fail(error, line_no, "min_hz > max_hz for '" + name + "'");
+                }
+                spec.topics.emplace_back(name, rule);
+                break;
+            }
+        }
+    }
+    return spec;
+}
+
+auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
+                      const std::vector<std::string>& active_nodes,
+                      const std::vector<std::string>& known_nodes,
+                      bool missing_as_zero) -> std::vector<std::string> {
+    std::vector<std::string> out;
+    for (const auto& [name, rule] : spec.topics) {
+        const sTopicStat* found = nullptr;
+        for (const auto& s : stats) {
+            if (s.topic == name) {
+                found = &s;
+                break;
+            }
+        }
+        double hz = 0.0;
+        if (found != nullptr) {
+            hz = observedHz(rule, *found);
+        } else if (!missing_as_zero) {
+            continue;  // some other process's endpoint — not this probe's business
+        }
+        if (hz < rule.min_hz || hz > rule.max_hz) {
+            char hz_buf[32];
+            std::snprintf(hz_buf, sizeof(hz_buf), "%.6f", hz);
+            out.push_back("WARN TOPIC " + name + " hz=" + hz_buf + " expected=[" +
+                          formatBound(rule.min_hz) + "," + formatBound(rule.max_hz) + "]");
+        }
+    }
+    for (const auto& name : spec.nodes) {
+        if (contains(active_nodes, name)) {
+            continue;
+        }
+        if (!contains(known_nodes, name) && !missing_as_zero) {
+            continue;  // never initialized in this process — skip (probe mode)
+        }
+        out.push_back("WARN NODE " + name + " missing");
+    }
+    return out;
+}
+
+}  // namespace ros2_pulse::core

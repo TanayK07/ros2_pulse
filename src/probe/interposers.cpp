@@ -31,6 +31,7 @@
 #include <string>
 
 #include "ros2_pulse/core/env_config.hpp"
+#include "ros2_pulse/core/rate_spec.hpp"
 #include "ros2_pulse/core/timer.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
 #include "ros2_pulse/core/window_format.hpp"
@@ -38,9 +39,12 @@
 namespace {
 
 using ros2_pulse::core::defaultOutputPath;
+using ros2_pulse::core::evaluateRateSpec;
 using ros2_pulse::core::formatWindow;
 using ros2_pulse::core::parseMaxBytes;
 using ros2_pulse::core::parsePeriodSeconds;
+using ros2_pulse::core::parseRateSpec;
+using ros2_pulse::core::sRateSpec;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
@@ -61,6 +65,40 @@ auto resolveOutputPath() -> std::string {
         return std::string(v);
     }
     return defaultOutputPath(static_cast<long>(::getpid()));
+}
+
+// Load the optional expected-rate spec (ROADMAP R1) named by ROS_TOPIC_STATS_EXPECTED. Runs in
+// the tracepoint-reached singleton constructor, so it must never throw or take the host down: an
+// unreadable or malformed spec warns ONCE on stderr and disables alerting, nothing more.
+auto loadRateSpec() -> std::optional<sRateSpec> {
+    const char* path = std::getenv("ROS_TOPIC_STATS_EXPECTED");
+    if (path == nullptr || *path == '\0') {
+        return std::nullopt;
+    }
+    std::FILE* f = std::fopen(path, "r");
+    if (f == nullptr) {
+        std::fprintf(stderr,
+                     "[ros2_pulse] cannot read ROS_TOPIC_STATS_EXPECTED '%s' (%s) — "
+                     "expected-rate alerting disabled\n",
+                     path, std::strerror(errno));
+        return std::nullopt;
+    }
+    std::string text;
+    char buf[4096];
+    size_t n = 0;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        text.append(buf, n);
+    }
+    std::fclose(f);
+    std::string err;
+    auto spec = parseRateSpec(text, err);
+    if (!spec.has_value()) {
+        std::fprintf(stderr,
+                     "[ros2_pulse] invalid ROS_TOPIC_STATS_EXPECTED '%s' (%s) — "
+                     "expected-rate alerting disabled\n",
+                     path, err.c_str());
+    }
+    return spec;
 }
 
 /// Process-wide probe runtime: the registry, the flush timer and output config.
@@ -193,7 +231,8 @@ private:
           // Declared-but-silent topics (no traffic in a window) are suppressed by default so large
           // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
           // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
-          m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")) {}
+          m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")),
+          m_spec(loadRateSpec()) {}
 
     void flush() {
         // Hz must divide by the MEASURED window, not the configured period: the first window is
@@ -216,8 +255,16 @@ private:
         // issue-4-per-process-output.md). The block carries the MEASURED window_s (issue #8b),
         // and the TOPIC emit decision (incl. the idle-topic policy gated by ROS_PULSE_EMIT_IDLE)
         // lives in the pure core so it stays unit-testable (issue #7).
-        const std::string block =
-            formatWindow(stats, nodes, static_cast<long long>(ns), window_s, m_emit_idle);
+        // Expected-rate alerting (ROADMAP R1): evaluated here at flush time only — the hot path
+        // never sees the spec. The FIRST non-empty window is grace-skipped: the probe attaches
+        // mid-flight, so that window's rates are ramp-up partials that would cry wolf on start.
+        const uint64_t window_index = m_windows_flushed.fetch_add(1, std::memory_order_relaxed);
+        std::vector<std::string> warnings;
+        if (m_spec.has_value() && window_index > 0) {
+            warnings = evaluateRateSpec(*m_spec, stats, nodes, m_registry.knownNodes());
+        }
+        const std::string block = formatWindow(stats, nodes, static_cast<long long>(ns),
+                                               window_s, m_emit_idle, warnings);
 
         rotateIfNeeded();
         std::FILE* f = std::fopen(m_out_path.c_str(), "a");
@@ -247,6 +294,10 @@ private:
     double m_period_s;
     unsigned long long m_max_bytes;
     bool m_emit_idle;
+    // Expected-rate spec (ROADMAP R1); nullopt when unset/unreadable/invalid (warned once).
+    std::optional<sRateSpec> m_spec;
+    // Windows flushed so far — the first non-empty window is grace-skipped for alerting.
+    std::atomic<uint64_t> m_windows_flushed{0};
     // Start of the current stats window. Written in ensureStarted() (before the flush thread is
     // created — the thread creation orders it) and thereafter only by flush() on the timer thread.
     std::chrono::steady_clock::time_point m_window_start{};
