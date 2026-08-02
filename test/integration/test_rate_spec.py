@@ -84,6 +84,30 @@ def test_underrate_topic_warns_with_first_window_grace():
             + "\n".join(blocks[0]))
 
 
+def test_exit_flush_window_is_not_alert_judged():
+    """The final atexit window is logged but never judged — a healthy stop must not alert.
+
+    The tail window is truncated by process exit, so count/window_s over a sliver is a one- or
+    two-sample estimate that swings in both directions (and reads 0 Hz when the sliver caught no
+    message). The spec here is violated in EVERY window regardless of length, so an unguarded
+    exit flush would always warn: the assertion is the invariant, not a timing race.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        spec = _write(d, "spec.yaml", "topics:\n  /chatter: {min_hz: 500, side: pub}\n")
+        out = os.path.join(d, "exit.log")
+        text = ph.run_single("talker", out, run_s=4.0, period="1.0",
+                             extra_env={"ROS_TOPIC_STATS_EXPECTED": spec})
+        blocks = _windows_blocks(text)
+        assert len(blocks) >= 3, f"need >=3 windows (first, interior, exit)\n{text}"
+        # an interior window must warn — otherwise the test proves nothing
+        assert any(ln.startswith("WARN ") for ln in blocks[1]), (
+            f"interior window should have warned\n--- block 1 ---\n" + "\n".join(blocks[1]))
+        assert not any(ln.startswith("WARN ") for ln in blocks[-1]), (
+            f"exit window must be grace-skipped\n--- last block ---\n" + "\n".join(blocks[-1]))
+        # the tail window is still MEASURED and logged, just not judged
+        assert blocks[-1], f"exit window should still be emitted\n{text}"
+
+
 def test_satisfied_spec_stays_silent():
     """50 Hz talker vs [35,65] + its own node expected: zero WARN lines."""
     with tempfile.TemporaryDirectory() as d:
@@ -105,6 +129,29 @@ def test_invalid_spec_disables_alerting_without_crashing():
         # the probe still measured normally
         ph.assert_rate_within(text, "/chatter", ph.KNOWN_RATE_HZ, field="topic", rel_tol=0.30,
                               note="(alerting disabled, measurement intact)")
+
+
+def test_hostile_spec_paths_disable_alerting_without_stalling():
+    """A spec path that isn't a spec must degrade instantly, not stall or balloon the host.
+
+    All three used to be read unbounded inside the singleton constructor reached from
+    rcl_node_init: /dev/zero never reaches EOF, a directory yields empty text that parses as a
+    valid zero-rule spec (alerting silently armed as a no-op), and an oversize file costs
+    seconds of startup and GBs of RSS in every preloaded process.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        oversize = os.path.join(d, "big.yaml")
+        with open(oversize, "w") as f:
+            f.write("#" * (1024 * 1024 + 1))  # one byte past the 1 MiB cap
+
+        for label, spec in (("oversize", oversize), ("chardev", "/dev/zero"), ("directory", d)):
+            out = os.path.join(d, f"{label}.log")
+            text = ph.run_single("talker", out, run_s=4.0, period="1.0",
+                                 extra_env={"ROS_TOPIC_STATS_EXPECTED": spec})
+            assert not _warn_lines(text), f"{label} spec should disable alerting\n{text}"
+            # the probe must still have measured normally throughout
+            ph.assert_rate_within(text, "/chatter", ph.KNOWN_RATE_HZ, field="topic", rel_tol=0.30,
+                                  note=f"({label} spec: alerting disabled, measurement intact)")
 
 
 def test_pulse_check_cli_verdicts():
@@ -135,6 +182,43 @@ def test_pulse_check_cli_verdicts():
         nolog = subprocess.run([cli, "--spec", passing, os.path.join(d, "absent.log")],
                                capture_output=True, text=True)
         assert nolog.returncode == 2
+
+
+def test_pulse_check_skip_last_ignores_exit_window():
+    """--skip-last judges the second-to-last window, and refuses a log too short to have one."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "run.log")
+        ph.run_single("talker", out, run_s=6.0, period="1.0")
+        cli = pulse_check_path()
+        passing = _write(d, "pass.yaml", PASSING_SPEC)
+
+        ok = subprocess.run([cli, "--spec", passing, "--skip-last", out],
+                            capture_output=True, text=True)
+        assert ok.returncode == 0, f"expected pass, got {ok.returncode}\n{ok.stdout}{ok.stderr}"
+        assert ok.stdout == ""
+
+        # a single-window log must error, not silently fall back to the ramp-up window
+        short = _write(d, "short.log", "# ts_ns=1 window_s=5.000000\n"
+                                       "TOPIC /chatter 50.000000\n"
+                                       "PUB /chatter inter=50.000000 intra=0.000000\n")
+        few = subprocess.run([cli, "--spec", passing, "--skip-last", short],
+                             capture_output=True, text=True)
+        assert few.returncode == 2, f"expected exit 2\n{few.stdout}{few.stderr}"
+        assert "--skip-last" in few.stderr
+
+
+def test_pulse_check_rejects_non_spec_paths_fast():
+    """`--spec /dev/zero` must fail the CI gate it guards, not hang the runner reading it."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "run.log")
+        ph.run_single("talker", out, run_s=4.0, period="1.0")
+        cli = pulse_check_path()
+
+        for spec in ("/dev/zero", d):
+            r = subprocess.run([cli, "--spec", spec, out], capture_output=True, text=True,
+                               timeout=30)
+            assert r.returncode == 2, f"expected exit 2 for {spec}\n{r.stdout}{r.stderr}"
+            assert "not a regular file" in r.stderr, r.stderr
 
 
 if __name__ == "__main__":
