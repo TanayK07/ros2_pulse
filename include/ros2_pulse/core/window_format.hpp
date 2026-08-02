@@ -21,16 +21,22 @@ namespace ros2_pulse::core {
 /// TOPIC <topic> <pub_inter_hz to 6dp>          // when TopicRegistry::shouldEmitTopic(stat, emit_idle)
 /// RECV <topic> inter=<recv_inter_hz to 6dp> intra=<recv_intra_hz to 6dp>  // when any recv count>0
 /// NODE <node>
+/// WARN ...                                     // one line per entry of @p warnings, verbatim
 /// <blank line>
 /// @endcode
 ///
 /// @p emit_idle is the ROS_PULSE_EMIT_IDLE opt-in: fully-idle topics are suppressed unless true
 /// (see KNOWN_ISSUES.md #7 / docs/issues/issue-7-idle-topic-line.md).
 ///
+/// @p warnings are pre-rendered alert lines (see evaluateRateSpec in rate_spec.hpp, ROADMAP R1);
+/// they are emitted verbatim after the NODE lines so existing TOPIC/PUB/RECV/NODE parsers are
+/// unaffected. Empty by default — the output is then byte-identical to the pre-R1 format.
+///
 /// Pure (no ROS / tracetools / I/O dependency) so the probe can build the whole window once and
 /// write it with a single call, and so the exact format is unit-testable.
 auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
-                  long long ts_ns, double window_s, bool emit_idle) -> std::string;
+                  long long ts_ns, double window_s, bool emit_idle,
+                  const std::vector<std::string>& warnings = {}) -> std::string;
 
 /// @brief Per-process default output path: `/root/ssd2tb/logs/topic_freq.<pid>.log`.
 ///

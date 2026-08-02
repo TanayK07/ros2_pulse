@@ -94,6 +94,9 @@ public:
     /// Compute Hz over the given window and RESET all counts. Filtered topics excluded.
     auto snapshot(double window_s) -> std::vector<sTopicStat>;
     auto activeNodes() const -> std::vector<std::string>;
+    /// Every node ever initialized in this process, active or quiet. Lets the expected-rate
+    /// evaluator (ROADMAP R1) tell "aged out, warn" from "never ours, skip".
+    auto knownNodes() const -> std::vector<std::string>;
 
     /// System/util topics excluded from output.
     static auto shouldFilter(const std::string& topic) -> bool;

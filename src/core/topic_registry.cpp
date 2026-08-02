@@ -346,6 +346,16 @@ auto TopicRegistry::activeNodes() const -> std::vector<std::string> {
     return out;
 }
 
+auto TopicRegistry::knownNodes() const -> std::vector<std::string> {
+    std::shared_lock<std::shared_mutex> lock(m_mu);
+    std::vector<std::string> out;
+    out.reserve(m_nodes.size());
+    for (const auto& n : m_nodes) {
+        out.push_back(n->name);
+    }
+    return out;
+}
+
 auto TopicRegistry::writeLockResolutions() const -> uint64_t {
     return m_write_lock_resolutions.load(std::memory_order_relaxed);
 }
