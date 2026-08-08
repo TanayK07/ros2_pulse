@@ -142,17 +142,30 @@ public:
             // Report whether a spec armed: "why am I getting no WARNs?" is otherwise invisible,
             // and every disabling path (unset, unreadable, malformed, zero-rule) lands on
             // spec=none. snprintf into a fixed buffer keeps the banner allocation-free.
-            char spec_desc[64];
-            if (m_spec.has_value()) {
-                std::snprintf(spec_desc, sizeof(spec_desc), "%zu topics, %zu nodes",
-                              m_spec->topics.size(), m_spec->nodes.size());
-            } else {
-                std::snprintf(spec_desc, sizeof(spec_desc), "none");
+            //
+            // ROS_TOPIC_STATS_QUIET=1 (ROADMAP R6) suppresses THIS banner and nothing else —
+            // it exists for deployments that parse the wrapped process's stderr and can't
+            // tolerate a foreign line. Scope decided deliberately narrow: the one-shot error
+            // diagnostics (unreadable/malformed/zero-rule spec in loadRateSpec, unwritable
+            // output file in flush) are NOT gated on it, because each of those paths disables
+            // a feature the operator explicitly configured, and silently disabled alerting is
+            // a bug class 0.2.0 fixed (see CHANGELOG: a directory read as a spec parsed to a
+            // zero-rule no-op, a UTF-8 BOM failed a valid spec invisibly). A QUIET that also
+            // swallowed diagnostics would reintroduce that class as a supported flag.
+            // Pinned by test/integration/test_quiet.py.
+            if (!m_quiet) {
+                char spec_desc[64];
+                if (m_spec.has_value()) {
+                    std::snprintf(spec_desc, sizeof(spec_desc), "%zu topics, %zu nodes",
+                                  m_spec->topics.size(), m_spec->nodes.size());
+                } else {
+                    std::snprintf(spec_desc, sizeof(spec_desc), "none");
+                }
+                std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
+                                     "(out=%s, period=%.1fs, spec=%s, jitter=%s)\n",
+                             m_out_path.c_str(), m_period_s, spec_desc,
+                             m_registry.gapTracking() ? "on" : "off");
             }
-            std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
-                                 "(out=%s, period=%.1fs, spec=%s, jitter=%s)\n",
-                         m_out_path.c_str(), m_period_s, spec_desc,
-                         m_registry.gapTracking() ? "on" : "off");
             // Counting effectively begins here (first tracepoint) — stamp the window start
             // before the flush thread exists so the first window's denominator is measured
             // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
@@ -262,6 +275,10 @@ private:
           // graphs don't accrue a `TOPIC /x 0.000000` line every window. Set ROS_PULSE_EMIT_IDLE=1
           // to restore the legacy behaviour of printing them. See KNOWN_ISSUES.md #7.
           m_emit_idle(envFlag("ROS_PULSE_EMIT_IDLE")),
+          // Banner suppression for stderr-parsing deployments (ROADMAP R6). Same exact-"1"
+          // opt-in as every other flag: QUIET=true/yes/0 keep the banner, so a half-set flag
+          // fails loud (banner still there) instead of half-silencing.
+          m_quiet(envFlag("ROS_TOPIC_STATS_QUIET")),
           m_spec(loadRateSpec()) {
         // Per-endpoint inter-arrival gap tracking (ROADMAP R5). Off by default: it costs one
         // clock read per message (~21 ns against ~0.3 ns for counting alone), which is 0.012% of
@@ -371,6 +388,9 @@ private:
     double m_period_s;
     unsigned long long m_max_bytes;
     bool m_emit_idle;
+    // ROS_TOPIC_STATS_QUIET=1: suppress the informational banner (never diagnostics — see
+    // the rationale block in ensureStarted()).
+    bool m_quiet;
     // Expected-rate spec (ROADMAP R1); nullopt when unset/unreadable/invalid (warned once).
     std::optional<sRateSpec> m_spec;
     // Non-empty windows flushed so far (incremented past the empty-window early-out above), so
