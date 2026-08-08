@@ -19,6 +19,7 @@ __pycache__/
 .pytest_cache/
 
 # editors / OS
+.claude/
 .vscode/
 .idea/
 *.swp

@@ -14,6 +14,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <string>
 #include <thread>
@@ -99,6 +100,76 @@ TEST(ConcurrencyStress, ManyThreadsManyTopicsExactTotals) {
         EXPECT_EQ(rcv->recv_inter_count, expected);
         EXPECT_EQ(rcv->recv_intra_count, expected);
     }
+}
+
+// ROADMAP R5 ("JitterMaxIsRaceFree" in docs/design-r5-gap-visibility.md): many threads hammer
+// ONE endpoint per side, so noteArrival's exchange partition and its now > prev guard run under
+// real contention — and under TSan in the sanitizer lanes. The guard is what this regresses:
+// `now` is sampled before the exchange, so two threads can exchange out of order, and without
+// the guard the unsigned subtraction underflows to ~1.8e19 ns and poisons max_dt permanently.
+// Hence the two-sided assertion:
+//   - a deliberate mid-run stall must be visible (max_dt_ms >= the stall — sleep_for guarantees
+//     at least the requested duration, and no other arrival can land inside it), and
+//   - max_dt_ms can never exceed the measured wall time of the whole test — the underflow value
+//     is ~570 years, so one unguarded reordered pair fails this bound.
+TEST(ConcurrencyStress, JitterMaxIsRaceFree) {
+    const int kThreads = envInt("ROS2_PULSE_STRESS_THREADS", 8);
+    const int kRounds = envInt("ROS2_PULSE_STRESS_ROUNDS", 1500);
+    const int kStallMs = envInt("ROS2_PULSE_STRESS_STALL_MS", 25);
+
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    reg.onPublisherInit(pubHandle(0), nullptr, "/pub_0");
+    reg.onSubscriptionInit(subHandle(0), nullptr, "/recv_0");
+    reg.onRclcppSubscriptionInit(rclSub(0), subHandle(0));
+    reg.onCallbackAdded(cbHandle(0), rclSub(0));
+
+    // Tight contended bursts on a single publisher handle and a single callback (both intra and
+    // inter deliveries — the recv accumulator is transport-merged, so both must feed one series).
+    const auto hammer = [&reg, kThreads, kRounds] {
+        std::vector<std::thread> ts;
+        ts.reserve(kThreads);
+        for (int t = 0; t < kThreads; ++t) {
+            ts.emplace_back([&reg, kRounds] {
+                for (int r = 0; r < kRounds; ++r) {
+                    reg.onPublish(pubHandle(0));
+                    reg.onCallbackStart(cbHandle(0), /*intra=*/true);
+                    reg.onCallbackStart(cbHandle(0), /*intra=*/false);
+                }
+            });
+        }
+        for (auto& th : ts) th.join();
+    };
+
+    const auto t0 = std::chrono::steady_clock::now();
+    hammer();
+    std::this_thread::sleep_for(std::chrono::milliseconds(kStallMs));  // the known gap
+    hammer();
+
+    // fold_open_gap=false so only intervals measured by noteArrival itself are reported — the
+    // snapshot-time fold is a separate mechanism with its own single-threaded tests.
+    auto snap = reg.snapshot(1.0, /*fold_open_gap=*/false);
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+
+    const auto* p = findTopic(snap, "/pub_0");
+    ASSERT_NE(p, nullptr);
+    ASSERT_TRUE(p->has_pub_max_dt);
+    EXPECT_GE(p->pub_max_dt_ms, static_cast<double>(kStallMs));
+    EXPECT_LE(p->pub_max_dt_ms, elapsed_ms) << "max_dt exceeds test wall time — underflow?";
+
+    const auto* rcv = findTopic(snap, "/recv_0");
+    ASSERT_NE(rcv, nullptr);
+    ASSERT_TRUE(rcv->has_recv_max_dt);
+    EXPECT_GE(rcv->recv_max_dt_ms, static_cast<double>(kStallMs));
+    EXPECT_LE(rcv->recv_max_dt_ms, elapsed_ms) << "max_dt exceeds test wall time — underflow?";
+
+    // Exact counts still hold with gap tracking enabled: the two mechanisms share a hot path
+    // and must not perturb each other.
+    const uint64_t expected = 2ULL * static_cast<uint64_t>(kThreads) * static_cast<uint64_t>(kRounds);
+    EXPECT_EQ(p->pub_inter_count, expected);
+    EXPECT_EQ(rcv->recv_intra_count, expected);
+    EXPECT_EQ(rcv->recv_inter_count, expected);
 }
 
 // No unbounded map growth: the set of tracked topics is fixed by the graph, and repeated
