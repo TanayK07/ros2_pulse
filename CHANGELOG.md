@@ -27,6 +27,17 @@ All notable changes to this project are documented here. Format follows
   `ros2:*` events via babeltrace — proving the `dlsym(RTLD_NEXT)` forwarding feeds both
   consumers. Runs on the jazzy/kilted CI lanes (new `lttng-tools`/`babeltrace` test_depends);
   skips on stock humble, whose tracetools ships no lttng-ust backend (detected via `ldd`).
+- **RMW support matrix (ROADMAP R6):** `test/rmw/run_rmw_matrix.sh` validates the probe
+  per-middleware in stock `ros:<distro>` containers — rmw_fastrtps (control leg),
+  rmw_cyclonedds plain **and** with iceoryx shared memory (iox-roudi + `<SharedMemory>` config
+  + a new fixed-size UInt64 talker/listener pair, because String is not SHM-eligible), and
+  rmw_zenoh (no DDS at all; needs the `rmw_zenohd` router for discovery) — asserting
+  publish-side, receive-side and intra-process rates at 50 Hz ±30% with the same parser the CI
+  accuracy suite trusts. All four configurations green on ros:humble / ros:jazzy / ros:kilted
+  (2026-08-08). README gained a per-RMW matrix with measured rates, exact package versions and
+  the honest SHM-attribution caveat; evidence lands under `test/rmw/out/`. Containers get a
+  per-distro `ROS_DOMAIN_ID` because DDS multicast discovery crosses the docker bridge —
+  without it a concurrent run's foreign talker doubles the listener's measured rate.
 
 ### Fixed
 - The default output path was `/root/ssd2tb/logs/topic_freq.<pid>.log` — the original field-test
