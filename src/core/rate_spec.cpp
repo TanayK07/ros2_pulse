@@ -440,4 +440,26 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
     return out;
 }
 
+auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
+                              const std::vector<std::string>& active_nodes,
+                              const std::vector<std::string>& known_nodes,
+                              bool missing_as_zero,
+                              std::vector<std::string>* unmeasured_gaps)
+    -> std::vector<sRateWarning> {
+    // TODO(jsonl): stub — implemented with the R6 jsonl emitter.
+    (void)spec;
+    (void)stats;
+    (void)active_nodes;
+    (void)known_nodes;
+    (void)missing_as_zero;
+    (void)unmeasured_gaps;
+    return {};
+}
+
+auto renderWarnLine(const sRateWarning& warn) -> std::string {
+    // TODO(jsonl): stub — implemented with the R6 jsonl emitter.
+    (void)warn;
+    return {};
+}
+
 }  // namespace ros2_pulse::core

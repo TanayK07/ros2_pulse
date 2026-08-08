@@ -83,4 +83,10 @@ unsigned long long parseMaxBytes(const char* raw, unsigned long long def) noexce
     return value;  // 0 is legitimate: rotation disabled
 }
 
+auto parseStatsFormat(const char* raw) noexcept -> std::optional<eStatsFormat> {
+    // TODO(jsonl): stub — implemented with the R6 jsonl emitter.
+    (void)raw;
+    return std::nullopt;
+}
+
 }  // namespace ros2_pulse::core

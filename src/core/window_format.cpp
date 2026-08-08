@@ -113,6 +113,19 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
     return out;
 }
 
+auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
+                       long long ts_ns, double window_s, bool emit_idle,
+                       const std::vector<sRateWarning>& warnings) -> std::string {
+    // TODO(jsonl): stub — implemented with the R6 jsonl emitter.
+    (void)stats;
+    (void)nodes;
+    (void)ts_ns;
+    (void)window_s;
+    (void)emit_idle;
+    (void)warnings;
+    return {};
+}
+
 auto defaultOutputPath(long pid, const char* tmpdir) -> std::string {
     // POSIX default: honour TMPDIR, fall back to /tmp. The probe runs inside arbitrary
     // processes, so the only defensible default is a directory that exists and is writable on
