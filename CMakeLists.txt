@@ -148,6 +148,10 @@ else()
       # a deliberate 800 ms stall inside a 5 s window and still leave clean windows either side.
       ament_add_pytest_test(integration_jitter test/integration/test_jitter.py
         TIMEOUT 240)
+      # QUIET banner suppression (ROADMAP R6): ROS_TOPIC_STATS_QUIET=1 silences the
+      # informational banner ONLY — error diagnostics must survive it (see test_quiet.py).
+      ament_add_pytest_test(integration_quiet test/integration/test_quiet.py
+        TIMEOUT 120)
     endif()
   endif()
 
