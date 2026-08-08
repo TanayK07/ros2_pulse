@@ -113,8 +113,23 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
     return out;
 }
 
-auto defaultOutputPath(long pid) -> std::string {
-    return "/root/ssd2tb/logs/topic_freq." + std::to_string(pid) + ".log";
+auto defaultOutputPath(long pid, const char* tmpdir) -> std::string {
+    // POSIX default: honour TMPDIR, fall back to /tmp. The probe runs inside arbitrary
+    // processes, so the only defensible default is a directory that exists and is writable on
+    // an unconfigured machine. A relative TMPDIR is ignored rather than obeyed: cwd is unknown
+    // (and often unwritable) inside a preloaded host, so a relative path would scatter logs —
+    // or open-failures — across whatever directory each process happens to sit in.
+    std::string dir = "/tmp";
+    if (tmpdir != nullptr && tmpdir[0] == '/') {
+        dir = tmpdir;
+        while (dir.size() > 1 && dir.back() == '/') {
+            dir.pop_back();  // "/scratch/" and "/scratch" must name the same file
+        }
+        if (dir == "/") {
+            dir.clear();  // root: the '/' below provides the separator
+        }
+    }
+    return dir + "/topic_freq." + std::to_string(pid) + ".log";
 }
 
 }  // namespace ros2_pulse::core

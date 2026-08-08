@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ros2_pulse</name>
+  <version>0.2.0</version>
+  <description>
+    Near-zero-overhead ROS 2 probe for per-topic message frequency and active-node liveness,
+    covering both inter-process and intra-process traffic. Works on stock ROS 2 binaries via an
+    LD_PRELOAD shim over the tracetools instrumentation layer: no patched rmw_implementation, no
+    ROS recompile, no privileges, and no DDS traffic.
+  </description>
+  <maintainer email="95276223+TanayK07@users.noreply.github.com">Tanay Kedia</maintainer>
+  <license>Apache-2.0</license>
+  <url type="repository">https://github.com/TanayK07/ros2_pulse</url>
+  <url type="bugtracker">https://github.com/TanayK07/ros2_pulse/issues</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>rclcpp</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>ros2run</test_depend>
+  <!-- No ament_lint_auto/common: they were declared but never wired into CMake, so they never
+       ran (KNOWN_ISSUES #14). Quality gates are the gtest suites + TSan/ASan-UBSan CI lanes;
+       adopting a style linter should be a deliberate decision, not a manifest leftover. -->
+
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
