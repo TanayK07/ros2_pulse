@@ -24,11 +24,21 @@ struct sLogWindow {
 
 /// @brief Parse a probe log (any number of windows) back into structured form.
 ///
-/// Consumes the exact grammar formatWindow() emits — `# ts_ns=... window_s=...` headers,
-/// TOPIC / PUB / RECV / NODE lines — and merges the per-line rates into one sTopicStat per
-/// topic per window. Unknown lines (e.g. WARN) are ignored, so pulse-check re-evaluates from
-/// the raw rates rather than trusting probe-side warnings. Pure; used by the pulse-check CLI
-/// and unit-tested round-trip against formatWindow.
+/// Consumes BOTH on-disk formats, sniffed per line so mixed files work:
+///  - text: the exact grammar formatWindow() emits — `# ts_ns=... window_s=...` headers,
+///    TOPIC / PUB / RECV / JITTER / NODE lines — merged into one sTopicStat per topic per
+///    window;
+///  - jsonl (ROADMAP R6): a '{' first byte is one self-contained formatWindowJsonl() record —
+///    no text line can start with '{' (it is not a valid ROS name character), so the sniff
+///    cannot misfire. pulse-check therefore gates jsonl logs identically: picking the
+///    exporter-friendly format never costs CI/watchdog gating.
+///
+/// Unknown text lines (e.g. WARN) and unknown jsonl keys (e.g. "warns") are ignored, so
+/// pulse-check re-evaluates from the raw rates rather than trusting probe-side warnings, and
+/// a newer probe's additive fields don't break an older reader. Malformed jsonl lines (a
+/// truncated tail after a crash) are skipped — one torn record costs one window, like a torn
+/// text block. Pure; used by the pulse-check CLI and unit-tested round-trip against both
+/// emitters.
 auto parseLog(const std::string& text) -> std::vector<sLogWindow>;
 
 }  // namespace ros2_pulse::core

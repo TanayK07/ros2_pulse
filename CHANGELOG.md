@@ -38,6 +38,17 @@ All notable changes to this project are documented here. Format follows
   the honest SHM-attribution caveat; evidence lands under `test/rmw/out/`. Containers get a
   per-distro `ROS_DOMAIN_ID` because DDS multicast discovery crosses the docker bridge —
   without it a concurrent run's foreign talker doubles the listener's measured rate.
+- **JSON Lines output (ROADMAP R6):** `ROS_TOPIC_STATS_FORMAT=jsonl` re-encodes each flush
+  window as one JSON object per line (jsonlines.org) for sidecar exporters and log shippers —
+  same emit gates, values and precisions as the text format, which stays the byte-identical
+  default. `ts_ns` is a decimal string (int64 > 2^53 would lose digits as a JSON number; the
+  OTLP/JSON `timeUnixNano` convention), absent keys mean "not measured" (mirroring the
+  `JITTER` has-measured semantics), `warns` are structured objects (`topic_rate` / `topic_gap`
+  / `node_missing`) rather than preformatted strings, and user-controlled names are escaped
+  per RFC 8259 so a hostile topic name cannot break the one-object-per-line framing. Unknown
+  format values warn once on stderr and fall back to text. `pulse-check`/`parseLog` sniff the
+  format per line, so jsonl logs keep full CI/watchdog gating (a non-probe file still exits 2,
+  never a silent pass); golden-byte unit tests pin both formats.
 
 ### Fixed
 - The default output path was `/root/ssd2tb/logs/topic_freq.<pid>.log` — the original field-test

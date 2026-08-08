@@ -51,6 +51,10 @@ NODE  /planner
 WARN  TOPIC /scan hz=1.200000 expected=[18,22]  # only with an expected-rate spec (see below)
 ```
 
+Feeding a sidecar exporter or a log shipper instead of a human? `ROS_TOPIC_STATS_FORMAT=jsonl`
+re-encodes every window as one JSON object per line — same gates, same values, `jq`-ready (see
+[JSON Lines output](#json-lines-output-ros_topic_stats_formatjsonl)).
+
 ## How it works
 
 `libros2_pulse.so` is injected via `LD_PRELOAD`. It exports the same symbols as
@@ -110,6 +114,41 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a **stalled** upstream stays visible) and omits never-active topics. |
 | `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting — never crash the host. |
 | `ROS_TOPIC_STATS_QUIET` | `0` | When `1`, suppress the `[ros2_pulse] active` stderr banner — for deployments that parse the wrapped process's stderr. Silences the **informational banner only**: error diagnostics (unreadable/malformed/zero-rule spec, unwritable output file) still print, because each of those disables something you explicitly configured, and silently disabled alerting is the 0.2.0 bug class this flag must not reintroduce. |
+| `ROS_TOPIC_STATS_FORMAT` | `text` | Output encoding: `text` (the block format above, byte-identical to previous releases) or `jsonl` (one JSON object per window, one per line — see below). Any other value warns **once** on stderr and falls back to `text` — never crashes the host. `pulse-check` reads both. |
+
+### JSON Lines output (`ROS_TOPIC_STATS_FORMAT=jsonl`)
+
+For sidecar exporters (Prometheus/OTel, ROADMAP R6) and log shippers: each flush window becomes
+**one JSON object on one line**, `\n`-terminated, UTF-8 ([jsonlines.org](https://jsonlines.org/)) —
+`tail -f pulse.log | jq .` works out of the box. Same emit gates, same values, same precisions as
+the text format; only the encoding changes.
+
+```json
+{"ts_ns":"1782887153899445923","window_s":5.000,"topics":[{"topic":"/scan","pub_inter_hz":20.000000,"pub_intra_hz":0.000000,"recv_inter_hz":20.000000,"recv_intra_hz":0.000000,"recv_endpoint_seen":true,"recv_max_dt_ms":21.284}],"nodes":["/perception"],"warns":[{"kind":"topic_rate","topic":"/scan","hz":1.200000,"min_hz":18,"max_hz":22}]}
+```
+
+Schema rules (pinned by golden-byte unit tests):
+
+- **`ts_ns` is a decimal string**, not a JSON number: epoch nanoseconds (~1.8×10¹⁸) exceed
+  2⁵³−1, so a number would silently lose the low digits in every IEEE-754-double consumer
+  (JavaScript, `jq`). This follows OTLP/JSON, which encodes `timeUnixNano` and every (u)int64
+  field the same way.
+- **An absent key means "not measured", never 0**: `pub_*`/`recv_*` pairs appear only when the
+  matching text line would, and `pub_max_dt_ms` / `recv_max_dt_ms` only when gap tracking
+  measured that side (`ROS_TOPIC_STATS_JITTER`) — a missing gap is *unknown*, not "perfectly
+  smooth".
+- **`topics`, `nodes`, `warns` are always present** (empty arrays when empty), so `.warns[]`
+  needs no null guards.
+- **`warns` are structured** (`kind`: `topic_rate` | `topic_gap` | `node_missing`, with the
+  numbers as JSON numbers) instead of preformatted strings; an unbounded `max_hz` omits the key
+  (JSON has no `Infinity`). The text `WARN` line is a pure rendering of the same data.
+- Topic/node names are escaped per RFC 8259, so a hostile name can never break the
+  one-object-per-line framing.
+
+`pulse-check` sniffs the format per line (a `{` first byte can only be a jsonl record), so
+watchdog/CI gating works unchanged on jsonl logs — choosing the exporter-friendly format never
+costs you alerting, and a file of non-probe JSON still exits 2 (`no probe windows`) rather than
+silently passing.
 
 ### Expected-rate alerting
 

@@ -268,6 +268,10 @@ TEST(LogReader, JsonlMalformedSkippedAndUnknownKeysTolerated) {
     EXPECT_TRUE(parseLog("{\"ts_ns\":\"42\",\"window_s\":1.0\n").empty());   // truncated record
     EXPECT_TRUE(parseLog("[1,2,3]\n").empty());                              // not an object
     EXPECT_TRUE(parseLog("{\"ts_ns\":\"42\"} trailing junk\n").empty());     // framing violated
+    // A well-formed object WITHOUT the header fields is some other tool's jsonl, not a probe
+    // window: pulse-check must answer "no probe windows" (exit 2), never judge it at 0 Hz.
+    EXPECT_TRUE(parseLog("{\"not\":\"a probe window\"}\n").empty());
+    EXPECT_TRUE(parseLog("{\"ts_ns\":\"42\"}\n").empty());  // ts alone is not a header either
 
     // Additive-friendly: a future field (scalar, nested object, array) is skipped, the known
     // fields still land.
