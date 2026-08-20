@@ -105,6 +105,11 @@ class TopicState:
     latest: TopicWindow
     rate_history: deque = field(default_factory=lambda: deque(maxlen=60))
     warn_kind: str | None = None
+    # Window index (StatsState.windows_seen) this topic last appeared in. The probe
+    # omits silent topics per window, so "absent" is a statement — the view renders
+    # windows_seen - last_seen > 0 as STALE instead of repeating the old rate
+    # as if current (PR #32 review).
+    last_seen: int = 0
 
     @property
     def rate(self) -> float:
@@ -123,6 +128,10 @@ class StatsState:
         self.topics: dict[str, TopicState] = {}
         self.nodes: dict[str, bool] = {}
         self.warns: list[Warn] = []
+        # (windows_seen_when_fired, warn) — bounded retention so a one-window
+        # transient (a single stall) stays readable with an age instead of
+        # blinking for one window period (PR #32 review).
+        self.recent_warns: deque = deque(maxlen=50)
         self.windows_seen = 0
         self.window_s = 0.0
         self.last_ts_ns = 0
@@ -134,8 +143,14 @@ class StatsState:
         self.window_s = window.window_s
         self.last_ts_ns = window.ts_ns
         self.warns = window.warns
+        for w in window.warns:
+            self.recent_warns.append((self.windows_seen, w))
 
+        # Presence and warns are questions about NAMES — answer them with name
+        # sets, never record equality (PR #32 review: dataclass float-equality
+        # here silently changes behavior on the first TopicWindow schema change).
         warned = {w.topic: w.kind for w in window.warns if w.topic}
+        present = {t.topic for t in window.topics}
         for tw in window.topics:
             st = self.topics.get(tw.topic)
             if st is None:
@@ -144,14 +159,15 @@ class StatsState:
                 self.topics[tw.topic] = st
             st.latest = tw
             st.warn_kind = warned.get(tw.topic)
+            st.last_seen = self.windows_seen
             st.rate_history.append(st.rate)
         # A topic absent from this window but warned about (e.g. gap on a stalled
         # topic that emitted nothing) still carries its warn.
         for topic, kind in warned.items():
-            if topic in self.topics and self.topics[topic].latest not in window.topics:
+            if topic in self.topics and topic not in present:
                 self.topics[topic].warn_kind = kind
         for name, st in self.topics.items():
-            if name not in {t.topic for t in window.topics} and name not in warned:
+            if name not in present and name not in warned:
                 st.warn_kind = None
 
         for n in window.nodes:
