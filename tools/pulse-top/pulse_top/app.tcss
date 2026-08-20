@@ -1,0 +1,70 @@
+Screen {
+    background: #0e1116;
+    color: #d6dde6;
+}
+
+#topbar {
+    height: 1;
+    padding: 0 2;
+    background: #151a22;
+}
+
+TabbedContent {
+    height: 1fr;
+}
+
+Tabs {
+    background: #11151d;
+}
+
+Tab {
+    color: #7c8797;
+}
+
+Tab.-active {
+    color: #b48cf2;
+    text-style: bold;
+}
+
+#table-col {
+    width: 1fr;
+}
+
+#table {
+    height: 1fr;
+    background: #0e1116;
+}
+
+DataTable > .datatable--header {
+    background: #0e1116;
+    color: #7c8797;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #b48cf2 20%;
+}
+
+#warns-strip {
+    height: auto;
+    max-height: 6;
+    padding: 0 2;
+    border-top: solid #2a3140;
+    background: #11151d;
+}
+
+#sidebar {
+    width: 32;
+    padding: 1 2;
+    border-left: solid #2a3140;
+    background: #11151d;
+}
+
+#ns-tree, #nodes-list, #warns-list {
+    padding: 1 2;
+    background: #0e1116;
+}
+
+Footer {
+    background: #151a22;
+}

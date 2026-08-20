@@ -40,6 +40,21 @@ jobs:
           ADDITIONAL_DEBS: build-essential
           AGGREGATE_TEST_RESULTS: 'true'
 
+  # pulse-top is a pure log consumer (no ROS dep), so its suite runs on a stock python.
+  pulse-top:
+    name: pulse-top (pytest)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install + test
+        run: |
+          cd tools/pulse-top
+          pip install -e ".[dev]"
+          python -m pytest tests/ -q
+
   # Standalone (no-ROS) lanes on a plain ubuntu image: the pure-C++ core + the gtest suite,
   # built via -DROS2_PULSE_STANDALONE=ON (find_package(GTest)/Threads, no ament). One plain
   # "fast" lane plus two sanitizer lanes. All three are reproducible on a stock ubuntu box
