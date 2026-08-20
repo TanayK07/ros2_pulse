@@ -46,3 +46,39 @@ class TestFollow:
         assert f.poll() == []                 # no file yet: no crash, no lines
         write(p, "late\n", "w")
         assert f.poll() == ["late"]
+
+
+class TestByteExactness:
+    def test_partial_multibyte_char_held_not_mangled(self, tmp_path):
+        # Review #32: text-mode read with errors="replace" turned a split UTF-8
+        # sequence into U+FFFD and desynced the offset. Binary offsets must hold
+        # the partial BYTES with the partial line.
+        p = tmp_path / "log"
+        with open(p, "wb") as f:
+            f.write(b'{"t":"/\xce')          # first byte of two-byte alpha, no newline
+        f2 = FileFollower(str(p))
+        assert f2.poll() == []
+        with open(p, "ab") as f:
+            f.write(b'\xb1"}\n')
+        assert f2.poll() == ['{"t":"/α"}']
+
+    def test_large_backlog_attach_seeks_to_tail(self, tmp_path):
+        # Review #32: attaching to a long-running log must not replay the whole
+        # backlog through the UI tick. First poll on a big file starts near EOF
+        # and drops the mid-record partial it lands on.
+        p = tmp_path / "log"
+        filler = ("x" * 99 + "\n") * 4000     # 400 KB > TAIL_BYTES
+        write(p, filler + "last-line\n", "w")
+        f = FileFollower(str(p))
+        lines = f.poll()
+        assert lines, "tail attach must still deliver recent lines"
+        assert lines[-1] == "last-line"
+        assert len(lines) < 4001              # did NOT replay the whole backlog
+
+    def test_read_cap_carries_remainder_to_next_poll(self, tmp_path):
+        p = tmp_path / "log"
+        write(p, "a\nb\n", "w")
+        f = FileFollower(str(p))
+        f.READ_CAP = 2                        # force two polls for two lines
+        assert f.poll() == ["a"]
+        assert f.poll() == ["b"]

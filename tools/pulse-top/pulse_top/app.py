@@ -124,6 +124,17 @@ class PulseTopApp(App):
 
     def _row_cells(self, name: str, st) -> tuple:
         t = st.latest
+        # The probe omits silent topics per window: absence is "no traffic seen",
+        # not "still at the old rate". Render stale rows as stale, never repeat
+        # the last measurement as if current (PR #32 review).
+        age = self._state.windows_seen - st.last_seen
+        if age > 0:
+            stale = Text("—", justify="right", style=DIM)
+            return (
+                Text(f"{name}  · stale {age}w", style=DIM),
+                stale, stale.copy(), stale.copy(), stale.copy(),
+                Text(sparkline(st.rate_history), style=DIM),
+            )
         color = BAD if st.warn_kind in ("topic_gap", "node_missing") else WARN if st.warn_kind else None
         gap = t.pub_max_dt_ms if t.pub_max_dt_ms is not None else t.recv_max_dt_ms
         return (
@@ -152,13 +163,19 @@ class PulseTopApp(App):
             self._selected = want[0]
 
     def _refresh_warns_strip(self) -> None:
-        lines = [f"[{DIM} bold]WARNS · structured from jsonl[/]"]
+        # Log-derived strings (warn details carry topic/node names) are rendered
+        # as Text objects, never through a markup parser — a corrupt or hostile
+        # log must not be able to crash or restyle the viewer built to inspect
+        # it (PR #32 review; Textual's own markup parser makes escape()-based
+        # fixes version-fragile, Text assembly is parser-proof).
+        out = Text()
+        out.append("WARNS · structured from jsonl", style=f"{DIM} bold")
         for w in self._state.warns:
             c = WARN if w.kind == "topic_rate" else BAD
-            lines.append(f"[bold {c}]{w.kind}[/] {w.detail}")
+            out.append("\n").append(w.kind, style=f"bold {c}").append(" ").append(w.detail)
         if not self._state.warns:
-            lines.append(f"[{DIM}]none[/]")
-        self.query_one("#warns-strip", Static).update("\n".join(lines))
+            out.append("\n").append("none", style=DIM)
+        self.query_one("#warns-strip", Static).update(out)
 
     def _refresh_sidebar(self) -> None:
         sb = self.query_one("#sidebar", Static)
@@ -169,24 +186,46 @@ class PulseTopApp(App):
         t = st.latest
         spark = sparkline(st.rate_history, width=24)
         color = BAD if st.warn_kind else ACCENT
-        sb.update(
-            f"[{DIM} bold]SELECTED[/]\n"
-            f"[bold {color}]{self._selected}[/]\n\n"
-            f"[{color}]{spark}[/]\n\n"
-            f"[{DIM}]pub inter[/]  {fmt(t.pub_inter_hz)} Hz\n"
-            f"[{DIM}]pub intra[/]  {fmt(t.pub_intra_hz)} Hz\n"
-            f"[{DIM}]recv inter[/] {fmt(t.recv_inter_hz)} Hz\n"
-            f"[{DIM}]recv intra[/] {fmt(t.recv_intra_hz)} Hz\n"
-            f"[{DIM}]pub gap[/]    {fmt(t.pub_max_dt_ms)} ms\n"
-            f"[{DIM}]recv gap[/]   {fmt(t.recv_max_dt_ms)} ms\n"
-            f"[{DIM}]endpoint[/]   {'seen' if t.recv_endpoint_seen else '—'}"
-        )
+        rows = [
+            ("pub inter ", f"{fmt(t.pub_inter_hz)} Hz"),
+            ("pub intra ", f"{fmt(t.pub_intra_hz)} Hz"),
+            ("recv inter", f"{fmt(t.recv_inter_hz)} Hz"),
+            ("recv intra", f"{fmt(t.recv_intra_hz)} Hz"),
+            ("pub gap   ", f"{fmt(t.pub_max_dt_ms)} ms"),
+            ("recv gap  ", f"{fmt(t.recv_max_dt_ms)} ms"),
+            ("endpoint  ", "seen" if t.recv_endpoint_seen else "—"),
+        ]
+        out = Text()
+        out.append("SELECTED", style=f"{DIM} bold").append("\n")
+        out.append(self._selected or "", style=f"bold {color}")
+        out.append("\n\n").append(spark, style=color).append("\n")
+        for label, value in rows:
+            out.append("\n").append(label, style=DIM).append(" ").append(value)
+        sb.update(out)
+
+    def _leaf_label(self, part: str, st) -> Text:
+        # Text.assemble, not markup: namespace parts are log-derived (PR #32 review).
+        color = BAD if st.warn_kind == "topic_gap" else WARN if st.warn_kind else DIM
+        return Text.assemble(part, " ", (f"{st.rate:.1f}", color))
 
     def _refresh_tree(self) -> None:
+        # Rates change every window; the topic SET changes on topology events only.
+        # Relabel leaves in place on the common path so the user's cursor, expand
+        # state and scroll survive live updates; rebuild only when the topology
+        # actually changed (PR #32 review).
         tree = self.query_one("#ns-tree", Tree)
+        names = sorted(self._state.topics)
+        if names == getattr(self, "_tree_names", None):
+            for name in names:
+                leaf = self._tree_leaves[name]
+                part = name.strip("/").split("/")[-1]
+                leaf.set_label(self._leaf_label(part, self._state.topics[name]))
+            return
         tree.clear()
+        self._tree_names = names
+        self._tree_leaves = {}
         nodes = {"": tree.root}
-        for name in sorted(self._state.topics):
+        for name in names:
             st = self._state.topics[name]
             parts = name.strip("/").split("/")
             path = ""
@@ -195,27 +234,42 @@ class PulseTopApp(App):
                 path = f"{path}/{part}"
                 if path not in nodes:
                     if i == len(parts) - 1:
-                        color = BAD if st.warn_kind == "topic_gap" else WARN if st.warn_kind else DIM
-                        label = Text.from_markup(f"{part} [{color}]{st.rate:.1f}[/]")
-                        nodes[path] = parent.add_leaf(label)
+                        nodes[path] = parent.add_leaf(self._leaf_label(part, st))
+                        self._tree_leaves[name] = nodes[path]
                     else:
                         nodes[path] = parent.add(part, expand=True)
         tree.root.expand()
 
     def _refresh_nodes(self) -> None:
-        lines = []
-        for name, alive in sorted(self._state.nodes.items()):
-            mark = f"[{GOOD}]■[/]" if alive else f"[{BAD}]□[/]"
-            style = "" if alive else f" [{BAD}]missing[/]"
-            lines.append(f"{mark} {name}{style}")
-        self.query_one("#nodes-list", Static).update("\n".join(lines) or f"[{DIM}]no NODE lines yet[/]")
+        out = Text()
+        for i, (name, alive) in enumerate(sorted(self._state.nodes.items())):
+            if i:
+                out.append("\n")
+            out.append("■ " if alive else "□ ", style=GOOD if alive else BAD)
+            out.append(name)
+            if not alive:
+                out.append(" missing", style=BAD)
+        self.query_one("#nodes-list", Static).update(
+            out if out.plain else Text("no NODE lines yet", style=DIM)
+        )
 
     def _refresh_warns_tab(self) -> None:
-        lines = []
-        for w in self._state.warns:
-            c = WARN if w.kind == "topic_rate" else BAD
-            lines.append(f"[bold {c}]{w.kind:<14}[/] {w.detail}")
-        self.query_one("#warns-list", Static).update("\n".join(lines) or f"[{DIM}]no active warns[/]")
+        # Retained view: a one-window transient stays readable with its age
+        # instead of blinking for one window period (PR #32 review). Live warns
+        # bold; historical ones dimmed with "Nw ago".
+        out = Text()
+        for i, (seen, w) in enumerate(reversed(self._state.recent_warns)):
+            if i:
+                out.append("\n")
+            age = self._state.windows_seen - seen
+            if age == 0:
+                c = WARN if w.kind == "topic_rate" else BAD
+                out.append(f"{w.kind:<14}", style=f"bold {c}").append(" ").append(w.detail)
+            else:
+                out.append(f"{w.kind:<14} {w.detail} · {age}w ago", style=DIM)
+        self.query_one("#warns-list", Static).update(
+            out if out.plain else Text("no warns seen", style=DIM)
+        )
 
     # ---- interaction ----
 
