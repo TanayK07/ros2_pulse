@@ -29,3 +29,6 @@ __pycache__/
 # bench scratch output
 bench/*.log
 bench/trace/
+
+# RMW-matrix evidence (test/rmw/run_rmw_matrix.sh) — quoted in docs, not versioned
+test/rmw/out/

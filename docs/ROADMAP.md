@@ -174,5 +174,12 @@ KNOWN_ISSUES #15 that costs 4.5× on neighbouring endpoints under 8 threads. Lan
 - Opt-in exporter (Prometheus/OTel) as a **sidecar reading the log** — keeps the probe itself
   network-zero.
 - Validate on `rmw_zenoh` (no DDS at all) and CycloneDDS+iceoryx SHM; add support-matrix rows.
-  Hooks sit above rmw, so both should work unmodified — worth proving.
+  Hooks sit above rmw, so both should work unmodified — worth proving. — **DONE 2026-08-08**:
+  proven, not assumed. `test/rmw/run_rmw_matrix.sh` spins stock `ros:<distro>` containers and
+  asserts publish-side, receive-side and intra-process rates at 50 Hz ±30% (same parser/band as
+  the CI accuracy suite) under rmw_fastrtps (control leg), rmw_cyclonedds plain, CycloneDDS +
+  iceoryx SHM (iox-roudi + `<SharedMemory>` config + a fixed-size UInt64 pair, since String is
+  not SHM-eligible) and rmw_zenoh (rmw_zenohd router; no DDS in the process at all). All legs
+  green; measured rates, package versions and the honest SHM-attribution caveat live in the
+  README "Middleware (RMW)" matrix.
 - `ROS_TOPIC_STATS_QUIET=1` to silence the stderr banner for stderr-parsing deployments.

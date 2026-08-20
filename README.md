@@ -244,10 +244,38 @@ always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS
 | Rolling | 🟡 non-blocking CI lane | observational — watches upstream churn |
 | Iron | ❌ not targeted | EOL December 2024 |
 
-Middleware-agnostic (hooks sit above the DDS vendor): validated with FastRTPS and CycloneDDS on
-Humble. On Iron+ the probe additionally hooks the dedicated `rclcpp_intra_publish` tracepoint:
+On Iron+ the probe additionally hooks the dedicated `rclcpp_intra_publish` tracepoint:
 **publish-side** intra rates appear on an additive `PUB` line; on Humble intra stays
 receive-side (the tracepoint does not exist there).
+
+### Middleware (RMW) matrix
+
+The hooks bind above the rmw layer — rclcpp/rcl call the tracetools functions before any
+middleware sees the message — so the probe should be RMW-agnostic by construction. "Should" is
+not a support claim, so every row below is measured, by `test/rmw/run_rmw_matrix.sh <distro>`
+(one command, re-runnable): talker + listener as separate processes plus an intra-process node,
+probe preloaded, and publish-side `TOPIC`, receive-side `RECV inter` and `RECV intra` each
+asserted at the nominal 50 Hz ±30% with the same parser the CI accuracy suite uses. Evidence
+(probe logs, per-process stderr, daemon logs, exact deb versions) lands in `test/rmw/out/`.
+
+All four configurations passed on all of `ros:humble`, `ros:jazzy` and `ros:kilted` on
+2026-08-08 (quoted rates are the jazzy run; humble and kilted matched within ±0.1 Hz — full
+per-distro logs under `test/rmw/out/`):
+
+| RMW | Status | Evidence |
+|---|---|---|
+| `rmw_fastrtps_cpp` (the default on all three distros) | ✅ CI-tested | every integration lane runs it; kept as the matrix control leg — TOPIC 50.007 / RECV inter 50.002 / RECV intra 50.055 Hz |
+| `rmw_cyclonedds_cpp` | ✅ validated | rmw 1.3.4 (humble) / 2.2.3 (jazzy) / 4.0.2 (kilted), cyclonedds 0.10.5: TOPIC 50.022 / RECV inter 50.020 / RECV intra 50.019 Hz |
+| CycloneDDS + iceoryx SHM | ✅ validated¹ | iceoryx-posh 2.0.5–2.0.6: `iox-roudi` up, `<SharedMemory><Enable>true</>`, fixed-size UInt64 pair (String is not SHM-eligible): TOPIC 50.002 / RECV inter 50.002 Hz |
+| `rmw_zenoh_cpp` (no DDS in the process at all) | ✅ validated | rmw-zenoh-cpp 0.1.9 (humble) / 0.2.9 (jazzy) / 0.6.6 (kilted — [Tier 1 there](https://github.com/ros2/rmw_zenoh/issues/265), default RMW everywhere is still FastDDS), `rmw_zenohd` router up for discovery: TOPIC 50.000 / RECV inter 50.001 / RECV intra 50.055 Hz |
+
+¹ What the SHM run proves: both processes attach to RouDi (`roudi.log`), CycloneDDS creates
+iceoryx endpoints for the measured topic in both processes (`Writer's/Reader's topic name will
+be DDS:Cyclone:rt/chatter_fixed` in the per-process `Tracing shm` logs), and the probe reads
+50 Hz on both sides throughout. Per-sample SHM-vs-loopback attribution is internal to Cyclone
+(stock images ship no scriptable iceoryx introspection), so that residual is stated rather
+than papered over — the claim under test, that the probe's numbers are transport-independent,
+holds either way.
 
 ## Contributing
 
