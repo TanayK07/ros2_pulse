@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ros2-pulse-top"
+version = "0.1.0"
+description = "Live terminal dashboard over a ros2_pulse probe log — no ROS dependency, no graph presence"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = ["textual>=1.0"]
+
+[project.scripts]
+pulse-top = "pulse_top.app:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["pulse_top*"]
+
+[tool.setuptools.package-data]
+pulse_top = ["*.tcss"]
