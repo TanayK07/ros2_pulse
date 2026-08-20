@@ -5,6 +5,12 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+Observability-formats + soundness release: gap visibility closes the stall blind spot in 0.2.0's
+rate alerting, JSON Lines output lands for sidecar exporters, and the RMW matrix / LTTng
+coexistence results make the compatibility claims measured instead of asserted.
+
 ### Added
 - **Gap visibility (ROADMAP R5):** `ROS_TOPIC_STATS_JITTER=1` measures the largest inter-arrival
   gap per endpoint per side and emits `JITTER <topic> <side> max_dt_ms=…`, plus a `max_gap_ms:`
