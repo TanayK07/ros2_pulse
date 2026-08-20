@@ -16,7 +16,7 @@ Nothing here modifies the running stack except toggling one env var + restarting
 docker exec -it ros2_dev bash
 # inside the container:
 cd /root/ros2_ws/src/ros2_pulse
-git fetch origin && git checkout main   # has probe + bench + orin kit
+git fetch origin --tags && git checkout v0.3.0   # pin the exact release the numbers describe
 cd /root/ros2_ws
 colcon build --packages-select ros2_pulse
 source install/setup.bash
@@ -51,8 +51,48 @@ Watch it live:
 tail -f /root/ssd2tb/logs/topic_freq.log
 ```
 
+> **v0.3.0 path change:** the *default* output path is now `$TMPDIR/topic_freq.<pid>.log`
+> (`/tmp` fallback) — `/root/ssd2tb/logs/...` only fills if the deploy env still sets
+> `ROS_TOPIC_STATS_OUTPUT_FILE` explicitly. Check the env conf; if it relies on the old
+> default, the log moved to `/tmp/topic_freq.<pid>.log` (one file per process).
+
 Look specifically for **`intra=<nonzero>`** on composable/point-cloud topics — that's the data no
 rmw-level tool or built-in stat can give you.
+
+```bash
+# 1d. v0.3.0 feature spot-checks against the demo pair from 1c (30 s total):
+export ROS_TOPIC_STATS_OUTPUT_FILE=/tmp/orin_v030.log
+ROS_TOPIC_STATS_JITTER=1  timeout 10 ros2 run demo_nodes_cpp talker & timeout 10 ros2 run demo_nodes_cpp listener; wait
+grep JITTER /tmp/orin_v030.log            # expect: JITTER /chatter pub|recv max_dt_ms=~1000±jitter
+ROS_TOPIC_STATS_FORMAT=jsonl timeout 10 ros2 run demo_nodes_cpp talker & timeout 10 ros2 run demo_nodes_cpp listener; wait
+tail -1 /tmp/orin_v030.log | python3 -m json.tool >/dev/null && echo "jsonl parses"
+ROS_TOPIC_STATS_QUIET=1 timeout 5 ros2 run demo_nodes_cpp talker 2>&1 | grep -c ros2_pulse   # expect: 0
+```
+
+## Phase 1.5 — hot-path microbench: the +24 ns / Tegra clock question (REQUIRED before public)
+
+Every published perf number is x86-64. The one most at risk on Tegra: `ROS_TOPIC_STATS_JITTER=1`
+costs **+24 ns/msg**, ~96% of which is one `CLOCK_MONOTONIC` read through the vDSO. Some Tegra
+kernels route that read through a syscall (~200 ns) instead. One script answers it:
+
+```bash
+# on the HOST first — pin the power state or the numbers are noise:
+sudo nvpmodel -m 0 && sudo jetson_clocks
+# then inside the container, from the repo:
+test/orin/run_hotpath_orin.sh          # 10 trials x 8 threads, ~5-8 min on Orin
+```
+
+**Expected** (vDSO works): `raw_clock_1thread_ns` ~20–40, `R5_fixed_CPU_ns/msg` ~+20–40, script
+prints `vDSO path works`. The x86 story holds; the Orin row goes in the docs as measured.
+
+**Also a valid result** (syscall fallback): `raw_clock_1thread_ns` >=150, R5 cost ~+150–250.
+That is not a failure — it is *the* finding: the README R5 cost table gains an Orin-specific
+row with the measured number and the vDSO-fallback explanation. Do not average it with x86.
+
+**Not acceptable**: in-between clock numbers (~60–150 ns) or trial-to-trial swings > ~10% —
+that is an unpinned governor / thermal throttle, not silicon. Re-pin (nvpmodel + jetson_clocks),
+re-run. Verdict logic is in the script; artifacts land in `test/orin/out/hotpath/` — **commit
+that directory**, the docs site consumes it.
 
 ## Phase 2 — CPU + network overhead (probe ON vs OFF)
 
@@ -95,6 +135,17 @@ Expected Orin-specific outcomes to capture:
 
 ## What to send back
 
-Paste: Phase 1a/1b output, the two `topic_freq.log` windows (real stack, and SHM-on), both
-`run_orin_probe_test.sh` reports (probe ON and OFF), and the Phase 4 results table. I'll turn it
-into the on-Orin RESULTS section.
+Everything below feeds the public docs site verbatim, so capture files, not screenshots:
+
+| # | Artifact | From | Proves |
+|---|----------|------|--------|
+| 1 | Phase 1a/1b terminal output (paste into `test/orin/out/instrumentation.txt`) | Phase 1 | probe hooks exist on the Orin image; lttng-ust link status |
+| 2 | `test/orin/out/hotpath/` (platform.txt, summary.csv, summary.txt, trial_*.txt) | Phase 1.5 | the +24 ns claim on Tegra, vDSO verdict |
+| 3 | Two `topic_freq` windows: real stack + SHM-on (`test/orin/out/stack_window.log`, `stack_window_shm.log`) | Phases 1/3 | real topics incl. `intra=` nonzero; SHM behavior |
+| 4 | Both `run_orin_probe_test.sh` reports, probe ON and OFF (`test/orin/out/report_on/`, `report_off/`) | Phase 2 | per-node CPU delta, zero sockets opened |
+| 5 | Phase 4 bake-off table (`test/orin/out/bakeoff.txt`) | Phase 4 | eBPF/LTTng portability vs ours on Jetson kernel |
+| 6 | Spot-check outputs from 1d (`test/orin/out/v030_features.txt`) | Phase 1 | JITTER/jsonl/QUIET work on the target |
+
+Commit `test/orin/out/**` on a branch and open a PR — or paste raw; either way the numbers get
+turned into the on-Orin RESULTS section + docs-site page. Redact topic names if the stack's
+graph is sensitive; rates and node counts are what the docs need.
