@@ -170,6 +170,9 @@ KNOWN_ISSUES #15 that costs 4.5× on neighbouring endpoints under 8 threads. Lan
 ## R6. Output & ecosystem (small, independent)
 
 - `ROS_TOPIC_STATS_FORMAT=jsonl` — one object per window; golden-file tests for both formats.
+  **DONE** — ts_ns as a decimal string (OTLP/JSON int64 convention), absence-means-unmeasured
+  keys, structured warns, RFC 8259 name escaping; pulse-check sniffs and gates both formats.
+  See README "JSON Lines output".
 - Callback names via `rclcpp_callback_register` for human-readable labels.
 - Opt-in exporter (Prometheus/OTel) as a **sidecar reading the log** — keeps the probe itself
   network-zero.

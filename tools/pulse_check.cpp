@@ -8,6 +8,10 @@
 //
 //   pulse-check --spec <spec.yaml> [--skip-last] <log> [<log> ...]
 //
+// Reads BOTH on-disk formats — text and jsonl (ROS_TOPIC_STATS_FORMAT, ROADMAP R6) — via the
+// shared parseLog, which sniffs the kind per line. Choosing the exporter-friendly format must
+// not cost an operator their CI/watchdog gating.
+//
 // Each log is one probed process (the per-PID default output). The verdict is computed from
 // the LAST window of every log — "the system's current state" — with per-topic rates summed
 // across logs (a publisher's process and a subscriber's process both report the same topic).

@@ -41,13 +41,18 @@
 namespace {
 
 using ros2_pulse::core::defaultOutputPath;
-using ros2_pulse::core::evaluateRateSpec;
+using ros2_pulse::core::eStatsFormat;
+using ros2_pulse::core::evaluateRateSpecWarnings;
 using ros2_pulse::core::formatWindow;
+using ros2_pulse::core::formatWindowJsonl;
 using ros2_pulse::core::parseMaxBytes;
 using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::parseRateSpec;
+using ros2_pulse::core::parseStatsFormat;
 using ros2_pulse::core::readSpecFile;
+using ros2_pulse::core::renderWarnLine;
 using ros2_pulse::core::sRateSpec;
+using ros2_pulse::core::sRateWarning;
 using ros2_pulse::core::sTopicStat;
 using ros2_pulse::core::Timer;
 using ros2_pulse::core::TopicRegistry;
@@ -162,9 +167,10 @@ public:
                     std::snprintf(spec_desc, sizeof(spec_desc), "none");
                 }
                 std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
-                                     "(out=%s, period=%.1fs, spec=%s, jitter=%s)\n",
-                             m_out_path.c_str(), m_period_s, spec_desc,
-                             m_registry.gapTracking() ? "on" : "off");
+                                     "(out=%s, format=%s, period=%.1fs, spec=%s, jitter=%s)\n",
+                             m_out_path.c_str(),
+                             m_format == eStatsFormat::kJsonl ? "jsonl" : "text", m_period_s,
+                             spec_desc, m_registry.gapTracking() ? "on" : "off");
             }
             // Counting effectively begins here (first tracepoint) — stamp the window start
             // before the flush thread exists so the first window's denominator is measured
@@ -280,6 +286,21 @@ private:
           // fails loud (banner still there) instead of half-silencing.
           m_quiet(envFlag("ROS_TOPIC_STATS_QUIET")),
           m_spec(loadRateSpec()) {
+        // Output format (ROADMAP R6). Parsed in the ctor BODY so the unknown-value warning can
+        // show the offending text. The ctor runs exactly once (tracepoint-reached singleton),
+        // so this warning is once-per-process by construction — same shape as the spec-file
+        // errors: say it out loud, fall back safely, never take the host down. Unset/empty is
+        // the silent text default (no warning): byte-identical output for everyone who never
+        // touches the variable.
+        const char* fmt_raw = std::getenv("ROS_TOPIC_STATS_FORMAT");
+        const auto fmt = parseStatsFormat(fmt_raw);
+        if (!fmt.has_value()) {
+            std::fprintf(stderr,
+                         "[ros2_pulse] unknown ROS_TOPIC_STATS_FORMAT '%s' (expected 'text' or "
+                         "'jsonl') — falling back to text\n",
+                         fmt_raw);
+        }
+        m_format = fmt.value_or(eStatsFormat::kText);
         // Per-endpoint inter-arrival gap tracking (ROADMAP R5). Off by default: it costs one
         // clock read per message (~21 ns against ~0.3 ns for counting alone), which is 0.012% of
         // a core at 4900 msg/s but still 25x the counting path, so it stays opt-in. Set in the
@@ -338,12 +359,25 @@ private:
         // The rates themselves are still logged for both; only the alert judgement is suppressed.
         // (A `for: N consecutive windows` debounce would cover these generally — ROADMAP R1.1.)
         const uint64_t window_index = m_windows_flushed.fetch_add(1, std::memory_order_relaxed);
-        std::vector<std::string> warnings;
+        // Evaluated STRUCTURED (R6): jsonl gets warnings as data; text renders the exact
+        // pre-R6 lines from the same result, so the two formats can never judge differently.
+        std::vector<sRateWarning> warnings;
         if (m_spec.has_value() && window_index > 0 && !exiting) {
-            warnings = evaluateRateSpec(*m_spec, stats, nodes, m_registry.knownNodes());
+            warnings = evaluateRateSpecWarnings(*m_spec, stats, nodes, m_registry.knownNodes());
         }
-        const std::string block = formatWindow(stats, nodes, static_cast<long long>(ns),
-                                               window_s, m_emit_idle, warnings);
+        std::string block;
+        if (m_format == eStatsFormat::kJsonl) {
+            block = formatWindowJsonl(stats, nodes, static_cast<long long>(ns), window_s,
+                                      m_emit_idle, warnings);
+        } else {
+            std::vector<std::string> warn_lines;
+            warn_lines.reserve(warnings.size());
+            for (const auto& w : warnings) {
+                warn_lines.push_back(renderWarnLine(w));
+            }
+            block = formatWindow(stats, nodes, static_cast<long long>(ns), window_s,
+                                 m_emit_idle, warn_lines);
+        }
 
         rotateIfNeeded();
         // The DEFAULT path lives in a world-writable sticky directory (/tmp) under a name
@@ -391,6 +425,9 @@ private:
     // ROS_TOPIC_STATS_QUIET=1: suppress the informational banner (never diagnostics — see
     // the rationale block in ensureStarted()).
     bool m_quiet;
+    // Output format (R6): text (default, byte-identical to pre-R6) or jsonl. Set once in the
+    // ctor; an unrecognized value warned about there and fell back to text.
+    eStatsFormat m_format{eStatsFormat::kText};
     // Expected-rate spec (ROADMAP R1); nullopt when unset/unreadable/invalid (warned once).
     std::optional<sRateSpec> m_spec;
     // Non-empty windows flushed so far (incremented past the empty-window early-out above), so

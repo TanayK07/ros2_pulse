@@ -374,12 +374,16 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
     return spec;
 }
 
-auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
-                      const std::vector<std::string>& active_nodes,
-                      const std::vector<std::string>& known_nodes,
-                      bool missing_as_zero,
-                      std::vector<std::string>* unmeasured_gaps) -> std::vector<std::string> {
-    std::vector<std::string> out;
+// The single evaluation. Since R6 it produces STRUCTURED warnings; the historical string API
+// below is a pure projection of this result (renderWarnLine), so the two can never disagree —
+// the same one-home principle as the emit gates living in TopicRegistry.
+auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
+                              const std::vector<std::string>& active_nodes,
+                              const std::vector<std::string>& known_nodes,
+                              bool missing_as_zero,
+                              std::vector<std::string>* unmeasured_gaps)
+    -> std::vector<sRateWarning> {
+    std::vector<sRateWarning> out;
     for (const auto& [name, rule] : spec.topics) {
         const sTopicStat* found = nullptr;
         for (const auto& s : stats) {
@@ -395,14 +399,17 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
             continue;  // some other process's endpoint — not this probe's business
         }
         if (hz < rule.min_hz || hz > rule.max_hz) {
-            char hz_buf[32];
-            std::snprintf(hz_buf, sizeof(hz_buf), "%.6f", hz);
-            out.push_back("WARN TOPIC " + name + " hz=" + hz_buf + " expected=[" +
-                          formatBound(rule.min_hz) + "," + formatBound(rule.max_hz) + "]");
+            sRateWarning w;
+            w.kind = eWarnKind::kTopicRate;
+            w.name = name;
+            w.hz = hz;
+            w.min_hz = rule.min_hz;
+            w.max_hz = rule.max_hz;
+            out.push_back(std::move(w));
         }
         // Gap bound, evaluated independently: one rule can violate BOTH (a topic that is slow
-        // AND freezes), and the two are different faults, so both lines are emitted. Rate first,
-        // preserving spec order.
+        // AND freezes), and the two are different faults, so both warnings are emitted. Rate
+        // first, preserving spec order.
         if (std::isinf(rule.max_gap_ms)) {
             continue;  // no gap bound on this rule
         }
@@ -422,10 +429,12 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
         const double gap = rule.side == eRateSide::kPub ? found->pub_max_dt_ms
                                                         : found->recv_max_dt_ms;
         if (gap > rule.max_gap_ms) {
-            char gap_buf[32];
-            std::snprintf(gap_buf, sizeof(gap_buf), "%.3f", gap);
-            out.push_back("WARN TOPIC " + name + " max_dt_ms=" + gap_buf +
-                          " expected_max_gap_ms=" + formatBound(rule.max_gap_ms));
+            sRateWarning w;
+            w.kind = eWarnKind::kTopicGap;
+            w.name = name;
+            w.max_dt_ms = gap;
+            w.max_gap_ms = rule.max_gap_ms;
+            out.push_back(std::move(w));
         }
     }
     for (const auto& name : spec.nodes) {
@@ -435,7 +444,47 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
         if (!contains(known_nodes, name) && !missing_as_zero) {
             continue;  // never initialized in this process — skip (probe mode)
         }
-        out.push_back("WARN NODE " + name + " missing");
+        sRateWarning w;
+        w.kind = eWarnKind::kNodeMissing;
+        w.name = name;
+        out.push_back(std::move(w));
+    }
+    return out;
+}
+
+auto renderWarnLine(const sRateWarning& warn) -> std::string {
+    // The exact pre-R6 line bytes, pinned by the R1/R5 unit tests: %.6f for hz, %.3f for the
+    // gap, %g (via formatBound) for spec bounds with 'inf' for an unbounded max.
+    switch (warn.kind) {
+        case eWarnKind::kTopicRate: {
+            char hz_buf[32];
+            std::snprintf(hz_buf, sizeof(hz_buf), "%.6f", warn.hz);
+            return "WARN TOPIC " + warn.name + " hz=" + hz_buf + " expected=[" +
+                   formatBound(warn.min_hz) + "," + formatBound(warn.max_hz) + "]";
+        }
+        case eWarnKind::kTopicGap: {
+            char gap_buf[32];
+            std::snprintf(gap_buf, sizeof(gap_buf), "%.3f", warn.max_dt_ms);
+            return "WARN TOPIC " + warn.name + " max_dt_ms=" + gap_buf +
+                   " expected_max_gap_ms=" + formatBound(warn.max_gap_ms);
+        }
+        case eWarnKind::kNodeMissing:
+            return "WARN NODE " + warn.name + " missing";
+    }
+    return {};  // unreachable; keeps -Wreturn-type quiet without a default: that hides new kinds
+}
+
+auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
+                      const std::vector<std::string>& active_nodes,
+                      const std::vector<std::string>& known_nodes,
+                      bool missing_as_zero,
+                      std::vector<std::string>* unmeasured_gaps) -> std::vector<std::string> {
+    const auto warns = evaluateRateSpecWarnings(spec, stats, active_nodes, known_nodes,
+                                                missing_as_zero, unmeasured_gaps);
+    std::vector<std::string> out;
+    out.reserve(warns.size());
+    for (const auto& w : warns) {
+        out.push_back(renderWarnLine(w));
     }
     return out;
 }

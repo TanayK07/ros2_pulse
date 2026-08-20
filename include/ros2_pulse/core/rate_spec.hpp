@@ -123,6 +123,50 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
                       std::vector<std::string>* unmeasured_gaps = nullptr)
     -> std::vector<std::string>;
 
+/// What a single warning is about (ROADMAP R6: the jsonl emitter needs warnings as DATA, not
+/// preformatted strings — a sidecar exporter should never have to regex our own WARN lines).
+enum class eWarnKind {
+    kTopicRate,    ///< observed hz outside [min_hz, max_hz]
+    kTopicGap,     ///< observed max inter-arrival gap above max_gap_ms
+    kNodeMissing,  ///< expected node not in the active set
+};
+
+/// One structured warning. Carries every number that the text WARN line renders, so the text
+/// form is a pure projection of this struct (renderWarnLine below) and the jsonl form can emit
+/// real JSON numbers instead of quoting a preformatted sentence. Only the fields meaningful for
+/// @c kind are populated; the others keep their zero/infinity defaults:
+///   kTopicRate:   name (topic), hz, min_hz, max_hz (infinity = unbounded above)
+///   kTopicGap:    name (topic), max_dt_ms, max_gap_ms
+///   kNodeMissing: name (node)
+struct sRateWarning {
+    eWarnKind kind{eWarnKind::kTopicRate};
+    std::string name;
+    double hz{0.0};
+    double min_hz{0.0};
+    double max_hz{std::numeric_limits<double>::infinity()};
+    double max_dt_ms{0.0};
+    double max_gap_ms{std::numeric_limits<double>::infinity()};
+};
+
+/// @brief Structured twin of evaluateRateSpec: same evaluation, same order, same semantics —
+/// but returns data instead of rendered lines. evaluateRateSpec is a thin wrapper that maps
+/// renderWarnLine over this result, so the two can never disagree.
+auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
+                              const std::vector<std::string>& active_nodes,
+                              const std::vector<std::string>& known_nodes,
+                              bool missing_as_zero = false,
+                              std::vector<std::string>* unmeasured_gaps = nullptr)
+    -> std::vector<sRateWarning>;
+
+/// @brief Render one structured warning as the exact text WARN line (no trailing '\n') the
+/// probe has always emitted — grammar pinned by the R1 unit tests:
+/// @code
+/// WARN TOPIC <name> hz=<%.6f> expected=[<min>,<max>]      // bounds via %g, 'inf' when unbounded
+/// WARN TOPIC <name> max_dt_ms=<%.3f> expected_max_gap_ms=<%g>
+/// WARN NODE <name> missing
+/// @endcode
+auto renderWarnLine(const sRateWarning& warn) -> std::string;
+
 }  // namespace ros2_pulse::core
 
 #endif  // ROS2_PULSE__CORE__RATE_SPEC_HPP_

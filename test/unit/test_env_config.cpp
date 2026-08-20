@@ -55,5 +55,51 @@ TEST(ParsePeriodSeconds, RejectsNonFinite) {
     EXPECT_DOUBLE_EQ(parsePeriodSeconds("inf", kDef), kDef);
     EXPECT_DOUBLE_EQ(parsePeriodSeconds("-inf", kDef), kDef);
 }
+
+// ---- ROS_TOPIC_STATS_FORMAT (ROADMAP R6) ----
+
+using ros2_pulse::core::eStatsFormat;
+using ros2_pulse::core::parseStatsFormat;
+
+// Same host-safety contract as every other env parser (KNOWN_ISSUES #5).
+static_assert(noexcept(parseStatsFormat("")), "parseStatsFormat must be noexcept");
+
+// Unset / empty / whitespace-only is "not asked for": the silent text default. Byte-identical
+// output for everyone who never touches the variable is the compatibility promise of R6.
+TEST(ParseStatsFormat, UnsetAndEmptyDefaultToText) {
+    auto unset = parseStatsFormat(nullptr);
+    ASSERT_TRUE(unset.has_value());
+    EXPECT_EQ(*unset, eStatsFormat::kText);
+    auto empty = parseStatsFormat("");
+    ASSERT_TRUE(empty.has_value());
+    EXPECT_EQ(*empty, eStatsFormat::kText);
+    auto ws = parseStatsFormat("  \t ");
+    ASSERT_TRUE(ws.has_value());
+    EXPECT_EQ(*ws, eStatsFormat::kText);
+}
+
+// The two documented values, with shell-introduced surrounding whitespace tolerated like the
+// numeric parsers.
+TEST(ParseStatsFormat, AcceptsDocumentedValues) {
+    auto text = parseStatsFormat("text");
+    ASSERT_TRUE(text.has_value());
+    EXPECT_EQ(*text, eStatsFormat::kText);
+    auto jsonl = parseStatsFormat("jsonl");
+    ASSERT_TRUE(jsonl.has_value());
+    EXPECT_EQ(*jsonl, eStatsFormat::kJsonl);
+    auto padded = parseStatsFormat("  jsonl \n");
+    ASSERT_TRUE(padded.has_value());
+    EXPECT_EQ(*padded, eStatsFormat::kJsonl);
+}
+
+// Anything else is an operator asking for a format they are not getting: nullopt, so the
+// caller warns ONCE and falls back to text — never crashes the host, never stays silent.
+// Exact-lowercase-only matches the strict "1"-only opt-in flags elsewhere.
+TEST(ParseStatsFormat, UnknownValuesAreReportable) {
+    EXPECT_FALSE(parseStatsFormat("json").has_value());   // the likely typo
+    EXPECT_FALSE(parseStatsFormat("JSONL").has_value());
+    EXPECT_FALSE(parseStatsFormat("xml").has_value());
+    EXPECT_FALSE(parseStatsFormat("jsonl extra").has_value());
+}
 // main() intentionally omitted: this file is linked into the shared core gtest binary whose
 // main() lives in test_topic_registry.cpp (see CMakeLists ROS2_PULSE_CORE_TEST_SOURCES).

@@ -158,6 +158,10 @@ else()
       # no-ops — see the skip-vs-fail rationale at the top of the test file.
       ament_add_pytest_test(integration_lttng_coexist test/integration/test_lttng_coexist.py
         TIMEOUT 180)
+      # Output formats (ROADMAP R6): jsonl windows parse with an independent JSON parser,
+      # unknown formats warn once + fall back to text, pulse-check gates jsonl logs.
+      ament_add_pytest_test(integration_format test/integration/test_format.py
+        TIMEOUT 120)
     endif()
   endif()
 
