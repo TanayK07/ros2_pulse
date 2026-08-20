@@ -2,6 +2,7 @@
 build/
 install/
 log/
+install-*/
 
 # standalone CMake lanes (cmake -B build-<lane>)
 build-*/

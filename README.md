@@ -91,7 +91,7 @@ nm -D $(ros2 pkg prefix tracetools)/lib/libtracetools.so* | grep -c ros_trace
 
 ```bash
 export LD_PRELOAD=libros2_pulse.so                      # resolved from the sourced workspace
-export ROS_TOPIC_STATS_OUTPUT_FILE=/tmp/pulse.log       # default: /root/ssd2tb/logs/topic_freq.log
+export ROS_TOPIC_STATS_OUTPUT_FILE=/tmp/pulse.log       # default: $TMPDIR (or /tmp)/topic_freq.<pid>.log
 export ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=5.0          # seconds
 export ROS_PULSE_EMIT_IDLE=1                            # optional; default 0 — see below
 ros2 launch your_stack your.launch.py
@@ -103,7 +103,7 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ROS_TOPIC_STATS_OUTPUT_FILE` | `/root/ssd2tb/logs/topic_freq.<pid>.log` | Where the stats file is appended (per-process by default; set an explicit path to share one file deliberately). |
+| `ROS_TOPIC_STATS_OUTPUT_FILE` | `$TMPDIR/topic_freq.<pid>.log` (`/tmp` if `TMPDIR` unset) | Where the stats file is appended (per-process by default; set an explicit path to share one file deliberately). The default open refuses symlinks (`O_NOFOLLOW`) since it lives in a world-writable directory; an explicit path may be a symlink. |
 | `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` | `5.0` | Flush/snapshot window, in seconds. |
 | `ROS_TOPIC_STATS_MAX_BYTES` | `10485760` (10 MiB) | Size cap: at/over it the file rotates to `<path>.1` (single generation, worst-case disk = 2× cap per process). `0` disables rotation (pure append). Reopen-per-window is kept, so external logrotate also works. |
 | `ROS_TOPIC_STATS_JITTER` | `0` | When `1`, measure per-endpoint inter-arrival gaps and emit a `JITTER <topic> <side> max_dt_ms=…` line for each side that saw traffic. Also switched on implicitly by any `max_gap_ms` rule in the spec, so a declared rule is never silently unchecked. Costs one clock read per message (+24 ns measured, ~0.012% of a core at 4900 msg/s) — hence opt-in. |

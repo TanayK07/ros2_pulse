@@ -18,9 +18,10 @@
 #define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
+#include <fcntl.h>     // open flags (O_NOFOLLOW hardening on the default output path)
 #include <pthread.h>   // pthread_atfork
 #include <sys/stat.h>  // stat (size rotation)
-#include <unistd.h>    // getpid
+#include <unistd.h>    // getpid, close
 
 #include <atomic>
 #include <cerrno>
@@ -60,13 +61,22 @@ auto envFlag(const char* key) -> bool {
 // Resolve where this process writes. An explicit ROS_TOPIC_STATS_OUTPUT_FILE is honoured verbatim
 // (operators can still deliberately share a path); otherwise default to a PER-PROCESS path with the
 // pid embedded, so a normal multi-process ROS launch no longer has every LD_PRELOADed process
-// appending to one shared file with no locking.
+// appending to one shared file with no locking. The default respects TMPDIR and falls back to
+// /tmp — a directory that exists everywhere, unlike the field-test mount it replaced.
+// The two cases also differ in trust (see the open in flush()): the default lands in a
+// world-writable sticky directory with a predictable name, so its open refuses symlinks; an
+// explicit path is the operator's own and may legitimately be one (e.g. a link to another disk).
+auto outputPathIsDefault() -> bool {
+    const char* v = std::getenv("ROS_TOPIC_STATS_OUTPUT_FILE");
+    return v == nullptr || *v == '\0';
+}
+
 auto resolveOutputPath() -> std::string {
     const char* v = std::getenv("ROS_TOPIC_STATS_OUTPUT_FILE");
     if (v && *v) {
         return std::string(v);
     }
-    return defaultOutputPath(static_cast<long>(::getpid()));
+    return defaultOutputPath(static_cast<long>(::getpid()), std::getenv("TMPDIR"));
 }
 
 // Load the optional expected-rate spec (ROADMAP R1) named by ROS_TOPIC_STATS_EXPECTED. Runs in
@@ -319,7 +329,22 @@ private:
                                                window_s, m_emit_idle, warnings);
 
         rotateIfNeeded();
-        std::FILE* f = std::fopen(m_out_path.c_str(), "a");
+        // The DEFAULT path lives in a world-writable sticky directory (/tmp) under a name
+        // predictable from the pid, so a hostile local user could pre-create it as a symlink
+        // and have a root-owned probed process append to the target (CWE-379). O_NOFOLLOW
+        // turns that into ELOOP -> the warn-once path below. An EXPLICIT operator-set path
+        // keeps full symlink freedom (linking the log onto another disk is legitimate).
+        // O_CLOEXEC on both: a probed host that fork+execs must not leak the fd.
+        const int flags = O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC |
+                          (outputPathIsDefault() ? O_NOFOLLOW : 0);
+        std::FILE* f = nullptr;
+        const int fd = ::open(m_out_path.c_str(), flags, 0644);
+        if (fd >= 0) {
+            f = ::fdopen(fd, "a");
+            if (!f) {
+                ::close(fd);
+            }
+        }
         if (!f) {
             // Don't silently drop every window (e.g. the output directory doesn't exist). Warn
             // ONCE — this runs on the timer thread every window, so a per-window log would spam.
