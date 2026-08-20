@@ -5,6 +5,8 @@
 #ifndef ROS2_PULSE__CORE__ENV_CONFIG_HPP_
 #define ROS2_PULSE__CORE__ENV_CONFIG_HPP_
 
+#include <optional>
+
 namespace ros2_pulse::core {
 
 /// @brief Parse a publish-period (in seconds) out of a raw environment-variable string.
@@ -32,6 +34,29 @@ double parsePeriodSeconds(const char* raw, double def) noexcept;
 /// empty, non-integral (`"1.5"`), negative, or trailing-junk input yields @p def. Surrounding
 /// whitespace is tolerated.
 unsigned long long parseMaxBytes(const char* raw, unsigned long long def) noexcept;
+
+/// On-disk output format selector (ROS_TOPIC_STATS_FORMAT, ROADMAP R6).
+enum class eStatsFormat {
+    kText,   ///< the historical line-oriented block format (default, byte-identical to pre-R6)
+    kJsonl,  ///< JSON Lines: one JSON object per window, one line, '\n'-terminated (jsonlines.org)
+};
+
+/// @brief Parse ROS_TOPIC_STATS_FORMAT out of a raw env-var string.
+///
+/// Same `noexcept` contract as the parsers above (KNOWN_ISSUES #5): reached from the
+/// tracepoint-driven singleton constructor, must never throw.
+///
+/// Unset / empty / whitespace-only means "not asked for" and yields kText — the format an
+/// operator gets without touching anything must be byte-identical to what every existing
+/// consumer parses. `"text"` and `"jsonl"` (exact, lowercase — the documented forms, matching
+/// the strict `"1"`-only opt-in flags) select explicitly; surrounding whitespace is tolerated
+/// like the other env parsers because these are exported via the shell.
+///
+/// Any OTHER value returns std::nullopt so the caller can warn once and fall back to text —
+/// distinct from the silent kText default, because a typo ("json", "JSONL") is an operator
+/// asking for something and not getting it, which must be said out loud (the spec-file error
+/// philosophy: never crash the host, never silently ignore a request).
+auto parseStatsFormat(const char* raw) noexcept -> std::optional<eStatsFormat>;
 
 }  // namespace ros2_pulse::core
 

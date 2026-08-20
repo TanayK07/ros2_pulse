@@ -431,3 +431,84 @@ TEST(RateSpecEval, UnmeasuredGapIsReportedNotPassed) {
     ASSERT_EQ(unmeasured.size(), 1u);
     EXPECT_EQ(unmeasured[0], "/scan");
 }
+
+// ---- structured warnings (ROADMAP R6: the jsonl emitter needs data, not sentences) ----
+
+using ros2_pulse::core::evaluateRateSpecWarnings;
+using ros2_pulse::core::eWarnKind;
+using ros2_pulse::core::renderWarnLine;
+using ros2_pulse::core::sRateWarning;
+
+// The structured evaluator carries every number the text line renders — a sidecar thresholds
+// on warn.hz directly instead of regexing "hz=1.200000" back out of our own sentence.
+TEST(RateSpecEval, StructuredWarningsCarryTheNumbers) {
+    std::string err;
+    auto spec = parseRateSpec(
+        "topics:\n"
+        "  /scan: {min_hz: 18, max_hz: 22, max_gap_ms: 60}\n"
+        "nodes: [/planner]\n",
+        err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    auto slow_and_frozen = recvStat("/scan", 1.2, 0.0);
+    slow_and_frozen.recv_max_dt_ms = 812.4;
+    slow_and_frozen.has_recv_max_dt = true;
+
+    const auto warns = evaluateRateSpecWarnings(*spec, {slow_and_frozen}, {}, {},
+                                                /*missing_as_zero=*/true);
+    ASSERT_EQ(warns.size(), 3u);
+
+    EXPECT_EQ(warns[0].kind, eWarnKind::kTopicRate);
+    EXPECT_EQ(warns[0].name, "/scan");
+    EXPECT_DOUBLE_EQ(warns[0].hz, 1.2);
+    EXPECT_DOUBLE_EQ(warns[0].min_hz, 18.0);
+    EXPECT_DOUBLE_EQ(warns[0].max_hz, 22.0);
+
+    EXPECT_EQ(warns[1].kind, eWarnKind::kTopicGap);
+    EXPECT_EQ(warns[1].name, "/scan");
+    EXPECT_DOUBLE_EQ(warns[1].max_dt_ms, 812.4);
+    EXPECT_DOUBLE_EQ(warns[1].max_gap_ms, 60.0);
+
+    EXPECT_EQ(warns[2].kind, eWarnKind::kNodeMissing);
+    EXPECT_EQ(warns[2].name, "/planner");
+}
+
+// An unbounded max_hz stays infinity in the struct — the jsonl emitter turns that into an
+// omitted key, and renderWarnLine into the literal 'inf'.
+TEST(RateSpecEval, StructuredUnboundedMaxStaysInfinity) {
+    std::string err;
+    auto spec = parseRateSpec("topics:\n  /scan: {min_hz: 45}\n", err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    const auto warns = evaluateRateSpecWarnings(*spec, {recvStat("/scan", 10.0, 0.0)}, {}, {});
+    ASSERT_EQ(warns.size(), 1u);
+    EXPECT_TRUE(std::isinf(warns[0].max_hz));
+}
+
+// The string API is a pure projection of the structured one: same window, element-for-element
+// renderWarnLine equality. This is the invariant that keeps text and jsonl from ever drifting.
+TEST(RateSpecEval, StringApiIsRenderedStructuredApi) {
+    std::string err;
+    auto spec = parseRateSpec(
+        "topics:\n"
+        "  /scan:  {min_hz: 45, max_gap_ms: 60}\n"
+        "  /image: {min_hz: 28, max_hz: 32, side: pub, transport: inter}\n"
+        "nodes: [/planner]\n",
+        err);
+    ASSERT_TRUE(spec.has_value()) << err;
+
+    auto frozen = recvStat("/scan", 10.0, 0.0);
+    frozen.recv_max_dt_ms = 812.4;
+    frozen.has_recv_max_dt = true;
+    const std::vector<sTopicStat> stats = {frozen, pubStat("/image", 5.0, 0.0)};
+
+    const auto lines = evaluateRateSpec(*spec, stats, {}, {}, /*missing_as_zero=*/true);
+    const auto warns = evaluateRateSpecWarnings(*spec, stats, {}, {}, /*missing_as_zero=*/true);
+    ASSERT_EQ(lines.size(), warns.size());
+    ASSERT_EQ(lines.size(), 4u);  // rate+gap for /scan, rate for /image, node missing
+    for (size_t i = 0; i < lines.size(); ++i) {
+        EXPECT_EQ(renderWarnLine(warns[i]), lines[i]) << "index " << i;
+    }
+    // Spot-pin one rendered line so a joint drift of BOTH APIs cannot pass the equality above.
+    EXPECT_EQ(lines[0], "WARN TOPIC /scan hz=10.000000 expected=[45,inf]");
+}
