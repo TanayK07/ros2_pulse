@@ -87,3 +87,78 @@ TEST(LogReader, EmptyAndGarbageInput) {
     EXPECT_TRUE(parseLog("").empty());
     EXPECT_TRUE(parseLog("not a probe log\nat all\n").empty());
 }
+
+// R5 JITTER lines round-trip through the real formatter: the max_dt values AND the has_* flags
+// must both survive, because absence is a semantic ("never measured"), not a zero — pulse-check's
+// exit-2 path keys on the flag, so a reader that dropped it would turn "cannot answer" into
+// "healthy". Also pins that a stat formatted WITHOUT the flags parses back without them.
+TEST(LogReader, RoundTripsJitterLines) {
+    sTopicStat s;
+    s.topic = "/scan";
+    s.pub_inter_count = 100;
+    s.pub_inter_hz = 20.0;
+    s.recv_inter_count = 100;
+    s.recv_inter_hz = 20.0;
+    s.pub_max_dt_ms = 51.284;
+    s.has_pub_max_dt = true;
+    s.recv_max_dt_ms = 812.4;
+    s.has_recv_max_dt = true;
+
+    sTopicStat bare;  // same topic shape, no measured gap — flags must stay false through parse
+    bare.topic = "/imu";
+    bare.pub_inter_count = 50;
+    bare.pub_inter_hz = 100.0;
+
+    const std::string text = formatWindow({s, bare}, {}, 100LL, 5.0, /*emit_idle=*/false);
+
+    auto windows = parseLog(text);
+    ASSERT_EQ(windows.size(), 1u);
+    const auto* p = findTopic(windows[0].stats, "/scan");
+    ASSERT_NE(p, nullptr);
+    EXPECT_TRUE(p->has_pub_max_dt);
+    EXPECT_DOUBLE_EQ(p->pub_max_dt_ms, 51.284);
+    EXPECT_TRUE(p->has_recv_max_dt);
+    EXPECT_DOUBLE_EQ(p->recv_max_dt_ms, 812.4);
+    // The rate fields on the same topic must still merge in from their own lines.
+    EXPECT_DOUBLE_EQ(p->pub_inter_hz, 20.0);
+    EXPECT_DOUBLE_EQ(p->recv_inter_hz, 20.0);
+
+    const auto* q = findTopic(windows[0].stats, "/imu");
+    ASSERT_NE(q, nullptr);
+    EXPECT_FALSE(q->has_pub_max_dt);
+    EXPECT_FALSE(q->has_recv_max_dt);
+}
+
+// A log written by a pre-R5 probe has no JITTER lines at all; it must parse exactly as before
+// with both has_* flags false on every stat — the additive-format promise, read direction.
+TEST(LogReader, PreR5LogParsesWithoutJitterFields) {
+    const std::string text =
+        "# ts_ns=100 window_s=5.000\n"
+        "TOPIC /scan 20.000000\n"
+        "RECV /scan inter=20.000000 intra=0.000000\n"
+        "NODE /perception\n"
+        "\n";
+    auto windows = parseLog(text);
+    ASSERT_EQ(windows.size(), 1u);
+    const auto* s = findTopic(windows[0].stats, "/scan");
+    ASSERT_NE(s, nullptr);
+    EXPECT_DOUBLE_EQ(s->pub_inter_hz, 20.0);
+    EXPECT_TRUE(s->recv_endpoint_seen);
+    EXPECT_FALSE(s->has_pub_max_dt);
+    EXPECT_FALSE(s->has_recv_max_dt);
+}
+
+// A JITTER line whose side is neither `pub` nor `recv` (a future side, or corruption) is skipped
+// like any unknown line — and must NOT conjure a topic entry as a side effect: statFor only runs
+// after a full pattern match. Same for a JITTER line with a non-numeric value.
+TEST(LogReader, UnknownJitterSideIsIgnored) {
+    const std::string text =
+        "# ts_ns=100 window_s=5.000\n"
+        "JITTER /scan both max_dt_ms=5.000\n"
+        "JITTER /scan pubx max_dt_ms=2.000\n"
+        "JITTER /scan pub max_dt_ms=oops\n"
+        "\n";
+    auto windows = parseLog(text);
+    ASSERT_EQ(windows.size(), 1u);
+    EXPECT_TRUE(windows[0].stats.empty());
+}

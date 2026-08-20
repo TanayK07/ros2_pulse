@@ -203,6 +203,38 @@ TEST(GapTracking, OpenGapFoldedSoSilentEndpointGrows) {
 // ...but the exit window must NOT fold. rclcpp teardown stops traffic before the process exits,
 // so the open interval there measures the shutdown sequence and would fire every gap rule on a
 // perfectly healthy stop.
+// The R5 design's "DisabledReadsNoClock": default-off must cost zero, i.e. the disabled hot
+// path may never enter noteArrival — whose FIRST statement is the clock read. Rather than
+// injecting a counting clock (a seam on the very hot path whose +24 ns/msg figure the bench
+// reproduces — the seam would perturb the number it exists to protect), observe through the
+// public API: noteArrival writes last_ns unconditionally BEFORE its guard, so if the disabled
+// phase had entered it even once, enabling tracking afterwards would fold the open gap since
+// that timestamp and report a max_dt. No report == the accumulator was never entered == no
+// clock was read.
+TEST(GapTracking, DisabledPathNeverEntersTheAccumulator) {
+    TopicRegistry reg;
+    ASSERT_FALSE(reg.gapTracking());
+    const void* pub = reinterpret_cast<const void*>(0x1010);
+    reg.onNodeInit(kNode, "talker", "/");
+    reg.onPublisherInit(pub, kNode, "/chatter");
+
+    // Traffic with tracking disabled, spaced so any recorded timestamp would be foldable.
+    reg.onPublish(pub);
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    reg.onPublish(pub);
+
+    // Flip on AFTER the traffic; the snapshot drains with the fold armed. A regression that
+    // calls noteArrival unconditionally (e.g. "simplifying" the if (gap) gate away) leaves a
+    // last_ns behind, and this fold turns it into a visible JITTER report.
+    reg.setGapTracking(true);
+    auto stats = reg.snapshot(1.0, /*fold_open_gap=*/true);
+    const auto* s = findStat(stats, "/chatter");
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->pub_inter_count, 2u);  // counting itself was live the whole time
+    EXPECT_FALSE(s->has_pub_max_dt) << "disabled phase left a timestamp -> a clock was read";
+    EXPECT_FALSE(s->has_recv_max_dt);
+}
+
 TEST(GapTracking, OpenGapNotFoldedWhenExiting) {
     TopicRegistry reg;
     reg.setGapTracking(true);
