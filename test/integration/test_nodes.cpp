@@ -4,6 +4,10 @@
 //   talker     : publishes std_msgs/String on /chatter at 50 Hz (separate process)
 //   stall_pub <ms> <at_s> : same, but freezes the executor once mid-run for <ms> (ROADMAP R5)
 //   listener   : subscribes /chatter (separate process)          -> inter-process receive
+//   talker_fixed / listener_fixed : same pair on /chatter_fixed with std_msgs/UInt64 — a
+//                FIXED-SIZE (self-contained) type, so CycloneDDS+iceoryx is allowed to carry
+//                it over shared memory; String would silently fall back to loopback UDP and
+//                the RMW-matrix SHM leg (test/rmw/) would prove nothing.
 //   intra      : single process, intra-process comms ON, self pub+sub on /intra_topic at 50 Hz
 //                                                                -> intra-process receive
 //   exit_storm : detached threads hammer the ros_trace_* interposers while main() returns
@@ -22,6 +26,7 @@
 
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/u_int64.hpp"
 
 // exit_storm / fork_pub drive the probe's interposed tracepoints directly (they resolve to
 // libros2_pulse.so under LD_PRELOAD, or to tracetools' real no-op functions otherwise). No rcl
@@ -85,6 +90,38 @@ private:
     int m_stall_ms;
     std::chrono::steady_clock::time_point m_stall_at;
     bool m_stalled = false;
+};
+
+// Fixed-size pair for the RMW-matrix SHM leg (test/rmw/run_rmw_matrix.sh). std_msgs/UInt64 is
+// self-contained, so CycloneDDS 0.10+iceoryx may move it through a RouDi shared-memory segment;
+// a String publisher would be quietly ineligible and the leg would measure plain loopback UDP.
+class FixedTalker : public rclcpp::Node {
+public:
+    explicit FixedTalker(const rclcpp::NodeOptions& o) : Node("poc_talker_fixed", o) {
+        m_pub = create_publisher<std_msgs::msg::UInt64>("chatter_fixed", qos());
+        m_timer = create_wall_timer(20ms, [this]() {
+            std_msgs::msg::UInt64 m;
+            m.data = m_n++;
+            m_pub->publish(m);
+        });
+    }
+
+private:
+    rclcpp::Publisher<std_msgs::msg::UInt64>::SharedPtr m_pub;
+    rclcpp::TimerBase::SharedPtr m_timer;
+    uint64_t m_n = 0;
+};
+
+class FixedListener : public rclcpp::Node {
+public:
+    explicit FixedListener(const rclcpp::NodeOptions& o) : Node("poc_listener_fixed", o) {
+        m_sub = create_subscription<std_msgs::msg::UInt64>(
+            "chatter_fixed", qos(), [this](std_msgs::msg::UInt64::SharedPtr) { ++m_got; });
+    }
+
+private:
+    rclcpp::Subscription<std_msgs::msg::UInt64>::SharedPtr m_sub;
+    size_t m_got = 0;
 };
 
 class Listener : public rclcpp::Node {
@@ -164,6 +201,10 @@ int main(int argc, char** argv) {
         node = std::make_shared<StallTalker>(plain, stall_ms, stall_at_s);
     } else if (mode == "listener") {
         node = std::make_shared<Listener>(plain);
+    } else if (mode == "talker_fixed") {
+        node = std::make_shared<FixedTalker>(plain);
+    } else if (mode == "listener_fixed") {
+        node = std::make_shared<FixedListener>(plain);
     } else if (mode == "intra") {
         node = std::make_shared<IntraNode>(ipc);
     } else if (mode == "exit_storm") {
