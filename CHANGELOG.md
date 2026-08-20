@@ -18,6 +18,20 @@ All notable changes to this project are documented here. Format follows
 - `pulse-check` exits 2 when a spec requires a gap the logs cannot answer — measurement absence
   is not a health verdict. Violations it *did* measure are still printed.
 
+### Fixed
+- The default output path was `/root/ssd2tb/logs/topic_freq.<pid>.log` — the original field-test
+  machine's SSD mount. On any machine without that directory a fresh install silently dropped
+  every window after a single stderr warning. The default is now `$TMPDIR/topic_freq.<pid>.log`
+  (`/tmp` when `TMPDIR` is unset, empty, or relative). Because the new default lives in a
+  world-writable sticky directory under a pid-predictable name, its open now refuses symlinks
+  (`O_NOFOLLOW`, CWE-379) and both open paths set `O_CLOEXEC`; an explicit
+  `ROS_TOPIC_STATS_OUTPUT_FILE` keeps full symlink freedom.
+
+### Upgrade note
+Deployments that read the old default location must either set
+`ROS_TOPIC_STATS_OUTPUT_FILE=/root/ssd2tb/logs/topic_freq.$$.log` explicitly or start reading
+from `/tmp`. Anyone setting the path explicitly (the documented practice) is unaffected.
+
 ## [0.2.0] - 2026-08-02
 
 Hardening + honesty release: two full test-first audit rounds (15 issues found, fixed and

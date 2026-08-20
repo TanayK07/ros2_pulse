@@ -165,9 +165,29 @@ TEST(WindowFormat, NodesOnlyWindow) {
 }
 
 // The per-process default path embeds the pid so preloaded processes stop sharing one file.
+// The default must be a path that exists and is writable on an arbitrary machine. The previous
+// default, /root/ssd2tb/logs/, was the original field-test box's SSD mount: on every other
+// system the directory doesn't exist, so a fresh install silently dropped every window (the
+// probe warns once on stderr and keeps running — correct fail-safe behaviour, wrong default).
+// Even test/orin/run_orin_probe_test.sh had to special-case it. POSIX's answer is TMPDIR with a
+// /tmp fallback; the caller passes TMPDIR in so this stays a pure function of its arguments.
 TEST(WindowFormat, DefaultOutputPathEmbedsPid) {
-    EXPECT_EQ(defaultOutputPath(4242), "/root/ssd2tb/logs/topic_freq.4242.log");
-    EXPECT_EQ(defaultOutputPath(1), "/root/ssd2tb/logs/topic_freq.1.log");
+    EXPECT_EQ(defaultOutputPath(4242), "/tmp/topic_freq.4242.log");
+    EXPECT_EQ(defaultOutputPath(1), "/tmp/topic_freq.1.log");
     // distinct pids must map to distinct files
     EXPECT_NE(defaultOutputPath(100), defaultOutputPath(101));
+}
+
+TEST(WindowFormat, DefaultOutputPathHonoursTmpdir) {
+    EXPECT_EQ(defaultOutputPath(7, "/run/user/1000"), "/run/user/1000/topic_freq.7.log");
+    // Trailing slashes are the most common TMPDIR spelling mistake; never emit '//'.
+    EXPECT_EQ(defaultOutputPath(7, "/scratch/"), "/scratch/topic_freq.7.log");
+    // Unset or empty TMPDIR falls back to /tmp; a relative TMPDIR is rejected too — the probe
+    // runs inside arbitrary processes whose cwd is unknown and possibly unwritable, so a
+    // relative path would scatter logs (or open-failures) across random directories.
+    EXPECT_EQ(defaultOutputPath(7, nullptr), "/tmp/topic_freq.7.log");
+    EXPECT_EQ(defaultOutputPath(7, ""), "/tmp/topic_freq.7.log");
+    EXPECT_EQ(defaultOutputPath(7, "relative/dir"), "/tmp/topic_freq.7.log");
+    // Root itself: legal, and must not double the slash.
+    EXPECT_EQ(defaultOutputPath(7, "/"), "/topic_freq.7.log");
 }

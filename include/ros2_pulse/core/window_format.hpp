@@ -38,11 +38,14 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
                   long long ts_ns, double window_s, bool emit_idle,
                   const std::vector<std::string>& warnings = {}) -> std::string;
 
-/// @brief Per-process default output path: `/root/ssd2tb/logs/topic_freq.<pid>.log`.
+/// @brief Per-process default output path: `$TMPDIR/topic_freq.<pid>.log`, `/tmp` fallback.
 ///
-/// Embedding the pid stops every LD_PRELOADed process from appending to one shared file. Kept as a
-/// pure function of @p pid so the derivation is testable without spawning a process.
-auto defaultOutputPath(long pid) -> std::string;
+/// Embedding the pid stops every LD_PRELOADed process from appending to one shared file. Kept as
+/// a pure function of its arguments so the derivation is testable without spawning a process —
+/// the probe passes `getenv("TMPDIR")` as @p tmpdir. Only an absolute @p tmpdir is honoured
+/// (trailing slashes normalized); anything else falls back to `/tmp`, because the probe runs
+/// inside arbitrary processes whose cwd is unknown.
+auto defaultOutputPath(long pid, const char* tmpdir = nullptr) -> std::string;
 
 }  // namespace ros2_pulse::core
 
