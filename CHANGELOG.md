@@ -5,6 +5,23 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **pulse-top (`tools/pulse-top/`):** live terminal dashboard over the probe's jsonl log
+  (`pip install ./tools/pulse-top`, command `pulse-top`). A pure log consumer — no ROS
+  dependency, no node, no subscriptions — so watching costs the probed system nothing and
+  works over ssh or on a dead log post-mortem, unlike graph-joining monitors (ros2top,
+  ornis, ...), and it sees the intra-process rates only the in-process probe can measure.
+  Topics table with 60-window sparklines and warn-colored rows, namespace tree, node
+  liveness, and a retained structured-warns view with ages (a one-window stall stays
+  readable instead of blinking for one window period). Honesty rules carried through the
+  UI: an absent jsonl key renders as `—` (never 0), and a topic absent from the current
+  window renders as `stale Nw`, never as its old rate. Hardened by review (#32/#33):
+  byte-exact tail-following (rotation/truncation-safe, partial multi-byte holds),
+  tail-seek attach with a per-poll read cap, and log-derived text rendered without any
+  markup parsing so a hostile or corrupt log cannot crash the viewer. `pulse-top --demo`
+  runs a scripted-incident graph; 25 tests plus a hostile-log smoke run in a dedicated
+  no-ROS CI lane.
+
 ## [0.3.0] - 2026-08-20
 
 Observability-formats + soundness release: gap visibility closes the stall blind spot in 0.2.0's
