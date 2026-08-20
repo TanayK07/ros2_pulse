@@ -22,6 +22,11 @@ All notable changes to this project are documented here. Format follows
   informational banner only — the one-shot error diagnostics (unreadable/malformed/zero-rule
   spec, unwritable output file) always print, because silently disabled alerting is the 0.2.0
   bug class this flag must not reintroduce.
+- **LTTng coexistence test (closes ROADMAP R3):** `test/integration/test_lttng_coexist.py`
+  asserts the probe and a live LTTng session capture the SAME run — probe log rates AND >0
+  `ros2:*` events via babeltrace — proving the `dlsym(RTLD_NEXT)` forwarding feeds both
+  consumers. Runs on the jazzy/kilted CI lanes (new `lttng-tools`/`babeltrace` test_depends);
+  skips on stock humble, whose tracetools ships no lttng-ust backend (detected via `ldd`).
 
 ### Fixed
 - The default output path was `/root/ssd2tb/logs/topic_freq.<pid>.log` — the original field-test

@@ -152,6 +152,12 @@ else()
       # informational banner ONLY — error diagnostics must survive it (see test_quiet.py).
       ament_add_pytest_test(integration_quiet test/integration/test_quiet.py
         TIMEOUT 120)
+      # LTTng coexistence (ROADMAP R3): probe forwarding via dlsym(RTLD_NEXT) must feed a LIVE
+      # LTTng session too. Runs on Iron+ (lttng-ust-linked tracetools + lttng-tools/babeltrace
+      # from the test_depends); self-skips on stock humble, where the tracepoint bodies are
+      # no-ops — see the skip-vs-fail rationale at the top of the test file.
+      ament_add_pytest_test(integration_lttng_coexist test/integration/test_lttng_coexist.py
+        TIMEOUT 180)
     endif()
   endif()
 
