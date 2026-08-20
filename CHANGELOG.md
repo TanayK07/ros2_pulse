@@ -17,6 +17,11 @@ All notable changes to this project are documented here. Format follows
   `max_gap_ms` rule enables it implicitly so a declared rule is never silently unchecked.
 - `pulse-check` exits 2 when a spec requires a gap the logs cannot answer — measurement absence
   is not a health verdict. Violations it *did* measure are still printed.
+- **Quiet banner (ROADMAP R6):** `ROS_TOPIC_STATS_QUIET=1` suppresses the `[ros2_pulse] active`
+  stderr banner for stderr-parsing deployments. Deliberately narrow: it silences the
+  informational banner only — the one-shot error diagnostics (unreadable/malformed/zero-rule
+  spec, unwritable output file) always print, because silently disabled alerting is the 0.2.0
+  bug class this flag must not reintroduce.
 
 ### Fixed
 - The default output path was `/root/ssd2tb/logs/topic_freq.<pid>.log` — the original field-test
