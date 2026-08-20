@@ -106,3 +106,35 @@ class TestSparkline:
 
     def test_empty_pads_to_width(self):
         assert sparkline([], width=4) == "    "
+
+
+class TestStaleness:
+    CLEAN_SCAN_ONLY = (
+        '{"ts_ns":"9","window_s":5.0,'
+        '"topics":[{"topic":"/scan","pub_inter_hz":20.0,"pub_intra_hz":0.0}],'
+        '"nodes":["/perception"],"warns":[]}'
+    )
+
+    def test_last_seen_tracks_presence(self):
+        # Review #32: a topic absent from later windows froze at its last rate
+        # with no marker. The model must expose staleness for the view to render.
+        s = StatsState()
+        s.apply(parse_jsonl_line(RECORD))          # /scan + /points
+        s.apply(parse_jsonl_line(self.CLEAN_SCAN_ONLY))  # /points vanished
+        assert s.topics["/scan"].last_seen == 2
+        assert s.topics["/points"].last_seen == 1
+        assert s.windows_seen - s.topics["/points"].last_seen == 1  # 1 window stale
+
+
+class TestWarnRetention:
+    def test_transient_warn_survives_in_recent(self):
+        # Review #32: warns replaced wholesale each window made a one-window gap
+        # transient a sub-second blink. recent_warns retains it with its age.
+        s = StatsState()
+        s.apply(parse_jsonl_line(RECORD))          # 2 warns fire in window 1
+        s.apply(parse_jsonl_line(TestStaleness.CLEAN_SCAN_ONLY))  # clean window
+        assert s.warns == []                       # live set: honest, empty
+        kinds = [w.kind for _, w in s.recent_warns]
+        assert "topic_gap" in kinds and "node_missing" in kinds
+        ages = [s.windows_seen - seen for seen, _ in s.recent_warns]
+        assert ages == [1, 1]                      # both fired one window ago
