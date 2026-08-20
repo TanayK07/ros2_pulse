@@ -92,7 +92,7 @@ Corrections to the original entry, all verified against upstream source:
 Tracepoint availability, verified per branch — all six exist with identical signatures on
 humble / iron / jazzy / kilted / rolling, so the original "all exist on Humble" was right.
 
-## R3. Distro matrix: Jazzy / Kilted / rolling — **mostly DONE**
+## R3. Distro matrix: Jazzy / Kilted / rolling — **DONE**
 
 - ✅ CI: blocking matrix humble+jazzy+kilted on official `ros:<distro>` images; rolling
   observational lane fixed (PR #16 — it immediately caught the `ament_target_dependencies`
@@ -101,10 +101,13 @@ humble / iron / jazzy / kilted / rolling, so the original "all exist on Humble" 
   jazzy/kilted; full suite green on both.
 - ✅ `rclcpp_intra_publish` hooked → **publish-side intra** counts on Iron+ (additive `PUB`
   line; symbol exported-but-never-called on Humble).
-- ⬜ Remaining: integration assertion that the probe and a **live LTTng session** coexist
-  (we forward via `dlsym(RTLD_NEXT)`, so both should fire — assert it). Testable on any distro
-  whose binaries carry the lttng-ust backend: Iron+ out of the box, Humble only if ROS was
-  rebuilt for it.
+- ✅ Integration assertion that the probe and a **live LTTng session** coexist
+  (we forward via `dlsym(RTLD_NEXT)`, so both should fire — asserted by
+  `test/integration/test_lttng_coexist.py`: probe log rates AND >0 `ros2:*` events in the same
+  run, plus an un-probed baseline leg so a 0-event probed run is provably our forwarding).
+  Testable on any distro whose binaries carry the lttng-ust backend: Iron+ out of the box
+  (jazzy/kilted CI lanes run it via the `lttng-tools`/`babeltrace` test_depends), Humble only
+  if ROS was rebuilt for it — the test skips there on an `ldd libtracetools.so` check.
 
 ## R4. Positioning docs (ALTERNATIVES.md gaps)
 

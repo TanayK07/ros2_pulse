@@ -24,6 +24,14 @@ jobs:
       # the job on any test failure (AbortTestOnError). DOCKER_IMAGE pins the official ROS
       # image so the distro's own tracetools/rclcpp binaries are what we interpose — that IS
       # the compatibility claim under test.
+      #
+      # LTTng tooling for test_lttng_coexist.py comes through package.xml test_depends
+      # (rosdep keys `lttng-tools` + `babeltrace`, both verified in rosdistro base.yaml —
+      # there is no `babeltrace2` key) — industrial_ci's rosdep step installs test_depends,
+      # so no ADDITIONAL_DEBS entry is needed and the tool list can't drift between CI and
+      # a local `rosdep install`. Net effect per lane: jazzy/kilted RUN the coexistence
+      # test (Iron+ tracetools links lttng-ust); humble installs the tools but the test
+      # self-skips on its ldd check, which is the documented, correct behaviour there.
       - uses: ros-industrial/industrial_ci@master
         env:
           ROS_DISTRO: ${{ matrix.ROS_DISTRO }}
