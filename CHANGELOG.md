@@ -13,6 +13,11 @@ All notable changes to this project are documented here. Format follows
   core per watched 100 KB topic; and on an intra-process topic the watcher switches
   serialization on — +52 % CPU on the watched process, `rcl_publish` path lit in 10/10 trials.
   README "Why", ALTERNATIVES and bench/RESULTS.md carry the numbers.
+- **Launch video source (`video/`):** a 40 s Remotion composition — hook, the measured cost of
+  `ros2 topic hz` / `echo`, the one-line probe, real `pulse-top` frames through a `/scan` stall,
+  the Orin/x86 numbers, CTA. Every on-screen number lives in `video/src/data.ts` with the file
+  it cites; `capture_frames.py` labels stall / Warns-tab frames by pixel colour so the cut does
+  not depend on capture timing. Rendered MP4 ships as a GitHub Release asset, not in git.
 - README demo GIF of `pulse-top --demo` (`docs/assets/pulse-top-demo.gif`, 30 frames through one
   scripted-incident loop, rendered headlessly from Textual screenshots).
 
