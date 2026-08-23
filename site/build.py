@@ -38,7 +38,7 @@ PAGES = {
 ASSETS = "docs/assets"
 
 # plain [text](target), image ![alt](target) and badge-style [![alt](img)](target) links
-LINK = re.compile(r"((?:!?\[[^\]]*\]|\)\])\()([^)\s]+)(\))")
+LINK = re.compile(r"((?:!?\[[^\]]*\]|(?<=\))\])\()([^)\s]+)(\))")
 
 
 def github_url(path: str) -> str:
