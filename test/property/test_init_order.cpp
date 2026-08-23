@@ -10,7 +10,7 @@
 //   (b) once every chain is complete, counting CONVERGES to exact totals.
 //
 // Deterministic: a fixed-seed std::mt19937 drives every choice, so a failure reproduces from
-// the printed trial index + seed. Fix-independent — passes on main today.
+// the printed trial index + seed. Fix-independent, passes on main today.
 
 #include <gtest/gtest.h>
 
@@ -74,13 +74,13 @@ TEST(InitOrderProperty, RandomOrderNeverCrashesAndConverges) {
 
         // Apply the inits in the shuffled order, firing a random number of hot-path calls
         // BEFORE each init step. These early calls may legitimately be dropped (chain not yet
-        // resolvable) — the only requirement here is that nothing crashes.
+        // resolvable), the only requirement here is that nothing crashes.
         std::uniform_int_distribution<int> noise(0, 4);
         std::bernoulli_distribution intra(0.5);
         // In real rclcpp a subscription callback is registered (callback_added) before the executor
         // can ever invoke it, so callback_start never precedes callback_added. Respect that here:
         // only fire callback noise once kCbAdded has run (the negative cache relies on this real
-        // invariant). This still exercises the genuine hazard — callback_start firing while the
+        // invariant). This still exercises the genuine hazard, callback_start firing while the
         // sub_handle->topic chain is only partially populated. Publishes have no such constraint.
         bool cb_added = false;
         for (InitStep step : order) {

@@ -1,5 +1,5 @@
 name: Bug report
-description: Something misbehaves — wrong rates, missing lines, a crash, a hang.
+description: Something misbehaves, wrong rates, missing lines, a crash, a hang.
 labels: [bug]
 body:
   - type: input

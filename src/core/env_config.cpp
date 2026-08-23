@@ -29,7 +29,7 @@ double parsePeriodSeconds(const char* raw, double def) noexcept {
         ++last;
     }
 
-    // Trim surrounding whitespace — operators export these via the shell, where a stray space is
+    // Trim surrounding whitespace, operators export these via the shell, where a stray space is
     // easy to introduce. Interior / trailing garbage is still rejected below.
     while (first != last && isAsciiSpace(*first)) {
         ++first;
@@ -113,7 +113,7 @@ auto parseStatsFormat(const char* raw) noexcept -> std::optional<eStatsFormat> {
         return eStatsFormat::kJsonl;
     }
     // A value was GIVEN and not understood: report it (nullopt) so the caller warns once and
-    // falls back to text — the operator asked for a format they are not getting, and silence
+    // falls back to text, the operator asked for a format they are not getting, and silence
     // here is the "silently armed no-op" failure mode the spec loader also refuses.
     return std::nullopt;
 }

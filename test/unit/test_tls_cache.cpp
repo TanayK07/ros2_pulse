@@ -30,7 +30,7 @@ auto findTopic(const std::vector<sTopicStat>& v, const std::string& t) -> const 
 }  // namespace
 
 // The camera-pipeline pattern: one thread alternating between endpoints every call. After a
-// warm-up, the steady state must be served from the thread-local cache — the shared-lock
+// warm-up, the steady state must be served from the thread-local cache, the shared-lock
 // lookup counter stays flat. Pre-fix, the single-entry cache missed on EVERY call (~2000).
 TEST(TlsMiniMap, AlternatingPublishersStayLockFree) {
     TopicRegistry reg;
@@ -69,10 +69,10 @@ TEST(TlsMiniMap, AlternatingCallbacksStayLockFree) {
 }
 
 // A realistic publisher farm (KNOWN_ISSUES #15): many same-type handles sit at a uniform
-// allocator stride. The 16-slot cache's (ptr>>4) index aliases uniform strides — at stride 64
+// allocator stride. The 16-slot cache's (ptr>>4) index aliases uniform strides, at stride 64
 // the index advances by 4 (mod 16), so 38 handles shared 4 slots and evicted each other on
 // ~every publish. Each miss is a contended shared_mutex read-lock + a shared-counter
-// fetch_add, measured at +2–4% workload CPU under a MultiThreadedExecutor (see the issue
+// fetch_add, measured at +2-4% workload CPU under a MultiThreadedExecutor (see the issue
 // note). Steady state must stay on the thread-local cache: fallbacks under 10% of accesses.
 TEST(TlsMiniMap, StridedPublisherFarmStaysLockFree) {
     constexpr int kPubs = 38;

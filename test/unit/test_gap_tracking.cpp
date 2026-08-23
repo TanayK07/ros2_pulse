@@ -1,8 +1,8 @@
 // Copyright 2026 ros2_pulse contributors
 //
 // Unit tests for per-endpoint inter-arrival gap tracking (ROADMAP R5). A windowed mean cannot
-// see a stall — a 400 ms freeze on a 50 Hz topic still averages 46 Hz over 5 s — so max_dt_ms is
-// the window-length-independent detector. Pure — no ROS. Registers into the shared test binary.
+// see a stall, a 400 ms freeze on a 50 Hz topic still averages 46 Hz over 5 s, so max_dt_ms is
+// the window-length-independent detector. Pure, no ROS. Registers into the shared test binary.
 
 #include <gtest/gtest.h>
 
@@ -51,7 +51,7 @@ TEST(GapTracking, DisabledByDefaultReportsNothing) {
     EXPECT_FALSE(s->has_recv_max_dt);
 }
 
-// An endpoint that has never seen an arrival has no interval — which is NOT a gap of zero, so
+// An endpoint that has never seen an arrival has no interval, which is NOT a gap of zero, so
 // nothing may be reported. Reporting 0.000 would read as "perfectly regular".
 TEST(GapTracking, NeverActiveEndpointReportsNothing) {
     TopicRegistry reg;
@@ -67,7 +67,7 @@ TEST(GapTracking, NeverActiveEndpointReportsNothing) {
 }
 
 // The first arrival ever establishes last_ts but yields no INTERVAL, and a timestamp without an
-// interval is not a gap of zero — 0.000 would read as the best possible value, inferred from one
+// interval is not a gap of zero, 0.000 would read as the best possible value, inferred from one
 // data point. Nothing is reported until a second arrival (or the folded open gap) gives a real
 // measurement.
 TEST(GapTracking, FirstArrivalProducesNoInterval) {
@@ -93,7 +93,7 @@ TEST(GapTracking, FirstArrivalProducesNoInterval) {
 }
 
 // A filtered topic is never reported, but its gap state must still be drained every window or
-// it ratchets upward for the process lifetime — the same discipline the count buckets follow.
+// it ratchets upward for the process lifetime, the same discipline the count buckets follow.
 TEST(GapTracking, FilteredTopicsStillDrainTheirGapState) {
     TopicRegistry reg;
     reg.setGapTracking(true);
@@ -170,7 +170,7 @@ TEST(GapTracking, MaxResetsPerWindowButLastTsDoesNot) {
     auto first = reg.snapshot(1.0, /*fold_open_gap=*/false);
     ASSERT_GE(findStat(first, "/chatter")->pub_max_dt_ms, 25.0);
 
-    reg.onPublish(pub);  // immediately after — tiny gap
+    reg.onPublish(pub);  // immediately after, tiny gap
     auto second = reg.snapshot(1.0, /*fold_open_gap=*/false);
     const auto* s = findStat(second, "/chatter");
     ASSERT_NE(s, nullptr);
@@ -178,7 +178,7 @@ TEST(GapTracking, MaxResetsPerWindowButLastTsDoesNot) {
 }
 
 // A fully-silent endpoint produces no inter-arrival pair at all. Without the open-gap fold the
-// TOTAL stall — the worst case R5 exists to catch — would be invisible. With it, the reported
+// TOTAL stall, the worst case R5 exists to catch, would be invisible. With it, the reported
 // gap grows every window.
 TEST(GapTracking, OpenGapFoldedSoSilentEndpointGrows) {
     TopicRegistry reg;
@@ -204,9 +204,9 @@ TEST(GapTracking, OpenGapFoldedSoSilentEndpointGrows) {
 // so the open interval there measures the shutdown sequence and would fire every gap rule on a
 // perfectly healthy stop.
 // The R5 design's "DisabledReadsNoClock": default-off must cost zero, i.e. the disabled hot
-// path may never enter noteArrival — whose FIRST statement is the clock read. Rather than
+// path may never enter noteArrival, whose FIRST statement is the clock read. Rather than
 // injecting a counting clock (a seam on the very hot path whose +24 ns/msg figure the bench
-// reproduces — the seam would perturb the number it exists to protect), observe through the
+// reproduces, the seam would perturb the number it exists to protect), observe through the
 // public API: noteArrival writes last_ns unconditionally BEFORE its guard, so if the disabled
 // phase had entered it even once, enabling tracking afterwards would fold the open gap since
 // that timestamp and report a max_dt. No report == the accumulator was never entered == no
@@ -258,7 +258,7 @@ TEST(GapTracking, OpenGapNotFoldedWhenExiting) {
     EXPECT_LT(s->pub_max_dt_ms, 50.0) << "teardown quiet leaked into the exit window's gap";
 }
 
-// Pub and recv are independent accumulators — a stalled subscriber must not be masked by a
+// Pub and recv are independent accumulators, a stalled subscriber must not be masked by a
 // healthy publisher of the same topic in the same process.
 TEST(GapTracking, PubAndRecvTrackedSeparately) {
     TopicRegistry reg;
@@ -275,7 +275,7 @@ TEST(GapTracking, PubAndRecvTrackedSeparately) {
     const auto* s = findStat(stats, "/chatter");
     ASSERT_NE(s, nullptr);
     EXPECT_TRUE(s->has_pub_max_dt);
-    EXPECT_FALSE(s->has_recv_max_dt) << "no subscription here — recv must stay unreported";
+    EXPECT_FALSE(s->has_recv_max_dt) << "no subscription here, recv must stay unreported";
 }
 
 // ---- output format ----
@@ -289,7 +289,7 @@ TEST(GapFormat, DisabledIsByteIdenticalToLegacy) {
     s.pub_inter_hz = 20.0;
     s.recv_inter_hz = 20.0;
     s.recv_endpoint_seen = true;
-    s.pub_max_dt_ms = 999.0;  // populated but unflagged — must not appear
+    s.pub_max_dt_ms = 999.0;  // populated but unflagged, must not appear
     s.recv_max_dt_ms = 888.0;
 
     const std::string want =

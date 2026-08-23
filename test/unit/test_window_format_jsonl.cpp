@@ -6,7 +6,7 @@
 //
 // Conventions pinned here (see window_format.hpp for the rationale of each):
 //  - one JSON object per window, ONE line, '\n'-terminated (jsonlines.org);
-//  - ts_ns as a decimal STRING (int64 > 2^53 loses digits as a JSON number — the OTLP/JSON
+//  - ts_ns as a decimal STRING (int64 > 2^53 loses digits as a JSON number, the OTLP/JSON
 //    timeUnixNano precedent);
 //  - same emit gates as the text format; absent key = not measured, never 0;
 //  - topics/nodes/warns always present, warns structured;
@@ -47,7 +47,7 @@ auto stat(const std::string& topic, uint64_t pub_count, uint64_t recv_inter_coun
 
 // The text-format mixed window (publish-only, intra-receive-only, same-process pub+sub),
 // re-encoded as one jsonl record. Locks: ts_ns as a decimal string (1782887153899445923 >
-// 2^53 — as a JSON number the low digits would be gone in every double-based consumer), the
+// 2^53, as a JSON number the low digits would be gone in every double-based consumer), the
 // text precisions (%.3f window, %.6f Hz), the per-side key gates mirroring TOPIC/RECV, and
 // the single trailing '\n'.
 TEST(WindowFormatJsonl, MixedWindowExactBytes) {
@@ -73,7 +73,7 @@ TEST(WindowFormatJsonl, MixedWindowExactBytes) {
 }
 
 // Idle suppression is the same policy as text (issue #7): a declared-but-silent topic is
-// omitted from the topics array by default — and the arrays are still PRESENT (empty), so a
+// omitted from the topics array by default, and the arrays are still PRESENT (empty), so a
 // sidecar's .topics[] / .warns[] never needs null guards.
 TEST(WindowFormatJsonl, IdleTopicSuppressedAndArraysAlwaysPresent) {
     std::vector<sTopicStat> stats = {stat("/idle", 0, 0, 0, 0.0, 0.0, 0.0)};
@@ -98,7 +98,7 @@ TEST(WindowFormatJsonl, IdleTopicRestoredByOptIn) {
               "\"warns\":[]}\n");
 }
 
-// An intra-only publisher (iron+ tracepoint) carries the pub pair — the analogue of the
+// An intra-only publisher (iron+ tracepoint) carries the pub pair, the analogue of the
 // additive PUB line; no recv keys appear because no recv gate fired (absence, not zeros).
 TEST(WindowFormatJsonl, IntraPublisherCarriesPubPairOnly) {
     sTopicStat s;
@@ -116,7 +116,7 @@ TEST(WindowFormatJsonl, IntraPublisherCarriesPubPairOnly) {
 }
 
 // A stalled proven receive endpoint reads an explicit 0.0 pair (KNOWN_ISSUES #12), same as the
-// RECV zero line — a dead upstream must not vanish just because the encoding changed.
+// RECV zero line, a dead upstream must not vanish just because the encoding changed.
 TEST(WindowFormatJsonl, StalledRecvEndpointEmitsZeroPair) {
     sTopicStat s;
     s.topic = "/scan";
@@ -132,7 +132,7 @@ TEST(WindowFormatJsonl, StalledRecvEndpointEmitsZeroPair) {
 }
 
 // Gap fields appear ONLY when measured (mirror of has_pub_max_dt / has_recv_max_dt): a probe
-// without gap tracking must not report a gap of zero — absence is "not measured", 0 would be
+// without gap tracking must not report a gap of zero, absence is "not measured", 0 would be
 // "perfectly smooth", and conflating them is how a stall hides.
 TEST(WindowFormatJsonl, MaxDtFieldsOnlyWhenMeasured) {
     sTopicStat with = stat("/scan", 100, 100, 0, 20.0, 20.0, 0.0);
@@ -157,7 +157,7 @@ TEST(WindowFormatJsonl, MaxDtFieldsOnlyWhenMeasured) {
 }
 
 // Structured warns: JSON numbers a sidecar can threshold on directly, never a preformatted
-// sentence to regex. An unbounded max_hz OMITS the key — RFC 8259 has no Infinity literal, and
+// sentence to regex. An unbounded max_hz OMITS the key, RFC 8259 has no Infinity literal, and
 // absence-means-unbounded matches the gap-field absence semantics.
 TEST(WindowFormatJsonl, WarnsAreStructuredObjects) {
     std::vector<sTopicStat> stats = {stat("/scan", 6, 0, 0, 1.2, 0.0, 0.0)};
@@ -200,7 +200,7 @@ TEST(WindowFormatJsonl, WarnsAreStructuredObjects) {
     EXPECT_EQ(got, want);
 }
 
-// Topic and node names come from user code — a hostile name (quote, backslash, newline, tab,
+// Topic and node names come from user code, a hostile name (quote, backslash, newline, tab,
 // raw control byte) must be escaped per RFC 8259 and must NEVER break the one-object-per-line
 // framing: exactly one '\n' in the record, at its end.
 TEST(WindowFormatJsonl, HostileNamesEscapedAndFramingHolds) {

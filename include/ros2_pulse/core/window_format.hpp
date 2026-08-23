@@ -27,11 +27,11 @@ namespace ros2_pulse::core {
 /// @endcode
 ///
 /// @p emit_idle is the ROS_PULSE_EMIT_IDLE opt-in: fully-idle topics are suppressed unless true
-/// (see KNOWN_ISSUES.md #7 / docs/issues/issue-7-idle-topic-line.md).
+/// (see KNOWN_ISSUES.md #7).
 ///
 /// @p warnings are pre-rendered alert lines (see evaluateRateSpec in rate_spec.hpp, ROADMAP R1);
 /// they are emitted verbatim after the NODE lines so existing TOPIC/PUB/RECV/NODE parsers are
-/// unaffected. Empty by default — the output is then byte-identical to the pre-R1 format.
+/// unaffected. Empty by default, the output is then byte-identical to the pre-R1 format.
 ///
 /// Pure (no ROS / tracetools / I/O dependency) so the probe can build the whole window once and
 /// write it with a single call, and so the exact format is unit-testable.
@@ -40,7 +40,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
                   const std::vector<std::string>& warnings = {}) -> std::string;
 
 /// @brief Render one flush window as ONE JSON Lines record (ROS_TOPIC_STATS_FORMAT=jsonl,
-/// ROADMAP R6): a single JSON object on a single line, '\n'-terminated, UTF-8 — per
+/// ROADMAP R6): a single JSON object on a single line, '\n'-terminated, UTF-8, per
 /// jsonlines.org, so `tail -f | jq` and every log shipper's jsonl input work unmodified.
 ///
 /// Shape (exact bytes pinned by test_window_format_jsonl.cpp golden tests):
@@ -58,13 +58,13 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 /// Design decisions, each mirrored from the text format or from exporter prior art:
 ///  - `ts_ns` is a decimal STRING, not a JSON number: epoch nanoseconds (~1.8e18) exceed
 ///    2^53-1, so a number would silently lose the low digits in every IEEE-754-double consumer
-///    (JavaScript, jq). OTLP/JSON encodes its (u)int64 fields — timeUnixNano included — as
+///    (JavaScript, jq). OTLP/JSON encodes its (u)int64 fields, timeUnixNano included, as
 ///    decimal strings for exactly this reason (RFC 8259 §6 interop note); we follow it.
 ///  - Same emit gates as the text format (shouldEmitTopic / pub_intra_count / shouldEmitRecv /
 ///    has_*_max_dt): jsonl is a re-encoding of the same measurement, never a different one. A
 ///    topic none of the gates would print is omitted here too.
 ///  - ABSENCE means "not measured", never 0: pub_* / recv_* / *_max_dt_ms keys appear only when
-///    the matching text line would — a Humble probe never claims `pub_intra_hz` it cannot see
+///    the matching text line would, a Humble probe never claims `pub_intra_hz` it cannot see
 ///    stalls behind, and a gap that was not tracked is not a gap of zero.
 ///  - `topics` / `nodes` / `warns` are ALWAYS present (empty arrays when empty): a sidecar's
 ///    `.warns[]` must not need null guards, and "checked, none" is a different statement from
@@ -73,7 +73,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 ///    text↔jsonl diff of one window differs only in structure, never in value.
 ///  - `warns` carries STRUCTURED warnings (numbers as JSON numbers); the text WARN line is
 ///    reconstructible via renderWarnLine, and an unbounded max_hz is expressed by omitting the
-///    key (JSON has no Infinity literal — RFC 8259 forbids it).
+///    key (JSON has no Infinity literal, RFC 8259 forbids it).
 ///  - Topic/node names come from USER code: escaped per RFC 8259 (quote, backslash, control
 ///    chars) so a hostile name can never break the one-object-per-line framing.
 ///
@@ -86,7 +86,7 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
 /// @brief Per-process default output path: `$TMPDIR/topic_freq.<pid>.log`, `/tmp` fallback.
 ///
 /// Embedding the pid stops every LD_PRELOADed process from appending to one shared file. Kept as
-/// a pure function of its arguments so the derivation is testable without spawning a process —
+/// a pure function of its arguments so the derivation is testable without spawning a process,
 /// the probe passes `getenv("TMPDIR")` as @p tmpdir. Only an absolute @p tmpdir is honoured
 /// (trailing slashes normalized); anything else falls back to `/tmp`, because the probe runs
 /// inside arbitrary processes whose cwd is unknown.

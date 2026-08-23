@@ -42,7 +42,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 
     for (const auto& s : stats) {
         // Publish-side line, reading the genuine publish counter (split buckets, issue #1). The
-        // emit decision — incl. the idle-topic suppression gated by emit_idle (issue #7) — lives
+        // emit decision, incl. the idle-topic suppression gated by emit_idle (issue #7), lives
         // in the core registry so it has one home and stays unit-testable.
         if (TopicRegistry::shouldEmitTopic(s, emit_idle)) {
             out += "TOPIC ";
@@ -51,7 +51,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += sprintfStr("%.6f", s.pub_inter_hz);
             out += '\n';
         }
-        // Publish-side intra line (iron+: the rclcpp_intra_publish tracepoint) — ADDITIVE,
+        // Publish-side intra line (iron+: the rclcpp_intra_publish tracepoint), ADDITIVE,
         // like RECV, so legacy TOPIC parsers stay valid. Emitted only when intra publishes
         // happened this window (impossible on humble: the tracepoint doesn't exist there).
         if (s.pub_intra_count > 0) {
@@ -66,7 +66,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
         // Publish-side gap line (ROADMAP R5), only when gap tracking is on and this endpoint has
         // ever published. A NEW line kind rather than fields appended to TOPIC/PUB/RECV: several
         // in-tree parsers anchor those with '$', so appending would break them silently.
-        // Milliseconds at 3dp, not the %.6f Hz convention — 1 us is the physical floor here
+        // Milliseconds at 3dp, not the %.6f Hz convention, 1 us is the physical floor here
         // (the clock read itself is ~21 ns and scheduler noise is microseconds), and %.6f would
         // print three guaranteed-zero bytes on every stalled line.
         if (s.has_pub_max_dt) {
@@ -78,7 +78,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
         }
         // Additive receive-side line incl. intra-process, independent of the publish counter so
         // a same-process pub+sub is not double-counted. Proven receive endpoints emit an
-        // explicit zero line when idle — stall visibility (KNOWN_ISSUES #12).
+        // explicit zero line when idle, stall visibility (KNOWN_ISSUES #12).
         if (TopicRegistry::shouldEmitRecv(s)) {
             out += "RECV ";
             out += s.topic;
@@ -119,7 +119,7 @@ namespace {
 // RFC 8259 §7 string escaping for USER-CONTROLLED names (topics and nodes come from host
 // code): the two mandatory escapes (quote, backslash), the conventional two-char forms for the
 // common control characters, and \u00XX for the rest of C0. Everything >= 0x20 passes through
-// verbatim — jsonl is UTF-8 and multi-byte sequences need no escaping. Escaping '\n' is what
+// verbatim, jsonl is UTF-8 and multi-byte sequences need no escaping. Escaping '\n' is what
 // makes the one-object-per-LINE framing unbreakable by a hostile topic name.
 void appendJsonEscaped(std::string& out, const std::string& s) {
     for (const char c : s) {
@@ -144,7 +144,7 @@ void appendJsonEscaped(std::string& out, const std::string& s) {
     }
 }
 
-// Spec bounds render with %g — the same conversion formatBound() uses for the text WARN line
+// Spec bounds render with %g, the same conversion formatBound() uses for the text WARN line
 // ("expected=[18,22]"), so a bound reads identically in both formats.
 void appendJsonBound(std::string& out, double v) {
     out += sprintfStr("%g", v);
@@ -161,7 +161,7 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
 
     // ts_ns as a decimal STRING: ~1.8e18 exceeds 2^53-1, so as a JSON number every IEEE-754-
     // double consumer (JavaScript, jq) silently corrupts the low digits. OTLP/JSON encodes
-    // timeUnixNano — and every (u)int64 — as a decimal string for exactly this reason
+    // timeUnixNano, and every (u)int64, as a decimal string for exactly this reason
     // (RFC 8259 §6 interop note); we follow that precedent rather than invent our own.
     out += "{\"ts_ns\":\"";
     out += sprintfStr("%lld", ts_ns);
@@ -189,7 +189,7 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
         out += "{\"topic\":\"";
         appendJsonEscaped(out, s.topic);
         out += '"';
-        // Key ABSENCE means "not measured", never 0 — the same statement the text format makes
+        // Key ABSENCE means "not measured", never 0, the same statement the text format makes
         // by not printing a line. The pub pair covers both TOPIC and the additive PUB line
         // (unlike text, intra is included even at 0.0: "no intra publishes observed" is a
         // genuine count, and a fixed pair keeps the pub schema one shape).
@@ -207,11 +207,11 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
             // Constant true under today's gate (traffic implies a proven endpoint), but kept
             // as an explicit key so the recv group stays self-describing if the gate ever
             // loosens (an EMIT_IDLE-style opt-in for never-active subscriptions would carry
-            // false here) — additive evolution instead of a schema break.
+            // false here), additive evolution instead of a schema break.
             out += ",\"recv_endpoint_seen\":true";
         }
         // Mirrors has_pub_max_dt / has_recv_max_dt exactly (R5): a probe without gap tracking
-        // must not report a gap of 0.0 ms — that claims "perfectly smooth", which is how a
+        // must not report a gap of 0.0 ms, that claims "perfectly smooth", which is how a
         // stall would hide from a max_gap_ms sidecar rule.
         if (s.has_pub_max_dt) {
             out += ",\"pub_max_dt_ms\":";
@@ -254,7 +254,7 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
                 out += sprintfStr("%.6f", w.hz);
                 out += ",\"min_hz\":";
                 appendJsonBound(out, w.min_hz);
-                // RFC 8259 has no Infinity literal; an unbounded max OMITS the key —
+                // RFC 8259 has no Infinity literal; an unbounded max OMITS the key,
                 // absence-means-unbounded, consistent with the gap-field absence semantics.
                 if (!std::isinf(w.max_hz)) {
                     out += ",\"max_hz\":";
@@ -287,8 +287,8 @@ auto defaultOutputPath(long pid, const char* tmpdir) -> std::string {
     // POSIX default: honour TMPDIR, fall back to /tmp. The probe runs inside arbitrary
     // processes, so the only defensible default is a directory that exists and is writable on
     // an unconfigured machine. A relative TMPDIR is ignored rather than obeyed: cwd is unknown
-    // (and often unwritable) inside a preloaded host, so a relative path would scatter logs —
-    // or open-failures — across whatever directory each process happens to sit in.
+    // (and often unwritable) inside a preloaded host, so a relative path would scatter logs,
+    // or open-failures, across whatever directory each process happens to sit in.
     std::string dir = "/tmp";
     if (tmpdir != nullptr && tmpdir[0] == '/') {
         dir = tmpdir;

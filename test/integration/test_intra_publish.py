@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
 # Publish-side intra-process integration test (ROADMAP R3). The rclcpp_intra_publish tracepoint
-# exists on jazzy and newer only — on humble the probe simply exports an extra never-called
+# exists on jazzy and newer only, on humble the probe simply exports an extra never-called
 # symbol and intra rates stay receive-side, so this test skips there.
 
 import os
@@ -32,7 +32,7 @@ def test_publish_side_intra_rate_reported():
         rates = [float(m.group(3)) for m in _PUB_RE.finditer(text)
                  if m.group(1) == "/intra_topic"]
         assert rates, (
-            "no PUB line for /intra_topic — publish-side intra not counted (ROADMAP R3)"
+            "no PUB line for /intra_topic, publish-side intra not counted (ROADMAP R3)"
             f"\n--- log ---\n{text}")
         got = max(rates)
         assert 50.0 * 0.7 <= got <= 50.0 * 1.3, (

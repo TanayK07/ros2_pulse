@@ -1,8 +1,8 @@
 """Parse the probe's jsonl windows and keep rolling per-topic state.
 
 Schema contract (probe CHANGELOG 0.3.0, README "JSON Lines output"): ts_ns is a
-decimal string (int64-safe), an ABSENT per-topic key means "not measured" — never
-zero — and topics/nodes/warns are always present. This module preserves that
+decimal string (int64-safe), an ABSENT per-topic key means "not measured", never
+zero, and topics/nodes/warns are always present. This module preserves that
 absence-vs-zero distinction with Optionals; rendering absence as 0.0 would claim
 a measurement the probe deliberately withheld.
 """
@@ -113,7 +113,7 @@ class TopicState:
     warn_kind: str | None = None
     # Timestamp of the newest window this topic appeared in, and that window's
     # period. The probe omits silent topics per window, so "absent" is a
-    # statement — the view renders a topic older than ~1.5 windows as STALE
+    # statement, the view renders a topic older than ~1.5 windows as STALE
     # instead of repeating the old rate as if current (PR #32 review). Age is
     # measured in TIME, never in windows counted: windows from every probed
     # process interleave in a shared log, so "3 windows ago" says nothing
@@ -121,7 +121,7 @@ class TopicState:
     last_ts_ns: int = 0
     window_s: float = 0.0
     # Timestamp of the last rate_history sample. One sample per window PERIOD,
-    # whichever process's window arrives first in it — twenty subscribers
+    # whichever process's window arrives first in it, twenty subscribers
     # flushing /tf_static in the same period are one data point, not twenty.
     hist_ts_ns: int = 0
 
@@ -143,7 +143,7 @@ def _merge_sides(into: TopicWindow, tw: TopicWindow) -> None:
 
     One process publishes /tf_static; twenty receive it. Each process's window
     carries only its own side, so a recv-only window must refresh the recv
-    fields and leave the pub fields — learned from the publisher's window —
+    fields and leave the pub fields, learned from the publisher's window,
     untouched. Absence of a whole side is "this process had no such endpoint",
     not "the rate is now unknown".
     """
@@ -165,7 +165,7 @@ class StatsState:
         self.topics: dict[str, TopicState] = {}
         self.nodes: dict[str, bool] = {}
         self.warns: list[Warn] = []
-        # (ts_ns_when_fired, warn) — bounded retention so a one-window
+        # (ts_ns_when_fired, warn), bounded retention so a one-window
         # transient (a single stall) stays readable with an age instead of
         # blinking for one window period (PR #32 review).
         self.recent_warns: deque = deque(maxlen=50)
@@ -200,7 +200,7 @@ class StatsState:
         for w in window.warns:
             self.recent_warns.append((window.ts_ns, w))
 
-        # Presence and warns are questions about NAMES — answer them with name
+        # Presence and warns are questions about NAMES, answer them with name
         # sets, never record equality (PR #32 review: dataclass float-equality
         # here silently changes behavior on the first TopicWindow schema change).
         warned = {w.topic: w.kind for w in window.warns if w.topic}

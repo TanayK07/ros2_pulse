@@ -21,10 +21,10 @@ def test_final_partial_window_flushed_at_exit():
     """KNOWN_ISSUES #9 (deterministic regression): the tail window survives exit.
 
     With period=1.0 and a ~2.5 s run, the periodic flushes cover the first N whole seconds and
-    the remainder is counted but — on the buggy code — never written: the Meyers-singleton
+    the remainder is counted but, on the buggy code, never written: the Meyers-singleton
     destructor chain joins the flush thread without a final flush. Fixed code appends one last
     partial window at exit, whose measured window_s is well under the period (issue #8's
-    measured denominator keeps its Hz honest).
+    measured denominator keeps its Hz correct).
     """
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "final.log")
@@ -54,7 +54,7 @@ def test_exit_with_straggler_tracepoints_is_clean():
                                  stderr=subprocess.DEVNULL)
             rc = p.wait(timeout=15)
             assert rc == 0, (
-                f"iteration {i}: exit_storm exited rc={rc} — shutdown crash in the probe "
+                f"iteration {i}: exit_storm exited rc={rc}, shutdown crash in the probe "
                 f"(KNOWN_ISSUES #9)")
 
 

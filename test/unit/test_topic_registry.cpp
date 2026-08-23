@@ -117,7 +117,7 @@ TEST(TopicRegistry, SameProcessPubAndSubDoNotDoubleCount) {
     auto snap = reg.snapshot(1.0);
     const auto* s = findTopic(snap, "/odom");
     ASSERT_NE(s, nullptr);
-    // Publish and inter-receive are independent measurements — each exactly N, NOT one bucket of 2N.
+    // Publish and inter-receive are independent measurements, each exactly N, NOT one bucket of 2N.
     EXPECT_EQ(s->pub_inter_count, static_cast<uint64_t>(N));
     EXPECT_EQ(s->recv_inter_count, static_cast<uint64_t>(N));
     EXPECT_EQ(s->recv_intra_count, 0u);
@@ -231,7 +231,7 @@ TEST(TopicRegistry, NodeTracking) {
     EXPECT_EQ(nodes[1], "/nav/planner");
 }
 
-// --- Issue #2: node liveness — dedup + activity-based quiet detection ---
+// --- Issue #2: node liveness, dedup + activity-based quiet detection ---
 
 // Re-initializing the same node name must not create a duplicate entry.
 TEST(TopicRegistry, DuplicateNodeInitDeduped) {

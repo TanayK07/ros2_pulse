@@ -3,7 +3,7 @@
 Runs `pulse-top` headlessly against the demo writer (same source as the README GIF),
 exports one Textual screenshot per demo window, rasterizes to 1920 px PNGs under
 public/frames/, and writes src/frames.json with the indices of the frames that carry a
-/scan stall (red row) and the Warns tab — detected from pixels, not assumed from timing,
+/scan stall (red row) and the Warns tab, detected from pixels, not assumed from timing,
 because the demo's window/frame offset drifts by one between runs.
 
 Usage (from tools/pulse-top, with its venv):
@@ -35,7 +35,7 @@ from textual.widgets import TabbedContent  # noqa: E402
 from pulse_top.app import PulseTopApp  # noqa: E402
 from pulse_top.demo import start_demo_writer  # noqa: E402
 
-BAD = (0xF2, 0x7D, 0x72)  # pulse_top.app BAD — a stalled /scan row is painted with it
+BAD = (0xF2, 0x7D, 0x72)  # pulse_top.app BAD, a stalled /scan row is painted with it
 
 
 def has_color(png: Path, rgb: tuple[int, int, int], box: tuple[int, int, int, int], tol: int = 18) -> bool:
@@ -72,13 +72,13 @@ async def main() -> None:
             for _ in range(10):
                 await pilot.pause(0.1)
 
-    # Topic column = left ~25 % of the table; the six demo rows sit at y 160–340 at 1920 px.
+    # Topic column = left ~25 % of the table; the six demo rows sit at y 160-340 at 1920 px.
     stall = [n for n in names[:N_TOPICS_FRAMES] if has_color(FRAMES / f"{n}.png", BAD, (0, 160, 500, 340))]
     warns = names[N_TOPICS_FRAMES:]
     META.write_text(json.dumps({"all": names, "stall": stall, "warns": warns}, indent=1) + "\n")
     print(f"frames={len(names)} stall={stall} warns={warns}")
     if not stall:
-        raise SystemExit("no stall frame detected — the demo loop did not reach windows 10–11 in the capture")
+        raise SystemExit("no stall frame detected, the demo loop did not reach windows 10-11 in the capture")
 
 
 asyncio.run(main())

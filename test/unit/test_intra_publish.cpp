@@ -26,7 +26,7 @@ auto findTopic(const std::vector<sTopicStat>& v, const std::string& t) -> const 
 
 }  // namespace
 
-// Intra publishes land in their own bucket — never in pub_inter (rate inflation) and never in
+// Intra publishes land in their own bucket, never in pub_inter (rate inflation) and never in
 // the receive buckets (that's the subscription side's signal).
 TEST(IntraPublish, CountedInOwnBucket) {
     TopicRegistry reg;
@@ -59,7 +59,7 @@ TEST(IntraPublish, ExactTotalsAlternatingTransports) {
     EXPECT_EQ(s->pub_intra_count, 500u);
 }
 
-// An intra-only publisher is ACTIVE — it must not be treated as fully idle by the TOPIC-line
+// An intra-only publisher is ACTIVE, it must not be treated as fully idle by the TOPIC-line
 // policy (its rate is carried on the additive PUB line; the opt-in idle zero-line must not
 // fire for it either).
 TEST(IntraPublish, IntraOnlyPublisherIsNotIdle) {

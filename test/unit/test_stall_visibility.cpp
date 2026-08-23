@@ -1,7 +1,7 @@
 // Copyright 2026 ros2_pulse contributors
 //
 // Unit tests for stalled-subscription visibility (KNOWN_ISSUES #12): a topic whose subscription
-// has delivered at least once must keep being reported when traffic stops — "active then
+// has delivered at least once must keep being reported when traffic stops, "active then
 // stopped" is signal, unlike "declared but never active" (issue #7 noise). Registers into the
 // shared test binary (no main()).
 
@@ -54,7 +54,7 @@ TEST(StallVisibility, StalledSubscriptionStillReported) {
     EXPECT_TRUE(s->recv_endpoint_seen) << "resolved subscription lost across windows";
 }
 
-// A subscription that never delivered a single message is NOT a proven endpoint — reporting it
+// A subscription that never delivered a single message is NOT a proven endpoint, reporting it
 // at 0.0 would conflate a mis-wired/never-active topic with a genuine stall (issue #7 rationale).
 TEST(StallVisibility, NeverDeliveredSubscriptionNotMarked) {
     TopicRegistry reg;

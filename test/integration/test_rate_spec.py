@@ -2,7 +2,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
-# Expected-rate alerting integration (ROADMAP R1): a real probed talker against a spec file —
+# Expected-rate alerting integration (ROADMAP R1): a real probed talker against a spec file,
 # WARN lines appear when the spec is violated, stay absent when satisfied, the first window is
 # grace-skipped, and the pulse-check CLI reproduces the verdict offline with the right exit
 # codes. Distro-independent (uses only inter-process publish rates).
@@ -64,7 +64,7 @@ def pulse_check_path():
 
 
 def test_underrate_topic_warns_with_first_window_grace():
-    """50 Hz talker vs min_hz 80: WARN TOPIC lines appear — but never in the first window."""
+    """50 Hz talker vs min_hz 80: WARN TOPIC lines appear, but never in the first window."""
     with tempfile.TemporaryDirectory() as d:
         spec = _write(d, "spec.yaml", FAILING_SPEC)
         out = os.path.join(d, "warn.log")
@@ -73,7 +73,7 @@ def test_underrate_topic_warns_with_first_window_grace():
         warns = _warn_lines(text)
         assert any(w.startswith("WARN TOPIC /chatter hz=") and "expected=[80,inf]" in w
                    for w in warns), f"no under-rate WARN for /chatter\n--- log ---\n{text}"
-        # Foreign endpoints/nodes are another process's business — the probe must not warn.
+        # Foreign endpoints/nodes are another process's business, the probe must not warn.
         assert not any("/ghost" in w for w in warns), f"probe warned about a foreign topic\n{text}"
         assert not any("/some_other_process_node" in w for w in warns), (
             f"probe warned about a foreign node\n{text}")
@@ -85,7 +85,7 @@ def test_underrate_topic_warns_with_first_window_grace():
 
 
 def test_exit_flush_window_is_not_alert_judged():
-    """The final atexit window is logged but never judged — a healthy stop must not alert.
+    """The final atexit window is logged but never judged, a healthy stop must not alert.
 
     The tail window is truncated by process exit, so count/window_s over a sliver is a one- or
     two-sample estimate that swings in both directions (and reads 0 Hz when the sliver caught no
@@ -99,7 +99,7 @@ def test_exit_flush_window_is_not_alert_judged():
                              extra_env={"ROS_TOPIC_STATS_EXPECTED": spec})
         blocks = _windows_blocks(text)
         assert len(blocks) >= 3, f"need >=3 windows (first, interior, exit)\n{text}"
-        # an interior window must warn — otherwise the test proves nothing
+        # an interior window must warn, otherwise the test proves nothing
         assert any(ln.startswith("WARN ") for ln in blocks[1]), (
             f"interior window should have warned\n--- block 1 ---\n" + "\n".join(blocks[1]))
         assert not any(ln.startswith("WARN ") for ln in blocks[-1]), (

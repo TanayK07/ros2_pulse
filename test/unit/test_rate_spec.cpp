@@ -1,7 +1,7 @@
 // Copyright 2026 ros2_pulse contributors
 //
 // Unit tests for the expected-rate spec: the restricted-YAML parser and the flush-time
-// evaluator that turns one window's stats into WARN lines (ROADMAP R1). Pure — no ROS, no
+// evaluator that turns one window's stats into WARN lines (ROADMAP R1). Pure, no ROS, no
 // I/O. Registers into the shared test binary (no main()).
 
 #include <gtest/gtest.h>
@@ -89,7 +89,7 @@ TEST(RateSpecParse, BlockNodesCommentsAndPubSide) {
     EXPECT_EQ(spec->nodes[1], "/rectifier");
 }
 
-// Windows-authored specs must parse. A leading UTF-8 BOM is a signature, not content — and its
+// Windows-authored specs must parse. A leading UTF-8 BOM is a signature, not content, and its
 // bytes render invisibly, so without the strip the error reads "unknown top-level entry
 // 'topics:'", indistinguishable from the correct spelling, and alerting silently turns off.
 TEST(RateSpecParse, LeadingUtf8BomIgnored) {
@@ -158,7 +158,7 @@ TEST(RateSpecParse, RejectsMalformedInput) {
     EXPECT_FALSE(parseRateSpec("  /x: {min_hz: 1}\n", err).has_value());  // rule outside topics:
 }
 
-// One topic may carry several rules as long as they measure different things — constraining both
+// One topic may carry several rules as long as they measure different things, constraining both
 // ends of a topic ("the driver publishes ~20 Hz AND we receive ~20 Hz") is a first-class spec.
 // Rules that measure the SAME thing are still a copy-paste error.
 TEST(RateSpecParse, TwoSidedRulesOnOneTopic) {
@@ -249,8 +249,8 @@ TEST(RateSpecEval, SideAndTransportSelection) {
 // pub + any takes the LARGER bucket, not the sum: on iron+ one publish() fires
 // rclcpp_intra_publish AND rcl_publish for the same message whenever a non-intra subscriber is
 // matched (or the QoS is TransientLocal on jazzy+), so both pub buckets carry the same produce
-// rate. Summing would report 2x and invert max_hz. recv is unaffected — its buckets are
-// disjoint deliveries — and that must stay true.
+// rate. Summing would report 2x and invert max_hz. recv is unaffected, its buckets are
+// disjoint deliveries, and that must stay true.
 TEST(RateSpecEval, PubAnyTakesMaxNotSumAcrossTransports) {
     std::string err;
     auto spec = parseRateSpec("topics:\n  /image: {min_hz: 45, max_hz: 55, side: pub}\n", err);
@@ -258,7 +258,7 @@ TEST(RateSpecEval, PubAnyTakesMaxNotSumAcrossTransports) {
 
     // Both tracepoints fired for one 50 Hz stream (IPC on, mixed subscribers): 50, not 100.
     EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 50.0, 50.0)}, {}, {}).empty());
-    // Only the intra path fired (all subscribers in-process — rcl_publish never called).
+    // Only the intra path fired (all subscribers in-process, rcl_publish never called).
     EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 0.0, 50.0)}, {}, {}).empty());
     // Only the RMW path fired (intra-process comms off).
     EXPECT_TRUE(evaluateRateSpec(*spec, {pubStat("/image", 50.0, 0.0)}, {}, {}).empty());
@@ -276,7 +276,7 @@ TEST(RateSpecEval, PubAnyTakesMaxNotSumAcrossTransports) {
     EXPECT_EQ(summed[0], "WARN TOPIC /points hz=30.000000 expected=[5,25]");
 }
 
-// Probe mode: a spec topic this process doesn't host is another process's business — no
+// Probe mode: a spec topic this process doesn't host is another process's business, no
 // warning. pulse-check mode (missing_as_zero) owns the whole picture: it warns at 0 Hz.
 TEST(RateSpecEval, MissingTopicSkippedUnlessMissingAsZero) {
     std::string err;
@@ -380,7 +380,7 @@ TEST(RateSpecEval, GapWarnLineAndDualViolation) {
     in_range.has_recv_max_dt = true;
     EXPECT_TRUE(evaluateRateSpec(*spec, {in_range}, {}, {}).empty());
 
-    // healthy mean rate, but a freeze — exactly the case a windowed mean cannot see
+    // healthy mean rate, but a freeze, exactly the case a windowed mean cannot see
     auto frozen = recvStat("/scan", 50.0, 0.0);
     frozen.recv_max_dt_ms = 812.4;
     frozen.has_recv_max_dt = true;
@@ -439,7 +439,7 @@ using ros2_pulse::core::eWarnKind;
 using ros2_pulse::core::renderWarnLine;
 using ros2_pulse::core::sRateWarning;
 
-// The structured evaluator carries every number the text line renders — a sidecar thresholds
+// The structured evaluator carries every number the text line renders, a sidecar thresholds
 // on warn.hz directly instead of regexing "hz=1.200000" back out of our own sentence.
 TEST(RateSpecEval, StructuredWarningsCarryTheNumbers) {
     std::string err;
@@ -473,7 +473,7 @@ TEST(RateSpecEval, StructuredWarningsCarryTheNumbers) {
     EXPECT_EQ(warns[2].name, "/planner");
 }
 
-// An unbounded max_hz stays infinity in the struct — the jsonl emitter turns that into an
+// An unbounded max_hz stays infinity in the struct, the jsonl emitter turns that into an
 // omitted key, and renderWarnLine into the literal 'inf'.
 TEST(RateSpecEval, StructuredUnboundedMaxStaysInfinity) {
     std::string err;

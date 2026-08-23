@@ -90,7 +90,7 @@ TEST(WindowFormat, IdleTopicZeroLineRestoredByOptIn) {
     EXPECT_EQ(got, want);
 }
 
-// Publish-side intra traffic (jazzy+, rclcpp_intra_publish) renders the ADDITIVE `PUB` line —
+// Publish-side intra traffic (jazzy+, rclcpp_intra_publish) renders the ADDITIVE `PUB` line,
 // the legacy TOPIC line format stays untouched so existing parsers keep working. An intra-only
 // publisher gets a PUB line and no TOPIC line.
 TEST(WindowFormat, IntraPublisherEmitsAdditivePubLine) {
@@ -111,7 +111,7 @@ TEST(WindowFormat, IntraPublisherEmitsAdditivePubLine) {
 }
 
 // A stalled subscription (delivered once, then upstream died) must render an explicit RECV
-// zero line every window (KNOWN_ISSUES #12) — while its TOPIC line stays idle-suppressed.
+// zero line every window (KNOWN_ISSUES #12), while its TOPIC line stays idle-suppressed.
 TEST(WindowFormat, StalledTopicEmitsRecvZeroLine) {
     sTopicStat s;
     s.topic = "/scan";
@@ -129,7 +129,7 @@ TEST(WindowFormat, StalledTopicEmitsRecvZeroLine) {
 }
 
 // Expected-rate warnings (ROADMAP R1) render verbatim after the NODE lines, before the blank
-// line — additive, so TOPIC/PUB/RECV/NODE parsers never see a changed prefix.
+// line, additive, so TOPIC/PUB/RECV/NODE parsers never see a changed prefix.
 TEST(WindowFormat, WarningsRenderAfterNodes) {
     std::vector<sTopicStat> stats = {stat("/scan", 6, 0, 0, 1.2, 0.0, 0.0)};
     std::vector<std::string> nodes = {"/perception"};
@@ -168,7 +168,7 @@ TEST(WindowFormat, NodesOnlyWindow) {
 // The default must be a path that exists and is writable on an arbitrary machine. The previous
 // default, /root/ssd2tb/logs/, was the original field-test box's SSD mount: on every other
 // system the directory doesn't exist, so a fresh install silently dropped every window (the
-// probe warns once on stderr and keeps running — correct fail-safe behaviour, wrong default).
+// probe warns once on stderr and keeps running, correct fail-safe behaviour, wrong default).
 // Even test/orin/run_orin_probe_test.sh had to special-case it. POSIX's answer is TMPDIR with a
 // /tmp fallback; the caller passes TMPDIR in so this stays a pure function of its arguments.
 TEST(WindowFormat, DefaultOutputPathEmbedsPid) {
@@ -182,7 +182,7 @@ TEST(WindowFormat, DefaultOutputPathHonoursTmpdir) {
     EXPECT_EQ(defaultOutputPath(7, "/run/user/1000"), "/run/user/1000/topic_freq.7.log");
     // Trailing slashes are the most common TMPDIR spelling mistake; never emit '//'.
     EXPECT_EQ(defaultOutputPath(7, "/scratch/"), "/scratch/topic_freq.7.log");
-    // Unset or empty TMPDIR falls back to /tmp; a relative TMPDIR is rejected too — the probe
+    // Unset or empty TMPDIR falls back to /tmp; a relative TMPDIR is rejected too, the probe
     // runs inside arbitrary processes whose cwd is unknown and possibly unwritable, so a
     // relative path would scatter logs (or open-failures) across random directories.
     EXPECT_EQ(defaultOutputPath(7, nullptr), "/tmp/topic_freq.7.log");

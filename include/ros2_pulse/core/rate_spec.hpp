@@ -19,7 +19,7 @@ namespace ros2_pulse::core {
 enum class eRateSide { kRecv, kPub };
 
 /// Which transport's rate a rule constrains. kAny is the topic's rate however it travels: recv
-/// sums the two (disjoint) buckets, pub takes the larger — one publish() can fire both the
+/// sums the two (disjoint) buckets, pub takes the larger, one publish() can fire both the
 /// intra-process and the RMW tracepoint for the same message (iron+), so summing would double it.
 enum class eRateTransport { kAny, kInter, kIntra };
 
@@ -32,7 +32,7 @@ struct sRateRule {
     /// Largest tolerated inter-arrival gap, milliseconds; infinity means unconstrained. This is
     /// the detector a windowed mean cannot be: at 50 Hz a `min_hz: 45` rule needs >0.5 s of dead
     /// time to fire, so a 400 ms freeze reports 46 Hz and passes. Requires gap tracking
-    /// (ROADMAP R5) — a spec carrying this key turns it on.
+    /// (ROADMAP R5), a spec carrying this key turns it on.
     double max_gap_ms{std::numeric_limits<double>::infinity()};
 };
 
@@ -45,7 +45,7 @@ struct sRateSpec {
 
 /// @brief Parse the restricted-YAML expected-rate spec (ROS_TOPIC_STATS_EXPECTED).
 ///
-/// Accepted grammar — a deliberate, documented YAML subset so the LD_PRELOAD probe needs no
+/// Accepted grammar, a deliberate, documented YAML subset so the LD_PRELOAD probe needs no
 /// YAML library (see README "Expected-rate alerting"):
 /// @code
 /// # comments and blank lines anywhere
@@ -66,11 +66,11 @@ struct sRateSpec {
 /// least one of min_hz / max_hz / max_gap_ms. Unknown keys, malformed numbers, min_hz > max_hz,
 /// a key repeated within one rule, or two rules measuring the same thing (same topic + side +
 /// transport) are hard errors. A topic MAY appear more than once when the rules constrain
-/// different endpoints — "publishes at 20 Hz and we receive it at 20 Hz" is one spec.
+/// different endpoints, "publishes at 20 Hz and we receive it at 20 Hz" is one spec.
 ///
 /// @param text  the spec file contents.
 /// @param error on failure, receives "line N: <reason>".
-/// @return the parsed spec, or std::nullopt on any error (the probe then runs unspecced —
+/// @return the parsed spec, or std::nullopt on any error (the probe then runs unspecced,
 ///         a bad spec must never take the host process down).
 auto parseRateSpec(const std::string& text, std::string& error) -> std::optional<sRateSpec>;
 
@@ -83,13 +83,13 @@ constexpr size_t kMaxSpecBytes = 1u << 20;  // 1 MiB
 /// Refuses, before reading a byte, anything that is not a regular file under @ref kMaxSpecBytes.
 /// The probe loads specs inside a tracepoint-reached constructor, so an operator typo in
 /// ROS_TOPIC_STATS_EXPECTED must not be able to stall or balloon the host process:
-///   - a FIFO would block forever in open() — with O_NONBLOCK it is rejected instead;
+///   - a FIFO would block forever in open(), with O_NONBLOCK it is rejected instead;
 ///   - a directory opens fine but reads EISDIR, yielding empty text that parses as a valid
 ///     zero-rule spec (alerting silently armed as a permanent no-op);
 ///   - /dev/urandom and /dev/zero never signal EOF, so an unbounded read loop never terminates;
 ///   - a mistyped rosbag path (run1.bag vs run1.yaml) costs seconds of startup and GBs of RSS
 ///     in EVERY preloaded process before the parse rejects it.
-/// This bounds RSS and startup latency. It is deliberately NOT a no-throw guarantee — it fills a
+/// This bounds RSS and startup latency. It is deliberately NOT a no-throw guarantee, it fills a
 /// std::string, and parseRateSpec allocates too; the surrounding ctor already can throw.
 ///
 /// Shared verbatim by the probe and the pulse-check CLI, so `pulse-check --spec /dev/zero` in a
@@ -105,7 +105,7 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
 /// @endcode
 ///
 /// A spec topic with no entry in @p stats, or a spec node absent from @p known_nodes, belongs
-/// to some OTHER process and is skipped — unless @p missing_as_zero is set (pulse-check mode,
+/// to some OTHER process and is skipped, unless @p missing_as_zero is set (pulse-check mode,
 /// where the log set IS the whole picture): then a missing topic is evaluated at 0 Hz and a
 /// missing node is warned about. Node warnings fire for known-but-inactive nodes (aged out by
 /// the liveness window).
@@ -124,7 +124,7 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
     -> std::vector<std::string>;
 
 /// What a single warning is about (ROADMAP R6: the jsonl emitter needs warnings as DATA, not
-/// preformatted strings — a sidecar exporter should never have to regex our own WARN lines).
+/// preformatted strings, a sidecar exporter should never have to regex our own WARN lines).
 enum class eWarnKind {
     kTopicRate,    ///< observed hz outside [min_hz, max_hz]
     kTopicGap,     ///< observed max inter-arrival gap above max_gap_ms
@@ -148,7 +148,7 @@ struct sRateWarning {
     double max_gap_ms{std::numeric_limits<double>::infinity()};
 };
 
-/// @brief Structured twin of evaluateRateSpec: same evaluation, same order, same semantics —
+/// @brief Structured twin of evaluateRateSpec: same evaluation, same order, same semantics,
 /// but returns data instead of rendered lines. evaluateRateSpec is a thin wrapper that maps
 /// renderWarnLine over this result, so the two can never disagree.
 auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
@@ -159,7 +159,7 @@ auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicSta
     -> std::vector<sRateWarning>;
 
 /// @brief Render one structured warning as the exact text WARN line (no trailing '\n') the
-/// probe has always emitted — grammar pinned by the R1 unit tests:
+/// probe has always emitted, grammar pinned by the R1 unit tests:
 /// @code
 /// WARN TOPIC <name> hz=<%.6f> expected=[<min>,<max>]      // bounds via %g, 'inf' when unbounded
 /// WARN TOPIC <name> max_dt_ms=<%.3f> expected_max_gap_ms=<%g>

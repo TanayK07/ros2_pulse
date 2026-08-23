@@ -25,7 +25,7 @@ export const LAUNCH_DURATION_FRAMES =
   Object.values(SCENES).reduce((a, b) => a + b, 0) - N_TRANSITIONS * T;
 
 // Bed: "Digital Cobalt (Synthwave)" by AvigeiaAvetian, Pixabay Content License (no attribution,
-// no redistribution of the file itself — so public/music/ is gitignored; see README).
+// no redistribution of the file itself, so public/music/ is gitignored; see README).
 const MUSIC_GAIN = 0.22;
 const FADE_IN = 20;
 const FADE_OUT = 75;

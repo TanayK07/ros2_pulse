@@ -4,7 +4,7 @@
 //   talker     : publishes std_msgs/String on /chatter at 50 Hz (separate process)
 //   stall_pub <ms> <at_s> : same, but freezes the executor once mid-run for <ms> (ROADMAP R5)
 //   listener   : subscribes /chatter (separate process)          -> inter-process receive
-//   talker_fixed / listener_fixed : same pair on /chatter_fixed with std_msgs/UInt64 — a
+//   talker_fixed / listener_fixed : same pair on /chatter_fixed with std_msgs/UInt64, a
 //                FIXED-SIZE (self-contained) type, so CycloneDDS+iceoryx is allowed to carry
 //                it over shared memory; String would silently fall back to loopback UDP and
 //                the RMW-matrix SHM leg (test/rmw/) would prove nothing.
@@ -62,7 +62,7 @@ private:
 
 // Like Talker, but freezes the executor once, mid-run, by sleeping INSIDE the timer callback.
 // Under the default single-threaded spin this blocks everything, so publishing stops for exactly
-// the requested duration — deterministic, unlike killing a process and racing the flush boundary.
+// the requested duration, deterministic, unlike killing a process and racing the flush boundary.
 // The point is a stall a windowed mean cannot see: 800 ms out of a 5 s window at 50 Hz still
 // averages ~42 Hz, so a min_hz rule passes while the gap detector fires (ROADMAP R5).
 class StallTalker : public rclcpp::Node {
@@ -162,7 +162,7 @@ int main(int argc, char** argv) {
     if (mode == "fork_pub") {
         // fork()-without-exec hazard (KNOWN_ISSUES #10). Synthetic graph via direct interposer
         // calls: arm the probe, register a publisher, then fork. The CHILD publishes ~500
-        // messages over ~2.5 s and exits normally — its counts must appear in the output file
+        // messages over ~2.5 s and exits normally, its counts must appear in the output file
         // (periodic and/or final window). The parent publishes nothing and waits.
         //
         // Deliberately NO rclcpp::init in this mode: forking after rclcpp::init wedges the

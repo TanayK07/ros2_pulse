@@ -2,25 +2,25 @@
 //
 // Licensed under the Apache License, Version 2.0 (the "License").
 //
-// pulse-check: offline expected-rate verdict for probe logs (ROADMAP R1). No ROS dependency —
+// pulse-check: offline expected-rate verdict for probe logs (ROADMAP R1). No ROS dependency,
 // links only the pure ros2_pulse core, so watchdogs, CI jobs and systemd units can gate on it
 // anywhere the log files land.
 //
 //   pulse-check --spec <spec.yaml> [--skip-last] <log> [<log> ...]
 //
-// Reads BOTH on-disk formats — text and jsonl (ROS_TOPIC_STATS_FORMAT, ROADMAP R6) — via the
+// Reads BOTH on-disk formats, text and jsonl (ROS_TOPIC_STATS_FORMAT, ROADMAP R6), via the
 // shared parseLog, which sniffs the kind per line. Choosing the exporter-friendly format must
 // not cost an operator their CI/watchdog gating.
 //
 // Each log is one probed process (the per-PID default output). The verdict is computed from
-// the LAST window of every log — "the system's current state" — with per-topic rates summed
+// the LAST window of every log, "the system's current state", with per-topic rates summed
 // across logs (a publisher's process and a subscriber's process both report the same topic).
 // Node knowledge is the union over all windows, so a node that died mid-log is reported
 // missing rather than forgotten. Unlike the in-probe alerting, a spec topic that appears in
 // NO log is a violation here (0 Hz): the log set is the whole picture.
 //
 // Summing across logs is the publish-side truth (two publisher processes at 10 Hz do produce
-// 20 Hz) and, on the receive side, the DELIVERY rate — issue #1's per-topic semantic — so K
+// 20 Hz) and, on the receive side, the DELIVERY rate, issue #1's per-topic semantic, so K
 // subscriber processes on one topic report K x the publish rate. Bound `side: recv` with
 // min_hz for liveness; use `side: pub` when you mean the topic's message rate under a max_hz cap.
 //
@@ -49,7 +49,7 @@ using ros2_pulse::core::readSpecFile;
 using ros2_pulse::core::sTopicStat;
 
 // Logs are written by the probe itself and can legitimately be large (rotation caps them at
-// ROS_TOPIC_STATS_MAX_BYTES, default 10 MiB), so they keep the plain slurp — unlike the spec
+// ROS_TOPIC_STATS_MAX_BYTES, default 10 MiB), so they keep the plain slurp, unlike the spec
 // path, which is operator-supplied and goes through the bounded core helper.
 auto readFile(const char* path, std::string& out) -> bool {
     std::FILE* f = std::fopen(path, "r");
@@ -76,7 +76,7 @@ void addUnique(std::vector<std::string>& v, const std::string& s) {
 
 // Sum rate fields per topic across logs: each log is one process, and the system-wide rate of
 // a topic is what all its endpoints saw combined. On the recv side that is a DELIVERY rate which
-// scales with subscriber count (see the file header) — deliberate, and consistent with issue #1.
+// scales with subscriber count (see the file header), deliberate, and consistent with issue #1.
 void mergeStat(std::vector<sTopicStat>& stats, const sTopicStat& add) {
     for (auto& s : stats) {
         if (s.topic == add.topic) {
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
     // checked and healthy, exit 1 would send someone chasing a stall that was never measured.
     // Print every violation we DID measure first. An unmeasurable gap rule on one topic says
     // nothing about a measured failure on another, and swallowing those would report a broken
-    // stack as "bad input" — someone fixes the env var, reruns, and only then finds the fault.
+    // stack as "bad input", someone fixes the env var, reruns, and only then finds the fault.
     for (const auto& w : warnings) {
         std::printf("%s\n", w.c_str());
     }
@@ -210,7 +210,7 @@ int main(int argc, char** argv) {
         for (const auto& t : unmeasured) {
             std::fprintf(stderr,
                          "pulse-check: spec sets max_gap_ms for '%s' but the logs carry no "
-                         "JITTER line for it — was the probe run with "
+                         "JITTER line for it, was the probe run with "
                          "ROS_TOPIC_STATS_JITTER=1?\n",
                          t.c_str());
         }

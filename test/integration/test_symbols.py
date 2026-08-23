@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
 # Symbol-surface test (KNOWN_ISSUES #14): the LD_PRELOAD library's dynamic-symbol contract is
-# exactly the ros_trace_* interposers — nothing else may leak into every process on the robot.
+# exactly the ros_trace_* interposers, nothing else may leak into every process on the robot.
 
 import os
 import re
@@ -23,7 +23,7 @@ def test_only_interposers_exported():
     so, _ = ph.probe_paths()
     out = subprocess.check_output(["nm", "-D", "--defined-only", so], text=True)
     exported = [line.split()[-1] for line in out.splitlines() if line.strip()]
-    assert exported, "nm returned nothing — wrong path?"
+    assert exported, "nm returned nothing, wrong path?"
     leaked = [s for s in exported if not ALLOWED.match(s)]
     assert not leaked, (
         f"{len(leaked)} non-contract symbols leak from the preload library "

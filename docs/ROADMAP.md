@@ -1,188 +1,51 @@
 # Roadmap
 
-Defects live in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); this file tracks **features and positioning
-work** — things the probe doesn't do yet. Research grounding: ros2_tracing design docs + paper
-(Bédard et al., RA-L 2022), CARET (Tier IV), ROS 2 distro release notes.
+Feature work, numbered so commits, tests and the CHANGELOG can refer to an item (`ROADMAP R5`).
+The numbers are not priority order. Defects are tracked in [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
-Section numbers are stable (referenced from commits and CHANGELOG), so they are **not** priority
-order. Current order of work: **R5** (next — it closes a soundness hole in the R1 alerting we
-just shipped), then R6, then R2 if R5 hasn't already covered the need.
+## R1. Expected-rate spec and alerting (done, 0.2.0)
 
-## R1. Expected-rate spec + alerting — turns the logger into a monitor — **DONE**
+`ROS_TOPIC_STATS_EXPECTED` names a spec file (a documented YAML subset, no YAML library in the
+probe). Each flush window is checked against it and violations are written as `WARN TOPIC` /
+`WARN NODE` lines, with the first window and the atexit window skipped. `pulse-check` re-derives
+the verdict from a log with no ROS installed and exits 0/1/2. See README, "Expected-rate
+alerting".
 
-> Shipped: `ROS_TOPIC_STATS_EXPECTED` spec (documented YAML subset, no YAML lib in the probe),
-> flush-time `WARN TOPIC` / `WARN NODE` lines with first-window grace, and the no-ROS
-> `pulse-check` CLI (exit 0/1/2) re-deriving verdicts from raw log rates. See README
-> "Expected-rate alerting".
+Open: a `for: N` debounce so a rule fires only after N consecutive bad windows (R1.1).
 
-The headline question is "is every topic flowing at the rate it *should*" — today the operator
-must eyeball the log. Add an optional spec (`ROS_TOPIC_STATS_EXPECTED=/path/spec.yaml`):
+## R2. Timer liveness (rescoped, not started)
 
-```yaml
-topics:
-  /scan:   {min_hz: 18, max_hz: 22, side: recv}
-  /points: {min_hz: 25, transport: intra}
-nodes: [/perception, /planner]
-```
+The original idea was per-timer rate monitoring pitched at control loops. The common ROS 2
+control loops (`ros2_control`, Nav2, MoveIt Servo) do not run on `rclcpp` timers, so the timer
+tracepoints cannot see them; R5 covers their stalls through the topics they publish. What
+remains of R2 is liveness for nodes that have timers but no topic traffic, which today read as
+quiet. It ships only if R5 turns out not to cover the need.
 
-- Probe emits `WARN <topic> hz=<x> expected=[lo,hi]` at flush time (zero hot-path cost).
-- Separate `pulse-check` CLI (no ROS dep): log + spec → exit code, for watchdogs/CI/systemd.
+## R3. Distro matrix (done, 0.2.0 and 0.3.0)
 
-Prior art: `diagnostic_updater::TopicDiagnostic` does this **in-code per node** — pulse does it
-zero-touch for a whole process tree.
+Blocking CI on `ros:humble`, `ros:jazzy` and `ros:kilted`, a non-blocking rolling lane, the
+`rclcpp_intra_publish` hook for publish-side intra-process rates on Iron and newer, and the
+LTTng coexistence test on distros whose tracetools link lttng-ust.
 
-## R2. Timer liveness — **rescoped after research (2026-08-02)**
+## R4. Positioning docs (done)
 
-> Was: "timer & service rate monitoring", `TIMER /node period_ms=20 actual_hz=49.8`, pitched as
-> control-loop monitoring. Research killed that framing. Ships as **liveness**, after R5, and
-> only if R5's gap detection doesn't already cover the need.
+[ALTERNATIVES.md](ALTERNATIVES.md) covers CARET (same hook mechanism, different goal),
+`diagnostic_updater`, rclpy limits and the per-distro tracing situation.
 
-**Why the original pitch doesn't hold.** The canonical ROS 2 control loops are not `rclcpp`
-timers, so these tracepoints are structurally blind to them:
+## R5. Gap and jitter visibility (done, 0.3.0)
 
-| Stack | Loop driver | Emits timer tracepoints? |
-|---|---|---|
-| `ros2_control` `ros2_control_node` | raw `std::thread` + `sleep_until` | no |
-| Nav2 `controller_server` | `nav2::Rate` in the action-server thread | no |
-| MoveIt Servo | `rclcpp::WallRate` in a `while` loop | no |
+A windowed mean cannot see a stall: at 50 Hz with `min_hz: 45` and a 5 s window the rule only
+fires after more than half a second of dead time. `ROS_TOPIC_STATS_JITTER=1` records the largest
+inter-arrival gap per endpoint and side, `max_gap_ms` rules bound it, and `pulse-check` gates on
+it. Measured cost: +24 ns per message on x86-64, +51 ns on a Jetson AGX Orin
+([test/orin/RESULTS.md](../test/orin/RESULTS.md)).
 
-"Catches a wedged node whose subscriptions still drain" also needs a `MultiThreadedExecutor`
-with separate callback groups — under a single-threaded executor a wedged timer blocks the
-subscriptions too, so they do *not* still drain. And `ros2_control` on Jazzy+ already ships
-periodicity avg/min/max/stddev with `/diagnostics` thresholds and an overrun count; competing
-there on a mean Hz is a losing comparison.
+## R6. Output and ecosystem
 
-**What survives.** The tracepoints are real and cheap, and they fix a defect we already
-document in the README: *"a genuinely-alive but idle node (e.g. a pure timer/service node with
-no topic traffic) therefore reads as quiet."* Timer activity makes `NODE` liveness honest and
-distinguishes "topic silent because the node is idle" from "topic silent because it is wedged".
-
-Scope if built: emit `TIMER` only for timers that resolve to **no publisher** (the
-non-redundant case — motor drivers writing CAN/serial on a timer, watchdogs, service callers);
-a timer that publishes already reports its rate as the topic's rate. Carry the declared period
-from `rcl_timer_init` as *metadata only*, never as an auto-derived expected rate.
-
-Corrections to the original entry, all verified against upstream source:
-
-- **The listed tracepoints cannot produce `actual_hz`.** `rcl_timer_init`,
-  `rclcpp_timer_callback_added` and `rclcpp_timer_link_node` fire once each and give period,
-  handle and node. There is **no per-fire timer tracepoint anywhere in ROS 2** — `rcl_timer_call`
-  does not exist and `rcl/src/rcl/timer.c` has none. The per-fire signal is `callback_start`,
-  fired from `GenericTimer::execute_callback()`, **which the probe already interposes**. Timer
-  fires reach `onCallbackStart` today and are dropped by the `kNotASubscription` sentinel. That
-  makes R2 three init-time interposers, not a new counting path — cheaper than written.
-- **~~Bonus: retires the negative-cache sentinel~~ — struck; it is a net cost.** The sentinel
-  path early-returns; counting replaces that with a `fetch_add`. The machinery cannot be retired
-  regardless, because lazy subscription resolution still needs the "not yet populated, retry"
-  case. Its present cost is ~0.0001% of a core, unmeasurable against the ±0.7% SEM of our own
-  benchmark. `docs/issues/issue-3-callback-lock-storm.md` already considered and rejected
-  eager timer resolution on these grounds.
-- **`TIMER /node period_ms=20 actual_hz=49.8` has no unique key** — two 20 ms timers on one node
-  are indistinguishable. Needs the `rclcpp_callback_register` symbol (see R6) or an index.
-- **The declared period is not a reliable expected rate.** Sim time (`create_timer` with a
-  `RCL_ROS_TIME` clock), `rcl_timer_exchange_period` and `rcl_timer_cancel` are all untraced, so
-  a cancelled or one-shot timer would read `actual_hz=0.000` forever.
-- **rclpy timers produce orphans.** `rcl_timer_init` fires, but `rclcpp_timer_link_node` and
-  `callback_start` never do (ros2_tracing#15) — period, no node, no fires. Must be dropped, not
-  reported at 0 Hz.
-- **Services: cut.** `rclcpp::ParameterService` creates six services on every node, so an
-  unfiltered 10-node process emits 60 near-always-zero lines per window. Request rates are
-  bursty and usually zero; `min_hz` on them is mostly noise. Revisit only on user demand.
-
-Tracepoint availability, verified per branch — all six exist with identical signatures on
-humble / iron / jazzy / kilted / rolling, so the original "all exist on Humble" was right.
-
-## R3. Distro matrix: Jazzy / Kilted / rolling — **DONE**
-
-- ✅ CI: blocking matrix humble+jazzy+kilted on official `ros:<distro>` images; rolling
-  observational lane fixed (PR #16 — it immediately caught the `ament_target_dependencies`
-  removal on rolling).
-- ✅ Interposer signatures verified per distro: all hooked events plain-called by rcl/rclcpp on
-  jazzy/kilted; full suite green on both.
-- ✅ `rclcpp_intra_publish` hooked → **publish-side intra** counts on Iron+ (additive `PUB`
-  line; symbol exported-but-never-called on Humble).
-- ✅ Integration assertion that the probe and a **live LTTng session** coexist
-  (we forward via `dlsym(RTLD_NEXT)`, so both should fire — asserted by
-  `test/integration/test_lttng_coexist.py`: probe log rates AND >0 `ros2:*` events in the same
-  run, plus an un-probed baseline leg so a 0-event probed run is provably our forwarding).
-  Testable on any distro whose binaries carry the lttng-ust backend: Iron+ out of the box
-  (jazzy/kilted CI lanes run it via the `lttng-tools`/`babeltrace` test_depends), Humble only
-  if ROS was rebuilt for it — the test skips there on an `ldd libtracetools.so` check.
-
-## R4. Positioning docs (ALTERNATIVES.md gaps)
-
-- **CARET** (Tier IV) is prior art for the exact mechanism — LD_PRELOAD function hooking over
-  the tracetools layer — currently uncited. Differences to state plainly: CARET targets deep
-  latency/chain analysis and needs LTTng + a forked rclcpp + offline analysis; pulse is a
-  permanently-on Hz/liveness probe with zero deps. Independent validation of the approach.
-- **Per-distro honesty:** since Iron, stock binaries trace out-of-the-box; the "needs a ROS
-  rebuild" claim is Humble-only. On Jazzy the differentiators are: no sessiond, no CTF
-  post-processing, online ready-to-read Hz, tiny file.
-- **rclpy:** publish side works (rcl-layer tracepoint); receive side is invisible
-  (`callback_start` is rclcpp-only; rclpy was never instrumented — ros2_tracing#15). Document.
-- Comparison row for `diagnostic_updater::TopicDiagnostic`.
-
-## R5. Gap / jitter visibility — **NEXT** (promoted 2026-08-02)
-
-**Promoted above R2 because it fixes a soundness hole in R1, the feature we just shipped.**
-A windowed mean cannot detect a stall, so `min_hz` alerting silently passes real faults:
-
-> 50 Hz topic, 5 s window, rule `min_hz: 45`. The rule fires only below 225 messages, i.e. after
-> **>0.5 s of dead time**. A 400 ms freeze — 20 lost cycles, catastrophic for a 50 Hz control
-> loop — reports 46 Hz and stays green. Widening the window makes it worse: the same 2 s stall
-> at a 20 s window averages to exactly 45.0 Hz and never fires. One 500 ms freeze and 500
-> spread-out 1 ms hiccups are indistinguishable — both 45.0 Hz.
-
-Max inter-arrival gap is the window-length-independent detector, and it covers the loops R2
-structurally cannot: a `Rate`-driven `ros2_control` or Nav2 loop is invisible as a timer but
-plainly visible in the gap statistics of the topics it publishes.
-
-This is also what the field converges on — **nobody uses mean rate as the primary loop-health
-signal**: cyclictest reports max latency, Prometheus exposes scrape-interval quantiles plus
-`rule_group_iterations_missed_total`, `ros2_control` reports periodicity avg/min/max/stddev with
-an overrun count, Nav2 logs per-miss events, CARET plots period and frequency histograms.
-`diagnostic_updater::FrequencyStatus` is the one mean-only design in the survey, and it is the
-weakest. Percentiles don't rescue a mean either: with 250 samples a single 2 s gap sits at the
-99.6th percentile, so you need max, not p99.
-
-**Specified in [design-r5-gap-visibility.md](design-r5-gap-visibility.md)** — line grammar, spec
-extension, hot-path design, cross-log merge semantics, and a test plan, with measured numbers.
-
-Summary of what that settles: `ROS_TOPIC_STATS_JITTER=1` (default OFF) adds a `JITTER <topic>
-<side> max_dt_ms=…` line and a `max_gap_ms:` spec rule. **`max_dt_ms` only** — `min_dt_ms` is
-cut, because the Iron+ publish double-fire makes it read ~0.001 ms on a healthy topic forever.
-**No overrun count** — every way to derive the expected period is unsound. Cost is
-**+24.4 ± 0.02 ns/msg** measured (96% of it the vDSO clock read), which is 0.012% of a core at
-4900 msg/s and 1/15th of one SEM of our own benchmark — below what `run_overhead_repeated.sh`
-can resolve, and the docs should say so rather than invent an end-to-end figure.
-
-Two holes in the sketch above, both found during design and both load-bearing: a fully-dead
-endpoint produces no inter-arrival pair, so the gap detector misses the *total* stall unless
-flush folds in `now - last_ts`; and that fold must be suppressed in the exit window, or healthy
-rclcpp teardown fires every gap rule deterministically. `last_ts` must also survive the window
-boundary, or every window's first message discards its dt — exactly the straddling stall.
-
-Prerequisite, independently justified: **`alignas(64)` on `sTopicCounter`**. 63 of 128 counters
-currently have their count-atomics straddling a cache line (measured), a latent repeat of
-KNOWN_ISSUES #15 that costs 4.5× on neighbouring endpoints under 8 threads. Lands as its own
-`perf:` commit before R5.
-
-## R6. Output & ecosystem (small, independent)
-
-- `ROS_TOPIC_STATS_FORMAT=jsonl` — one object per window; golden-file tests for both formats.
-  **DONE** — ts_ns as a decimal string (OTLP/JSON int64 convention), absence-means-unmeasured
-  keys, structured warns, RFC 8259 name escaping; pulse-check sniffs and gates both formats.
-  See README "JSON Lines output".
-- Callback names via `rclcpp_callback_register` for human-readable labels.
-- Opt-in exporter (Prometheus/OTel) as a **sidecar reading the log** — keeps the probe itself
-  network-zero.
-- Validate on `rmw_zenoh` (no DDS at all) and CycloneDDS+iceoryx SHM; add support-matrix rows.
-  Hooks sit above rmw, so both should work unmodified — worth proving. — **DONE 2026-08-08**:
-  proven, not assumed. `test/rmw/run_rmw_matrix.sh` spins stock `ros:<distro>` containers and
-  asserts publish-side, receive-side and intra-process rates at 50 Hz ±30% (same parser/band as
-  the CI accuracy suite) under rmw_fastrtps (control leg), rmw_cyclonedds plain, CycloneDDS +
-  iceoryx SHM (iox-roudi + `<SharedMemory>` config + a fixed-size UInt64 pair, since String is
-  not SHM-eligible) and rmw_zenoh (rmw_zenohd router; no DDS in the process at all). All legs
-  green; measured rates, package versions and the honest SHM-attribution caveat live in the
-  README "Middleware (RMW)" matrix.
-- `ROS_TOPIC_STATS_QUIET=1` to silence the stderr banner for stderr-parsing deployments.
+- `ROS_TOPIC_STATS_FORMAT=jsonl`, one object per window: done (0.3.0).
+- `ROS_TOPIC_STATS_QUIET=1` banner suppression: done (0.3.0).
+- RMW support matrix (FastDDS, CycloneDDS with and without iceoryx, Zenoh): done (0.3.0).
+- Callback names via `rclcpp_callback_register`, for readable labels: open.
+- An opt-in Prometheus/OpenTelemetry exporter that reads the log as a sidecar, so the probe
+  itself stays network-free: open.
+- apt packages through bloom/rosdistro for humble, jazzy and kilted: open.

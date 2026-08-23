@@ -8,7 +8,7 @@
 //
 // Synchronization here is atomics + sleep-polling on purpose: a condition_variable timed wait
 // compiles to pthread_cond_clockwait on this toolchain, which gcc-11's libtsan does not
-// intercept — the sanitizer lane would report false double-locks/races inside the test itself.
+// intercept, the sanitizer lane would report false double-locks/races inside the test itself.
 
 #include <gtest/gtest.h>
 
@@ -22,7 +22,7 @@
 using ros2_pulse::core::Timer;
 using namespace std::chrono;
 
-// Issue #8a: the first callback must arrive after ~one interval — not two (the off-by-one on
+// Issue #8a: the first callback must arrive after ~one interval, not two (the off-by-one on
 // current main), and not immediately (a ~0-length first window would break Hz just as badly).
 // Bounds are wide (0.5x..1.6x) so sanitizer-lane scheduling noise cannot flake this.
 TEST(Timer, FirstCallbackArrivesWithinOneInterval) {
@@ -45,13 +45,13 @@ TEST(Timer, FirstCallbackArrivesWithinOneInterval) {
 
     const int64_t elapsed_ms = first_fire_ms.load();
     ASSERT_GE(elapsed_ms, 0) << "timer never fired";
-    EXPECT_GE(elapsed_ms, 200) << "first fire too early — a ~0-length first window breaks Hz";
+    EXPECT_GE(elapsed_ms, 200) << "first fire too early, a ~0-length first window breaks Hz";
     EXPECT_LE(elapsed_ms, 640) << "first fire late by ~one interval (first-tick off-by-one)";
 }
 
 // After the first fire the cadence must stay one-per-interval. A 300 ms timer observed for
 // ~1.05 s fires at ~300/600/900 -> exactly 3 times. The off-by-one yields 2 (600/900); an
-// immediate-fire pathology yields 4 (0/300/600/900) — both bounds assert.
+// immediate-fire pathology yields 4 (0/300/600/900), both bounds assert.
 TEST(Timer, SteadyCadenceAfterFirstFire) {
     constexpr auto kInterval = milliseconds(300);
     std::atomic<int> fires{0};

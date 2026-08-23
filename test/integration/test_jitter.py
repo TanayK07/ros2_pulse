@@ -3,8 +3,8 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
 # Gap visibility integration (ROADMAP R5): a real probed publisher against a real stall. These
-# tests exist because a windowed mean CANNOT detect a stall — at 50 Hz a `min_hz: 45` rule needs
-# more than half a second of dead time to fire — so the whole feature rests on max_dt_ms being
+# tests exist because a windowed mean CANNOT detect a stall, at 50 Hz a `min_hz: 45` rule needs
+# more than half a second of dead time to fire, so the whole feature rests on max_dt_ms being
 # the window-length-independent detector. Distro-independent (inter-process publish rates only).
 
 import os
@@ -63,7 +63,7 @@ def test_gap_detected_where_mean_rate_passes():
     """THE R5 thesis, executable: the mean rate stays green while the gap rule fires.
 
     50 Hz publisher, 5 s windows, one 800 ms freeze. The stalled window loses ~40 of its ~250
-    messages, so it still measures ~42 Hz and a `min_hz: 40` rule passes — while max_dt_ms is
+    messages, so it still measures ~42 Hz and a `min_hz: 40` rule passes, while max_dt_ms is
     ~800 and a `max_gap_ms: 100` rule catches it. If this test ever fails because the rate rule
     fired, the premise changed and the whole feature needs rethinking.
     """
@@ -82,7 +82,7 @@ def test_gap_detected_where_mean_rate_passes():
         # The setup guard: if the mean rate DID drop below 40 the test proves nothing, because
         # min_hz alone would have caught the stall and R5 would be unnecessary here.
         assert not rate_warns, (
-            "mean rate fired, so this stall was NOT invisible to min_hz — the test no longer "
+            "mean rate fired, so this stall was NOT invisible to min_hz, the test no longer "
             f"demonstrates the gap detector\n{chr(10).join(rate_warns)}\n--- log ---\n{text}")
 
         assert gap_warns, f"gap rule did not fire on an 800 ms stall\n--- log ---\n{text}"
@@ -100,7 +100,7 @@ def test_jitter_off_by_default():
 
 
 def test_gap_rule_auto_enables_measurement():
-    """A max_gap_ms rule turns tracking on by itself — a declared rule is never silently
+    """A max_gap_ms rule turns tracking on by itself, a declared rule is never silently
     unchecked, the same stance as the zero-rule-spec warning."""
     with tempfile.TemporaryDirectory() as d:
         spec = _write(d, "spec.yaml", "topics:\n  /chatter: {max_gap_ms: 500, side: pub}\n")
@@ -116,7 +116,7 @@ def test_gap_rule_auto_enables_measurement():
 
 def test_exit_window_gap_is_not_folded_or_judged():
     """rclcpp teardown stops traffic before the process exits, so the final window's open
-    interval measures the shutdown — folding it would fire every gap rule on a healthy stop.
+    interval measures the shutdown, folding it would fire every gap rule on a healthy stop.
     This exercises the flush(exiting=true) plumbing, which the unit tests cannot reach."""
     with tempfile.TemporaryDirectory() as d:
         spec = _write(d, "spec.yaml", "topics:\n  /chatter: {max_gap_ms: 60, side: pub}\n")

@@ -2,12 +2,12 @@
 // eBPF equivalent of ros2_pulse: attach uprobes to the SAME tracetools hook points
 // (ros_trace_rcl_publish for inter-process publish, ros_trace_callback_start for all-transport
 // receive) and aggregate per-endpoint counts in a BPF map. This is the "ros2 probe" style
-// (eBPF/uprobe) leg of the bake-off — measures the per-message kernel-trap cost.
+// (eBPF/uprobe) leg of the bake-off - measures the per-message kernel-trap cost.
 //
 // Usage: bpftrace bpftrace_probe.bt <abs path to libtracetools.so>
 // The library path is passed as $1 so it matches the image under test.
 
-// NOTE: no BEGIN block — some packaged/stripped bpftrace builds fail to resolve the
+// NOTE: no BEGIN block - some packaged/stripped bpftrace builds fail to resolve the
 // self-exe BEGIN_trigger uprobe. The uprobes below attach directly.
 
 // inter-process publish: arg0 = publisher_handle

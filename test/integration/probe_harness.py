@@ -34,7 +34,7 @@ _PUB_RE = re.compile(r"^PUB (\S+) inter=([\d.]+) intra=([\d.]+)$")
 _RECV_RE = re.compile(r"^RECV (\S+) inter=([\d.]+) intra=([\d.]+)$")
 # Deliberately NOT $-anchored, unlike the three above: R5 may grow this line (min_dt_ms was cut
 # but is re-addable), and an anchored regex here would silently stop matching every JITTER line
-# the day a field is appended — which is exactly how appending to RECV would have broken this
+# the day a field is appended, which is exactly how appending to RECV would have broken this
 # harness. Keep it prefix-matching.
 _JITTER_RE = re.compile(r"^JITTER (\S+) (pub|recv) max_dt_ms=([\d.]+)")
 

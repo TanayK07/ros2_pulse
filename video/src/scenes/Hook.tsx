@@ -27,7 +27,7 @@ export const Hook: React.FC = () => (
       <H1 size={104}>Is every topic flowing at the rate it should?</H1>
     </Rise>
     <Rise delay={30} style={{textAlign: 'center'}}>
-      <Eyebrow color={C.ink2}>and which nodes are alive — right now, on the robot</Eyebrow>
+      <Eyebrow color={C.ink2}>and which nodes are alive, right now, on the robot</Eyebrow>
     </Rise>
     <div style={{position: 'absolute', bottom: 48, fontFamily: FONT.mono, fontSize: 26, color: C.ink3}}>ros2_pulse</div>
   </AbsoluteFill>

@@ -1,6 +1,6 @@
 # Contributing to ros2_pulse
 
-Thanks for your interest. This is a small, focused package — contributions that keep it small and
+Thanks for your interest. This is a small, focused package; contributions that keep it small and
 focused are the most welcome.
 
 ## Ground rules
@@ -9,14 +9,14 @@ focused are the most welcome.
   rclcpp, or tracetools. All ROS/tracetools coupling lives in `src/probe/`. This is what keeps the
   logic unit-testable in isolation.
 - **The hot path stays cheap.** `onPublish` / `onCallbackStart` run per message. No allocations, no
-  string hashing, no global locks — per-endpoint atomics + the thread-local cache only.
+  string hashing, no global locks, per-endpoint atomics + the thread-local cache only.
 - **No DDS traffic, no privileges.** The probe writes a local file and opens no sockets. Keep it
   that way.
 
 ## Dev workflow
 
 ```bash
-# unit tests (pure core, no ROS) — fastest loop
+# unit tests (pure core, no ROS): the fastest loop
 GT=/opt/ros/humble/src/gtest_vendor
 g++ -O2 -std=c++17 -pthread -Iinclude -I$GT/include -I$GT \
   test/unit/test_topic_registry.cpp src/core/topic_registry.cpp $GT/src/gtest-all.cc -o /tmp/ut && /tmp/ut

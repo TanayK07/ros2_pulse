@@ -2,7 +2,7 @@
 
 Measured 2026-08-01 in stock `ros:humble` / `ros:jazzy` / `ros:kilted` containers on a 16-core
 x86 host. Workload: 30 light publishers @100 Hz + 8 heavy (~100 KB) @50 Hz inter-process + 15
-intra-process topics @100 Hz — ≈4,900 msg/s aggregate across 91 endpoints and 3 processes, all
+intra-process topics @100 Hz, ≈4,900 msg/s aggregate across 91 endpoints and 3 processes, all
 on `MultiThreadedExecutor`s. Metric: summed workload CPU seconds (`getrusage(RUSAGE_SELF)`).
 Harnesses: `run_overhead_repeated.sh` (paired end-to-end overhead + microbench) and
 `run_bakeoff.sh` (single-shot comparison vs eBPF/LTTng).
@@ -13,23 +13,23 @@ Harnesses: `run_overhead_repeated.sh` (paired end-to-end overhead + microbench) 
 |---|---|---|---|---|---|---|
 | **ours (LD_PRELOAD tracetools)** | **≈ +2 % worst-case stress** (pooled +1.9 % ± 0.7 % SEM)¹ | in-process, none | ~22 KB rolling file | ✅ | ✅ **yes, as-is** | **none** |
 | eBPF uprobe (bpftrace) | ~+0.2 % (noise) at this rate² | bpftrace proc ~0.02 s | 0 (in-kernel map) | ✅ (same hooks) | ✅ | **CAP_SYS_ADMIN + debugfs + BTF + uprobe kernel** |
-| LTTng / ros2_tracing | **n/a — captured 0 events³** | sessiond + consumerd | CTF (large when working) | ✅ | ❌ **needs ROS rebuilt with lttng-ust** | sessiond |
+| LTTng / ros2_tracing | **n/a, captured 0 events³** | sessiond + consumerd | CTF (large when working) | ✅ | ❌ **needs ROS rebuilt with lttng-ust** | sessiond |
 
 ¹ Paired, order-alternated trials (N=10 per distro, methodology below). This workload is a
-deliberately hostile upper bound — 91 endpoints churning at 4,900 msg/s across every core.
-² uprobe cost is a per-event kernel trap (~1–2 µs). At 4900 msg/s that's ~0.1–0.2 % of a core —
-noise here — but it grows with message rate, whereas our in-line count is ~0.3–1.2 ns/op.
+a harsh upper bound, 91 endpoints churning at 4,900 msg/s across every core.
+² uprobe cost is a per-event kernel trap (~1-2 µs). At 4900 msg/s that's ~0.1-0.2 % of a core:
+noise here, but it grows with message rate, whereas our in-line count is ~0.3-1.2 ns/op.
 ³ On this stock `ros:humble` image `libtracetools.so` is **not linked against lttng-ust**, so
 the `ros2:*` tracepoints are no-ops and `lttng` + `babeltrace2` recorded **0 events**.
 ros2_tracing requires ROS rebuilt with instrumentation to capture anything.
 
 ## End-to-end overhead (paired, order-alternated, N=10 per distro)
 
-Single samples of this workload swing ±4 % run-to-run — enough to fake (or hide) a ~2 %
+Single samples of this workload swing ±4 % run-to-run, enough to fake (or hide) a ~2 %
 effect. So each trial runs baseline and probe back-to-back with the **arm order alternated
 every trial**, and the statistic is the mean of the per-trial differences with its standard
 error. A delta is only reported as real if it clears ~2× SEM. (This protocol exists because a
-fixed arm order and N=6 means *did* mislead us once — see the KNOWN_ISSUES #15 note.)
+fixed arm order and N=6 means *did* mislead us once; see the KNOWN_ISSUES #15 note.)
 
 Probe config: `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=2.0` (normal flushing).
 
@@ -44,18 +44,18 @@ Per message that is ≈1 µs of added system cost against ≈51 µs the stack al
 delivering it. On realistic graphs (fewer endpoints, lower aggregate rate per process) the
 share is proportionally smaller.
 
-### Where the cost is (and is not) — controlled attributions, ros:jazzy
+### Where the cost is (and is not): controlled attributions, ros:jazzy
 
 | Experiment | Result | Conclusion |
 |---|---|---|
 | Null shim (same 8 exported symbols, empty bodies) vs baseline | −0.3 % | LD_PRELOAD interposition itself is free |
 | Probe with flushing disabled (`PERIOD=60`) vs with flushing (`PERIOD=2.0`), paired N=10 | +0.027 s ± 0.033 | flushing is not the cost |
-| Instrumented flush time (6 windows, 3 processes) | 0.7–7 ms wall total | flush work is µs–ms scale |
+| Instrumented flush time (6 windows, 3 processes) | 0.7-7 ms wall total | flush work is µs to ms scale |
 | TLS-cache miss counters, pre-fix → post-fix | 31,926 → 6,509 fallbacks (pubfarm) | KNOWN_ISSUES #15 stride-aliasing fixed |
 | Paired bench pre-fix → post-fix | +2.6 % → +1.9 % (pooled) | cache fix reclaimed part of the delta |
 
 The residual ≈2 % does not localize to the hot path (sub-ns/op, below), the flush path, or
-symbol interposition — it is the diffuse footprint of observing at all: the chained call into
+symbol interposition; it is the diffuse footprint of observing at all: the chained call into
 the real tracepoint, extra code/data resident in cache and TLB across all 16 executor
 threads, and one parked flush thread. We report it rather than subtract it.
 
@@ -76,35 +76,35 @@ thread alternates across 4 endpoints (the realistic camera-pipeline pattern). 8 
 The alternating-pattern number is the one that matters in practice (KNOWN_ISSUES #13/#15):
 the single-entry cache thrashed to ~50 ns/op, and the 16-slot cache's stride-aliasing pushed
 realistic multi-topic farms onto a contended lock entirely. The current 256-slot
-stride-breaking cache holds alternation at ~1 ns/op — two orders of magnitude under one
-LTTng-UST tracepoint (~158 ns, Bédard et al. 2022). Numbers move with host/thread count —
+stride-breaking cache holds alternation at ~1 ns/op, two orders of magnitude under one
+LTTng-UST tracepoint (~158 ns, Bédard et al. 2022). Numbers move with host/thread count,
 treat ratios, not absolutes, as the signal.
 
-### aarch64 — Jetson AGX Orin (2026-08-23, production robot, clocks pinned)
+### aarch64: Jetson AGX Orin (2026-08-23, production robot, clocks pinned)
 
 Same `hotpath_bench.cpp`, 10 trials × 8 threads, mean ± SEM. Full write-up and raw trials in
 [`test/orin/RESULTS.md`](../test/orin/RESULTS.md).
 
 | Leg | Orin (Cortex-A78AE @ 2.2 GHz) | x86-64 reference |
 |---|---|---|
-| OLD design (mutex + string hash), fixed | 351 ns/op | 141–167 ns/op |
-| single-entry TLS cache, alt-4 | 225 ns/op | 47–52 ns/op |
+| OLD design (mutex + string hash), fixed | 351 ns/op | 141-167 ns/op |
+| single-entry TLS cache, alt-4 | 225 ns/op | 47-52 ns/op |
 | current TLS cache, fixed | **0.9 ns/op** | 0.3 ns/op |
-| current TLS cache, alt-4 | **2.1–2.2 ns/op** | 0.6–1.2 ns/op |
+| current TLS cache, alt-4 | **2.1-2.2 ns/op** | 0.6-1.2 ns/op |
 | raw `steady_clock::now()`, 1 thread | 38.7 ns ± 0.08 | ~21 ns |
 | R5 jitter clock read, fixed (`JITTER=1`) | **+51.0 ns/msg ± 0.6** | +24.4 ns/msg ± 0.02 |
 | R5 jitter clock read, alt-4 | +55.6 ns/msg ± 0.9 | — |
 
 The ratios carry over: the cache fix holds alternation two orders of magnitude under the old
-design on aarch64 too, and the R5 cost is the clock read (89 % of the delta) — the vDSO path
+design on aarch64 too, and the R5 cost is the clock read (89 % of the delta); the vDSO path
 works on the 5.15 Tegra kernel, so the syscall-fallback risk flagged in the R5 design did not
 materialize.
 
-## Observer effect — what watching a topic with the stock CLI costs (2026-08-23)
+## Observer effect: what watching a topic with the stock CLI costs (2026-08-23)
 
 `bench/run_observer_effect.sh`, ros:humble, CycloneDDS default, AMD Ryzen 7 7435HS (16 cores).
 Workload: the stress farm above (8 × ~100 KB @ 50 Hz + 30 light @ 100 Hz inter-process, 15
-intra-process @ 100 Hz, all with subscribers). The probe is the ruler in every arm — it counts
+intra-process @ 100 Hz, all with subscribers). The probe is the ruler in every arm: it counts
 `rcl_publish` in-process, so its publish-side rate is the true rate whatever else subscribes.
 Four arms rotated each trial, N = 10, 10 s runs with the watcher attached for 8 s; mean ± SEM.
 Raw: [`out/observer_effect/`](out/observer_effect/) (CSV, summary, per-arm probe logs, watcher output).
@@ -118,15 +118,15 @@ Raw: [`out/observer_effect/`](out/observer_effect/) (CSV, summary, per-arm probe
 
 What it says, in order of how sure we are:
 
-1. **The stock tools tell the truth here.** The publisher held 50.000 Hz in every arm and
+1. **The stock tools are accurate here.** The publisher held 50.000 Hz in every arm and
    `hz` reported it within 0.3 %. We expected a slow reliable reader to back-pressure a
    100 KB writer; on this box at this load it did not. Published as measured.
 2. **Watching is not free.** One `ros2 topic hz` on one 100 KB topic is 7 % of a core for
    as long as you look; `ros2 topic echo` of the same topic is 31 % of a core with its output
    thrown away. Per topic. The probe adds no subscriber and pulse-top reads a file.
 3. **On an intra-process topic the watcher is the perturbation.** A pure intra-process
-   publisher never reaches `rcl_publish`; the first out-of-process subscriber — the `hz`
-   you just started — makes it serialize and send every message. The watched process's CPU
+   publisher never reaches `rcl_publish`; the first out-of-process subscriber, the `hz`
+   you just started, makes it serialize and send every message. The watched process's CPU
    went up 52 % and the publish-side path lit up in 4 of 5 windows, 10 trials out of 10.
    The number `hz` prints is right; the system it describes is no longer the one that was
    running before you looked.
@@ -139,16 +139,16 @@ bigger messages or several watchers scale the watcher's cost; they do not change
 ## Verdict
 
 - **CPU cost is ≈2 % on a worst-case synthetic stress and proportionally less on real
-  graphs.** We publish the paired numbers with error bars instead of a "zero overhead" claim;
+  graphs.** The paired numbers are published with error bars rather than a "zero overhead" claim;
   at moderate rates ours ≈ eBPF ≈ small, and the differentiator is elsewhere.
 - **Ours wins on deployability, and it's measured:**
-  - eBPF **required a privileged container** (CAP_SYS_ADMIN + debugfs + BTF) to attach at all —
+  - eBPF **required a privileged container** (CAP_SYS_ADMIN + debugfs + BTF) to attach at all,
     the Orin/Jetson kernel-portability risk is real, not hypothetical. Ours needs zero privileges.
-  - LTTng/ros2_tracing **captured nothing on the stock binaries** — needs a ROS rebuild with
+  - LTTng/ros2_tracing **captured nothing on the stock binaries** and needs a ROS rebuild with
     lttng-ust, then offline CTF analysis to derive Hz. Ours runs on the exact deployed binaries
     and emits ready-to-read Hz to a tiny file.
 - **No single off-the-shelf option meets all constraints** (intra-process + zero-network +
-  zero-priv + stock-binary + drop-in file). Ours does — that is the empirically supported
+  zero-priv + stock-binary + drop-in file). Ours does; that is the empirically supported
   "better."
 
 ## Reproduce

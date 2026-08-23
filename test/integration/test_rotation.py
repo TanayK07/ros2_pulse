@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_harness as ph  # noqa: E402  # pyright: ignore[reportMissingImports]
 
-CAP = 512  # bytes — tiny so a ~6 s run rotates several times
+CAP = 512  # bytes, tiny so a ~6 s run rotates several times
 SLACK = 400  # one window block of headroom above the cap
 
 

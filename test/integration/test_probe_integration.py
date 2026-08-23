@@ -39,7 +39,7 @@ def _parse_recv(text):
     """Return {topic: (peak inter_hz, peak intra_hz)} across all windows.
 
     Peak, not last: the final partial window at exit (issue #9) legitimately reads ~0, and
-    proven receive endpoints now emit explicit zero lines when idle (issue #12) — "did the
+    proven receive endpoints now emit explicit zero lines when idle (issue #12), "did the
     topic ever flow at rate" is the health signal these tests assert.
     """
     out = {}

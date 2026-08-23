@@ -20,7 +20,6 @@ __pycache__/
 .pytest_cache/
 
 # editors / OS
-.claude/
 .vscode/
 .idea/
 *.swp
@@ -30,7 +29,7 @@ __pycache__/
 bench/*.log
 bench/trace/
 
-# RMW-matrix evidence (test/rmw/run_rmw_matrix.sh) — quoted in docs, not versioned
+# RMW-matrix evidence (test/rmw/run_rmw_matrix.sh) - quoted in docs, not versioned
 test/rmw/out/
 .venv/
 *.egg-info/

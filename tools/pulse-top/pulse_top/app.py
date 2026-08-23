@@ -1,8 +1,8 @@
-"""pulse-top — live TUI over the ros2_pulse probe's jsonl log.
+"""pulse-top, live TUI over the ros2_pulse probe's jsonl log.
 
 Pure consumer: tails the file the probe already writes (ROS_TOPIC_STATS_FORMAT=jsonl),
 parses each window, renders. No ROS dependency, no graph presence, zero cost to the
-probed system beyond the file read — works over ssh and on dead logs after the fact,
+probed system beyond the file read, works over ssh and on dead logs after the fact,
 which is exactly what the graph-joining monitors (ros2top, ornis, ...) cannot do.
 """
 
@@ -34,7 +34,7 @@ SORTS = ("topic", "rate", "gap")
 
 
 def fmt_age(seconds: float) -> str:
-    """Human age for a stale row: 12s, 3m, 2h — seconds granularity only under a minute,
+    """Human age for a stale row: 12s, 3m, 2h, seconds granularity only under a minute,
     so a row's label (and hence its cell) changes at most once a second."""
     s = int(seconds)
     if s < 60:
@@ -66,7 +66,7 @@ class PulseTopApp(App):
         # Last-rendered (plain, style) per cell. DataTable.update_cell invalidates
         # the row render caches and schedules a refresh even when the value is
         # identical (Textual 8.2), so only cells whose text or style actually
-        # changed are pushed — 240 no-op updates a tick repainted the whole table
+        # changed are pushed, 240 no-op updates a tick repainted the whole table
         # twice a second over ssh (Orin, 2026-08-23).
         self._rendered: dict[tuple[str, str], tuple[str, str]] = {}
         self._sort = 0
@@ -117,7 +117,7 @@ class PulseTopApp(App):
         if key == "topic":
             items.sort(key=lambda it: it[0])
         elif key == "rate":
-            # live rows by rate, then stale rows by rate — a stale 20 Hz topic
+            # live rows by rate, then stale rows by rate, a stale 20 Hz topic
             # must not sit above a live 5 Hz one.
             items.sort(key=lambda it: (self._state.is_stale(it[0]), -it[1].rate))
         else:
@@ -148,7 +148,7 @@ class PulseTopApp(App):
         # The probe omits silent topics per window: absence is "no traffic seen",
         # not "still at the old rate". Render stale rows as stale, never repeat
         # the last measurement as if current (PR #32 review). Age is wall time
-        # from the window timestamps — windows from every process interleave.
+        # from the window timestamps, windows from every process interleave.
         if self._state.is_stale(name):
             stale = Text("—", justify="right", style=DIM)
             return (
@@ -192,7 +192,7 @@ class PulseTopApp(App):
 
     def _refresh_warns_strip(self) -> None:
         # Log-derived strings (warn details carry topic/node names) are rendered
-        # as Text objects, never through a markup parser — a corrupt or hostile
+        # as Text objects, never through a markup parser, a corrupt or hostile
         # log must not be able to crash or restyle the viewer built to inspect
         # it (PR #32 review; Textual's own markup parser makes escape()-based
         # fixes version-fragile, Text assembly is parser-proof).

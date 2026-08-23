@@ -22,12 +22,12 @@ jobs:
       - uses: actions/checkout@v4
       # industrial_ci builds the package and runs colcon test inside the container, then fails
       # the job on any test failure (AbortTestOnError). DOCKER_IMAGE pins the official ROS
-      # image so the distro's own tracetools/rclcpp binaries are what we interpose — that IS
+      # image so the distro's own tracetools/rclcpp binaries are what we interpose, that IS
       # the compatibility claim under test.
       #
       # LTTng tooling for test_lttng_coexist.py comes through package.xml test_depends
-      # (rosdep keys `lttng-tools` + `babeltrace`, both verified in rosdistro base.yaml —
-      # there is no `babeltrace2` key) — industrial_ci's rosdep step installs test_depends,
+      # (rosdep keys `lttng-tools` + `babeltrace`, both verified in rosdistro base.yaml,
+      # there is no `babeltrace2` key), industrial_ci's rosdep step installs test_depends,
       # so no ADDITIONAL_DEBS entry is needed and the tool list can't drift between CI and
       # a local `rosdep install`. Net effect per lane: jazzy/kilted RUN the coexistence
       # test (Iron+ tracetools links lttng-ust); humble installs the tools but the test
@@ -58,7 +58,7 @@ jobs:
   # Standalone (no-ROS) lanes on a plain ubuntu image: the pure-C++ core + the gtest suite,
   # built via -DROS2_PULSE_STANDALONE=ON (find_package(GTest)/Threads, no ament). One plain
   # "fast" lane plus two sanitizer lanes. All three are reproducible on a stock ubuntu box
-  # (no ROS container), so all three are BLOCKING — mark them required in branch protection.
+  # (no ROS container), so all three are BLOCKING, mark them required in branch protection.
   standalone:
     name: standalone core (${{ matrix.name }})
     runs-on: ubuntu-22.04
@@ -89,11 +89,11 @@ jobs:
         # runner kernels hit via high mmap entropy; it is harmless for the other legs.
         run: setarch "$(uname -m)" -R ctest --test-dir build --output-on-failure
 
-  # Rolling distro lane — NON-BLOCKING (continue-on-error). Only Humble is verifiable in this
+  # Rolling distro lane, NON-BLOCKING (continue-on-error). Only Humble is verifiable in this
   # repo's dev environment, so rolling is observational: it watches ros2_pulse against the
   # post-#3130 built-in intra-process topic statistics (rclcpp PR #3130, merged to rolling
   # Apr 2026) to keep the intra-visibility claim honest as upstream evolves. A rolling break
-  # must NOT gate merges, hence continue-on-error — do not mark this check required.
+  # must NOT gate merges, hence continue-on-error, do not mark this check required.
   rolling-nonblocking:
     name: ament + colcon (rolling, non-blocking)
     runs-on: ubuntu-latest

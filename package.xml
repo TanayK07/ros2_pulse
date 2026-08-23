@@ -24,7 +24,7 @@
   <!-- LTTng coexistence test (ROADMAP R3): drives a live LTTng session next to the probe and
        reads the trace back. Both are verified rosdep keys in rosdistro's base.yaml (there is
        NO `babeltrace2` key; the `babeltrace` key maps to the v1 CLI, which reads LTTng's
-       CTF 1.8 output fine — the test prefers babeltrace2 when the environment has it).
+       CTF 1.8 output fine, the test prefers babeltrace2 when the environment has it).
        Installing them on every lane is deliberate: humble still skips via the ldd check on
        libtracetools.so (no lttng-ust backend there), not for lack of tooling. -->
   <test_depend>lttng-tools</test_depend>

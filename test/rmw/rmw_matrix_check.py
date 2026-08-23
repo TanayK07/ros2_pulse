@@ -16,8 +16,8 @@
 #   (self-contained) type the CycloneDDS+iceoryx leg needs: String is not SHM-eligible, so
 #   without this the SHM leg would quietly measure loopback UDP and prove nothing.
 #
-# Parsing/thresholds deliberately reuse test/integration/probe_harness.py — the same code path
-# CI trusts on rmw_fastrtps — so a red here is an RMW finding, not a second parser's bug.
+# Parsing/thresholds deliberately reuse test/integration/probe_harness.py, the same code path
+# CI trusts on rmw_fastrtps, so a red here is an RMW finding, not a second parser's bug.
 # Runs INSIDE the container that test/rmw/run_rmw_matrix.sh prepares; needs a sourced overlay.
 #
 # Exit: 0 all asserted rates in band, 1 assertion failure, 2 setup error.
