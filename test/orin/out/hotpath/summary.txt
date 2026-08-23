@@ -1,0 +1,5 @@
+R5_fixed_CPU_ns/msg       50.95 ± 0.60
+R5_alt4_CPU_ns/msg        55.61 ± 0.93
+raw_clock_1thread_ns      38.74 ± 0.08
+VERDICT: clock read 38.7 ns -> vDSO path works on this kernel.
+         The published x86-64 R5 cost story holds; publish the Orin row as measured.

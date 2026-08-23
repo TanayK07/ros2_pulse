@@ -17,8 +17,11 @@ DUR="${1:-60}"
 NODE_MATCH="${2:-}"
 OUT=/tmp/orin_probe_report
 mkdir -p "$OUT"
-STATS=/root/ssd2tb/logs/topic_freq.log
-[ -w /root/ssd2tb/logs ] || STATS=/tmp/topic_freq.log
+# The probe's output file: honor the env var the stack was launched with, else the legacy
+# deploy path, else the v0.3.0 default location.
+STATS="${ROS_TOPIC_STATS_OUTPUT_FILE:-/root/ssd2tb/logs/topic_freq.log}"
+[ -f "$STATS" ] || STATS=$(ls -t "${TMPDIR:-/tmp}"/topic_freq.*.log 2>/dev/null | head -1)
+STATS="${STATS:-/tmp/topic_freq.log}"
 
 echo "=== 0. environment ==="
 echo "RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-unset}"
@@ -44,7 +47,10 @@ sample_cpu () {
   ps -eo pid,comm,args | grep -E "ros|component_container|${NODE_MATCH}" | grep -v grep \
     | awk '{print $1}' | while read -r pid; do
       [ -r "/proc/$pid/stat" ] || continue
-      awk -v pid="$pid" '{print pid, $14+$15}' "/proc/$pid/stat" 2>/dev/null
+      # pid, utime+stime jiffies, comm — comm lets an ON sample be matched to an OFF sample
+      # across a stack restart, where every pid changes (Orin run 2026-08-23).
+      comm=$(tr -d '\n' < "/proc/$pid/comm" 2>/dev/null | tr ' ' '_')
+      awk -v pid="$pid" -v comm="${comm:-?}" '{print pid, $14+$15, comm}' "/proc/$pid/stat" 2>/dev/null
     done > "$OUT/cpu_$tag.txt"
 }
 sample_cpu start
@@ -59,7 +65,7 @@ UDP1=$(ss -u -H 2>/dev/null | wc -l)
 CLK=$(getconf CLK_TCK)
 echo "--- top CPU consumers over ${DUR}s (jiffies -> seconds, CLK_TCK=$CLK) ---"
 join -j1 <(sort "$OUT/cpu_start.txt") <(sort "$OUT/cpu_end.txt") 2>/dev/null \
-  | awk -v clk="$CLK" '{d=($3-$2)/clk; if(d>0) printf "pid=%s cpu_s=%.2f (%.1f%% of 1 core)\n", $1, d, 100*d/'"$DUR"'}' \
+  | awk -v clk="$CLK" '{d=($4-$2)/clk; if(d>0) printf "pid=%s comm=%s cpu_s=%.2f (%.1f%% of 1 core)\n", $1, $3, d, 100*d/'"$DUR"'}' \
   | sort -t= -k3 -nr | head -15
 
 echo
