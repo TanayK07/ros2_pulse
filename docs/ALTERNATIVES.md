@@ -14,9 +14,14 @@ tool meets all five. Rundown:
 
 ### `ros2 topic hz` (CLI)
 - **What.** Subscribes to a topic and prints receive rate.
-- **Gap.** Adds a real DDS subscriber (extra traffic + CPU), one topic per invocation, and is
-  **blind to intra-process** delivery (it receives over the middleware). No node liveness.
-- **Verdict.** Fine for a spot check on one inter-process topic; not a always-on graph probe.
+- **Gap.** Adds a real DDS subscriber, one topic per invocation, and is **blind to
+  intra-process** delivery (it receives over the middleware). No node liveness. Measured
+  ([bench/RESULTS.md, observer effect](../bench/RESULTS.md)): `hz` costs 7 % of a core per
+  watched 100 KB topic and `echo` 31 %; the rate they print is accurate, but pointing `hz` at an
+  intra-process topic makes the publisher serialize every message — +52 % CPU on that process,
+  for a rate it could not see before you looked.
+- **Verdict.** Fine for a spot check on one inter-process topic; not an always-on graph probe,
+  and not a neutral observer of intra-process traffic.
 
 ### Built-in topic statistics
 - **What.** rclcpp can publish per-subscription stats (`message_age`, `message_period`) on

@@ -1,0 +1,108 @@
+# ts_ns=1787479548261369448 window_s=2.000
+RECV /intra_13 inter=0.000000 intra=99.493553
+RECV /intra_12 inter=0.000000 intra=99.493553
+RECV /intra_11 inter=0.000000 intra=99.493553
+RECV /intra_1 inter=0.000000 intra=99.493553
+RECV /intra_7 inter=0.000000 intra=99.493553
+RECV /intra_0 inter=0.000000 intra=99.493553
+RECV /intra_2 inter=0.000000 intra=99.493553
+RECV /intra_4 inter=0.000000 intra=99.493553
+RECV /intra_3 inter=0.000000 intra=99.493553
+RECV /intra_5 inter=0.000000 intra=99.493553
+RECV /intra_6 inter=0.000000 intra=99.493553
+RECV /intra_8 inter=0.000000 intra=99.493553
+RECV /intra_9 inter=0.000000 intra=99.493553
+RECV /intra_14 inter=0.000000 intra=99.493553
+RECV /intra_10 inter=0.000000 intra=99.493553
+NODE /intrafarm
+
+# ts_ns=1787479550261297234 window_s=2.000
+RECV /intra_13 inter=0.000000 intra=99.999691
+RECV /intra_12 inter=0.000000 intra=99.999691
+RECV /intra_11 inter=0.000000 intra=99.999691
+RECV /intra_1 inter=0.000000 intra=99.999691
+RECV /intra_7 inter=0.000000 intra=99.999691
+RECV /intra_0 inter=0.000000 intra=99.999691
+RECV /intra_2 inter=0.000000 intra=99.999691
+RECV /intra_4 inter=0.000000 intra=99.999691
+RECV /intra_3 inter=0.000000 intra=99.999691
+RECV /intra_5 inter=0.000000 intra=99.999691
+RECV /intra_6 inter=0.000000 intra=99.999691
+RECV /intra_8 inter=0.000000 intra=99.999691
+RECV /intra_9 inter=0.000000 intra=99.999691
+RECV /intra_14 inter=0.000000 intra=99.999691
+RECV /intra_10 inter=0.000000 intra=99.999691
+NODE /intrafarm
+
+# ts_ns=1787479552261311692 window_s=2.000
+RECV /intra_13 inter=0.000000 intra=99.999081
+RECV /intra_12 inter=0.000000 intra=99.999081
+RECV /intra_11 inter=0.000000 intra=99.999081
+RECV /intra_1 inter=0.000000 intra=99.999081
+RECV /intra_7 inter=0.000000 intra=99.999081
+RECV /intra_0 inter=0.000000 intra=99.999081
+RECV /intra_2 inter=0.000000 intra=99.999081
+RECV /intra_4 inter=0.000000 intra=99.999081
+RECV /intra_3 inter=0.000000 intra=99.999081
+RECV /intra_5 inter=0.000000 intra=99.999081
+RECV /intra_6 inter=0.000000 intra=99.999081
+RECV /intra_8 inter=0.000000 intra=99.999081
+RECV /intra_9 inter=0.000000 intra=99.999081
+RECV /intra_14 inter=0.000000 intra=99.999081
+RECV /intra_10 inter=0.000000 intra=99.999081
+NODE /intrafarm
+
+# ts_ns=1787479554261312146 window_s=2.000
+RECV /intra_13 inter=0.000000 intra=99.999929
+RECV /intra_12 inter=0.000000 intra=99.999929
+RECV /intra_11 inter=0.000000 intra=99.999929
+RECV /intra_1 inter=0.000000 intra=99.999929
+RECV /intra_7 inter=0.000000 intra=99.999929
+RECV /intra_0 inter=0.000000 intra=99.999929
+RECV /intra_2 inter=0.000000 intra=99.999929
+RECV /intra_4 inter=0.000000 intra=99.999929
+RECV /intra_3 inter=0.000000 intra=99.999929
+RECV /intra_5 inter=0.000000 intra=99.999929
+RECV /intra_6 inter=0.000000 intra=99.999929
+RECV /intra_8 inter=0.000000 intra=99.999929
+RECV /intra_9 inter=0.000000 intra=99.999929
+RECV /intra_14 inter=0.000000 intra=99.999929
+RECV /intra_10 inter=0.000000 intra=99.999929
+NODE /intrafarm
+
+# ts_ns=1787479556261331235 window_s=2.000
+RECV /intra_13 inter=0.000000 intra=99.999211
+RECV /intra_12 inter=0.000000 intra=99.999211
+RECV /intra_11 inter=0.000000 intra=99.999211
+RECV /intra_1 inter=0.000000 intra=99.999211
+RECV /intra_7 inter=0.000000 intra=99.999211
+RECV /intra_0 inter=0.000000 intra=99.999211
+RECV /intra_2 inter=0.000000 intra=99.999211
+RECV /intra_4 inter=0.000000 intra=99.999211
+RECV /intra_3 inter=0.000000 intra=99.999211
+RECV /intra_5 inter=0.000000 intra=99.999211
+RECV /intra_6 inter=0.000000 intra=99.999211
+RECV /intra_8 inter=0.000000 intra=99.999211
+RECV /intra_9 inter=0.000000 intra=99.999211
+RECV /intra_14 inter=0.000000 intra=99.999211
+RECV /intra_10 inter=0.000000 intra=99.999211
+NODE /intrafarm
+
+# ts_ns=1787479556273355865 window_s=0.012
+RECV /intra_13 inter=0.000000 intra=0.000000
+RECV /intra_12 inter=0.000000 intra=0.000000
+RECV /intra_11 inter=0.000000 intra=0.000000
+RECV /intra_1 inter=0.000000 intra=0.000000
+RECV /intra_7 inter=0.000000 intra=0.000000
+RECV /intra_0 inter=0.000000 intra=0.000000
+RECV /intra_2 inter=0.000000 intra=0.000000
+RECV /intra_4 inter=0.000000 intra=0.000000
+RECV /intra_3 inter=0.000000 intra=0.000000
+RECV /intra_5 inter=0.000000 intra=0.000000
+RECV /intra_6 inter=0.000000 intra=0.000000
+RECV /intra_8 inter=0.000000 intra=0.000000
+RECV /intra_9 inter=0.000000 intra=0.000000
+RECV /intra_14 inter=0.000000 intra=0.000000
+RECV /intra_10 inter=0.000000 intra=0.000000
+NODE /intrafarm
+
