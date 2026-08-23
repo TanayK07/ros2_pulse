@@ -1,5 +1,7 @@
 # pulse-top
 
+![pulse-top demo](../../docs/assets/pulse-top-demo.gif)
+
 Live terminal dashboard over a `ros2_pulse` probe log. A pure log **consumer**:
 no ROS dependency, no node, no subscriptions — it tails the jsonl file the probe
 already writes, so watching costs the robot nothing and works over plain ssh or on

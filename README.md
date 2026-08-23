@@ -10,6 +10,10 @@ zero network cost**.
 [![ROS 2](https://img.shields.io/badge/ROS%202-Humble%20%7C%20Jazzy%20%7C%20Kilted-blue)](https://docs.ros.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
+![pulse-top: live terminal dashboard over the probe's jsonl log — a /scan stall and a /cmd_vel rate sag caught as they happen](docs/assets/pulse-top-demo.gif)
+
+*`pulse-top --demo` — the probe's log, live. Sparklines per topic, intra-process rates, structured warns with ages. [Install](tools/pulse-top/).*
+
 ---
 
 ## Why

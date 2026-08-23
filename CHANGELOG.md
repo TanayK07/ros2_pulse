@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- README demo GIF of `pulse-top --demo` (`docs/assets/pulse-top-demo.gif`, 30 frames through one
+  scripted-incident loop, rendered headlessly from Textual screenshots).
+
+### Fixed
+- pulse-top: a `topic_rate` warn for an in-range rate could read `20.04Hz > max 22.0Hz` — the
+  detail picked "> max" whenever the rate was not below min. It now names the bound actually
+  crossed, or the bounds when neither is, and rounds the rate to one decimal. The demo's
+  `/cmd_vel` sag (18.4 ± 1.5 Hz against a 19 Hz min) overlapped the bound and fired such
+  warns; it now sags to 14.5–17.5 Hz. Window title is `pulse-top`, not the class name.
+
 ## [0.4.0] - 2026-08-23
 
 Launch release: the live dashboard lands, and every performance claim now has an aarch64
