@@ -5,7 +5,28 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-23
+
+Launch release: the live dashboard lands, and every performance claim now has an aarch64
+row behind it — v0.3.0 was run on a production Jetson AGX Orin and the numbers, raw trials
+and a redacted production log are committed. pulse-top was then fixed against that very log.
+
 ### Added
+- **pulse-top (`tools/pulse-top/`):** live terminal dashboard over the probe's jsonl log
+  (`pip install ./tools/pulse-top`, command `pulse-top`). A pure log consumer — no ROS
+  dependency, no node, no subscriptions — so watching costs the probed system nothing and
+  works over ssh or on a dead log post-mortem, unlike graph-joining monitors (ros2top,
+  ornis, ...), and it sees the intra-process rates only the in-process probe can measure.
+  Topics table with 60-window sparklines and warn-colored rows, namespace tree, node
+  liveness, and a retained structured-warns view with ages (a one-window stall stays
+  readable instead of blinking for one window period). Honesty rules carried through the
+  UI: an absent jsonl key renders as `—` (never 0), and a topic absent from the current
+  window renders as `stale <age>`, never as its old rate. Hardened by review (#32/#33):
+  byte-exact tail-following (rotation/truncation-safe, partial multi-byte holds),
+  tail-seek attach with a per-poll read cap, and log-derived text rendered without any
+  markup parsing so a hostile or corrupt log cannot crash the viewer. `pulse-top --demo`
+  runs a scripted-incident graph; 36 tests (model, byte-exact reader, headless pilot) plus a
+  hostile-log smoke run in a dedicated no-ROS CI lane.
 - **On-Orin validation (`test/orin/RESULTS.md`, raw under `test/orin/out/`):** v0.3.0 run on a
   production Jetson AGX Orin (L4T R36.4, Humble/CycloneDDS, 77 nodes). Hot-path bench on
   aarch64: 0.9 ns/op fixed, 2.1 ns/op alternating; the opt-in jitter clock read costs
@@ -17,21 +38,6 @@ All notable changes to this project are documented here. Format follows
 - `test/orin/run_orin_probe_test.sh` honors `ROS_TOPIC_STATS_OUTPUT_FILE` and records process
   names with the CPU samples so ON/OFF runs can be matched across a stack restart.
   `ORIN_RUNBOOK.md` Phase 0 no longer needs git credentials on the robot.
-- **pulse-top (`tools/pulse-top/`):** live terminal dashboard over the probe's jsonl log
-  (`pip install ./tools/pulse-top`, command `pulse-top`). A pure log consumer — no ROS
-  dependency, no node, no subscriptions — so watching costs the probed system nothing and
-  works over ssh or on a dead log post-mortem, unlike graph-joining monitors (ros2top,
-  ornis, ...), and it sees the intra-process rates only the in-process probe can measure.
-  Topics table with 60-window sparklines and warn-colored rows, namespace tree, node
-  liveness, and a retained structured-warns view with ages (a one-window stall stays
-  readable instead of blinking for one window period). Honesty rules carried through the
-  UI: an absent jsonl key renders as `—` (never 0), and a topic absent from the current
-  window renders as `stale Nw`, never as its old rate. Hardened by review (#32/#33):
-  byte-exact tail-following (rotation/truncation-safe, partial multi-byte holds),
-  tail-seek attach with a per-poll read cap, and log-derived text rendered without any
-  markup parsing so a hostile or corrupt log cannot crash the viewer. `pulse-top --demo`
-  runs a scripted-incident graph; 25 tests plus a hostile-log smoke run in a dedicated
-  no-ROS CI lane.
 
 ### Fixed
 - **pulse-top on a multi-process stack.** Staleness was counted in windows, but windows from
