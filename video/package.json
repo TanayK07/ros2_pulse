@@ -1,0 +1,23 @@
+{
+  "name": "ros2-pulse-launch-video",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Launch video for ros2_pulse, rendered programmatically with Remotion. Not part of the ROS package or CI.",
+  "scripts": {
+    "dev": "remotion studio",
+    "render": "remotion render src/index.ts Launch out/ros2_pulse-launch.mp4 --codec h264 --crf 18",
+    "still": "remotion still src/index.ts Launch out/frame.png --frame"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.515",
+    "@remotion/google-fonts": "4.0.515",
+    "@remotion/transitions": "4.0.515",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "remotion": "4.0.515"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "typescript": "5.9.3"
+  }
+}
