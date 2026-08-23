@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ros2_pulse</name>
-  <version>0.4.0</version>
+  <version>0.4.1</version>
   <description>
     Near-zero-overhead ROS 2 probe for per-topic message frequency and active-node liveness,
     covering both inter-process and intra-process traffic. Works on stock ROS 2 binaries via an
@@ -22,13 +22,12 @@
   <test_depend>std_msgs</test_depend>
   <test_depend>ros2run</test_depend>
   <!-- LTTng coexistence test (ROADMAP R3): drives a live LTTng session next to the probe and
-       reads the trace back. Both are verified rosdep keys in rosdistro's base.yaml (there is
-       NO `babeltrace2` key; the `babeltrace` key maps to the v1 CLI, which reads LTTng's
-       CTF 1.8 output fine, the test prefers babeltrace2 when the environment has it).
-       Installing them on every lane is deliberate: humble still skips via the ldd check on
-       libtracetools.so (no lttng-ust backend there), not for lack of tooling. -->
+       reads the trace back with babeltrace2 (or babeltrace). Only lttng-tools is declared:
+       babeltrace has no rosdep mapping for RHEL, and humble, jazzy and kilted all release on
+       RHEL, so declaring it blocks RPM generation on the build farm. The test skips itself
+       when no trace viewer is installed; CI installs babeltrace2 explicitly. On humble the
+       test also skips because stock tracetools has no lttng-ust backend. -->
   <test_depend>lttng-tools</test_depend>
-  <test_depend>babeltrace</test_depend>
   <!-- No ament_lint_auto/common: they were declared but never wired into CMake, so they never
        ran (KNOWN_ISSUES #14). Quality gates are the gtest suites + TSan/ASan-UBSan CI lanes;
        adopting a style linter should be a deliberate decision, not a manifest leftover. -->
