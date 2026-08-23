@@ -100,6 +100,42 @@ design on aarch64 too, and the R5 cost is the clock read (89 % of the delta) —
 works on the 5.15 Tegra kernel, so the syscall-fallback risk flagged in the R5 design did not
 materialize.
 
+## Observer effect — what watching a topic with the stock CLI costs (2026-08-23)
+
+`bench/run_observer_effect.sh`, ros:humble, CycloneDDS default, AMD Ryzen 7 7435HS (16 cores).
+Workload: the stress farm above (8 × ~100 KB @ 50 Hz + 30 light @ 100 Hz inter-process, 15
+intra-process @ 100 Hz, all with subscribers). The probe is the ruler in every arm — it counts
+`rcl_publish` in-process, so its publish-side rate is the true rate whatever else subscribes.
+Four arms rotated each trial, N = 10, 10 s runs with the watcher attached for 8 s; mean ± SEM.
+Raw: [`out/observer_effect/`](out/observer_effect/) (CSV, summary, per-arm probe logs, watcher output).
+
+| Arm | true `/heavy_0` Hz | rate the watcher printed | watcher's own CPU | publisher farm CPU | intra farm CPU | `TOPIC /intra_0` windows |
+|---|---|---|---|---|---|---|
+| nothing watching | 50.000 | — | 0 | 1.152 s ± 0.016 | 0.303 s ± 0.010 | 0 / 5 |
+| `ros2 topic hz /heavy_0` | 50.000 | 49.845 ± 0.053 | **0.566 s ± 0.005 = 7.1 % of a core** | 1.171 ± 0.020 | 0.329 ± 0.009 | 0 |
+| `ros2 topic echo /heavy_0 > /dev/null` | 50.000 | — | **2.504 s ± 0.007 = 31.3 % of a core** | 1.133 ± 0.015 | 0.318 ± 0.007 | 0 |
+| `ros2 topic hz /intra_0` (intra-process topic) | 50.000 | 99.997 ± 0.001 | 0.654 s ± 0.004 = 8.2 % | 1.116 ± 0.014 | **0.460 s ± 0.004 (+52 %)** | **4 / 5, in 10 / 10 trials** |
+
+What it says, in order of how sure we are:
+
+1. **The stock tools tell the truth here.** The publisher held 50.000 Hz in every arm and
+   `hz` reported it within 0.3 %. We expected a slow reliable reader to back-pressure a
+   100 KB writer; on this box at this load it did not. Published as measured.
+2. **Watching is not free.** One `ros2 topic hz` on one 100 KB topic is 7 % of a core for
+   as long as you look; `ros2 topic echo` of the same topic is 31 % of a core with its output
+   thrown away. Per topic. The probe adds no subscriber and pulse-top reads a file.
+3. **On an intra-process topic the watcher is the perturbation.** A pure intra-process
+   publisher never reaches `rcl_publish`; the first out-of-process subscriber — the `hz`
+   you just started — makes it serialize and send every message. The watched process's CPU
+   went up 52 % and the publish-side path lit up in 4 of 5 windows, 10 trials out of 10.
+   The number `hz` prints is right; the system it describes is no longer the one that was
+   running before you looked.
+4. **Publisher and subscriber CPU did not move** with an extra inter-process reader
+   (differences are within ~2 SEM in both directions, reliable / KeepLast(10)).
+
+Caveats: one box, one distro, one RMW, 100 KB messages at 50 Hz. A slower CPU (the Orin),
+bigger messages or several watchers scale the watcher's cost; they do not change finding 1.
+
 ## Verdict
 
 - **CPU cost is ≈2 % on a worst-case synthetic stress and proportionally less on real
@@ -125,6 +161,9 @@ docker run --rm -e ROS_DISTRO=jazzy  -v <pkg>:/pkg:ro -v /tmp/bench-jazzy:/work 
   bash /pkg/bench/run_overhead_repeated.sh
 docker run --rm -e ROS_DISTRO=kilted -v <pkg>:/pkg:ro -v /tmp/bench-kilted:/work ros:kilted \
   bash /pkg/bench/run_overhead_repeated.sh
+
+# observer effect: what `ros2 topic hz` / `echo` cost, and what they do to intra-process topics
+docker run --rm -v "$PWD":/pkg -v /tmp/oe:/work ros:humble-ros-base bash /pkg/bench/run_observer_effect.sh
 
 # bake-off vs eBPF / LTTng (needs --privileged for the eBPF leg)
 docker run --rm --privileged -v <pkg>:/pkg -v /tmp/bench:/work ros:humble bash /pkg/bench/run_bakeoff.sh

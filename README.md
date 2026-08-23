@@ -21,8 +21,10 @@ zero network cost**.
 You want to answer a simple question in production: **"is every topic flowing at the rate it
 should, and which nodes are alive?"** The existing options each fall short:
 
-- `ros2 topic hz` — subscribes to each topic (adds DDS traffic + CPU), one topic at a time, and is
-  **blind to intra-process messages**.
+- `ros2 topic hz` / `echo` — subscribe to each topic, one at a time: **7 % of a core** per watched
+  100 KB topic for `hz`, **31 %** for `echo`, and **blind to intra-process messages** — worse, on an
+  intra-process topic the watcher switches serialization on and the watched process's CPU rises
+  **52 %** ([measured](bench/RESULTS.md#observer-effect--what-watching-a-topic-with-the-stock-cli-costs-2026-08-23)).
 - **Built-in topic statistics** — on Humble-class binaries,
   [bypassed entirely by intra-process comms](https://github.com/ros2/rclcpp/issues/2911), so composable
   nodes carrying point clouds lose all introspection. (Fixed upstream for intra-process on `rolling`/newer

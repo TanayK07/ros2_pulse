@@ -1,0 +1,4 @@
+Linux ba89ff2e6c91 6.8.0-124-generic #124~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue May 26 21:05:19 UTC  x86_64 x86_64 x86_64 GNU/Linux
+CPU(s):                                  16
+Model name:                              AMD Ryzen 7 7435HS
+distro=humble rmw=default
