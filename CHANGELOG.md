@@ -33,6 +33,19 @@ All notable changes to this project are documented here. Format follows
   runs a scripted-incident graph; 25 tests plus a hostile-log smoke run in a dedicated
   no-ROS CI lane.
 
+### Fixed
+- **pulse-top on a multi-process stack.** Staleness was counted in windows, but windows from
+  every probed process interleave (77 nodes ≈ 15 windows/s), so a healthy 5 Hz topic read
+  `stale 3w` and every row re-rendered every tick; `/tf_static` lost its `PUB` rate whenever a
+  subscriber's window landed; the sparkline took one sample per process-window instead of per
+  period; and the default path followed only the newest `topic_freq.<pid>.log` — one node of
+  the graph. Now: staleness is wall time from the window timestamps (`stale 12s` past
+  1.5× the topic's window), publish and receive sides merge per topic, one history sample per
+  period, every matching per-pid file is followed (new ones picked up live), and only cells
+  whose text or style changed are pushed to the table — Textual's `DataTable.update_cell`
+  invalidates and refreshes unconditionally, so the idle repaint cost over ssh is now zero.
+  Found on the Orin run (2026-08-23).
+
 ## [0.3.0] - 2026-08-20
 
 Observability-formats + soundness release: gap visibility closes the stall blind spot in 0.2.0's

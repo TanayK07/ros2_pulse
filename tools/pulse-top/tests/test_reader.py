@@ -82,3 +82,36 @@ class TestByteExactness:
         f.READ_CAP = 2                        # force two polls for two lines
         assert f.poll() == ["a"]
         assert f.poll() == ["b"]
+
+
+class TestMultiFollower:
+    # The probe writes one file per process by default ($TMPDIR/topic_freq.<pid>.log).
+    # A dashboard that follows only the newest file shows one node of a 77-node
+    # stack. Follow every file matching the pattern, and notice new ones.
+    def test_reads_lines_from_every_matching_file(self, tmp_path):
+        from pulse_top.reader import MultiFollower
+        (tmp_path / "topic_freq.1.log").write_text("one\n")
+        (tmp_path / "topic_freq.2.log").write_text("two\n")
+        (tmp_path / "other.log").write_text("nope\n")
+        mf = MultiFollower(str(tmp_path / "topic_freq.*.log"))
+        assert sorted(mf.poll()) == ["one", "two"]
+        assert len(mf.files) == 2
+
+    def test_picks_up_a_file_created_after_start(self, tmp_path):
+        from pulse_top.reader import MultiFollower
+        (tmp_path / "topic_freq.1.log").write_text("one\n")
+        mf = MultiFollower(str(tmp_path / "topic_freq.*.log"))
+        assert mf.poll() == ["one"]
+        (tmp_path / "topic_freq.2.log").write_text("two\n")
+        assert mf.poll() == ["two"]
+        assert len(mf.files) == 2
+
+    def test_single_plain_path_still_works(self, tmp_path):
+        from pulse_top.reader import MultiFollower
+        f = tmp_path / "shared.log"
+        f.write_text("a\n")
+        mf = MultiFollower(str(f))
+        assert mf.poll() == ["a"]
+        with open(f, "a") as fh:
+            fh.write("b\n")
+        assert mf.poll() == ["b"]

@@ -66,8 +66,9 @@ class TestParse:
 class TestState:
     def test_apply_accumulates_history(self):
         s = StatsState(history=8)
-        for _ in range(3):
-            s.apply(parse_jsonl_line(RECORD))
+        for i in range(3):  # one window per period; same-period repeats are one sample
+            s.apply(parse_jsonl_line(RECORD.replace('"ts_ns":"1782887153899445923"',
+                                                    f'"ts_ns":"{1782887153899445923 + i * 5_000_000_000}"')))
         assert s.windows_seen == 3
         assert list(s.topics["/scan"].rate_history) == [19.8, 19.8, 19.8]
 
@@ -109,32 +110,104 @@ class TestSparkline:
 
 
 class TestStaleness:
-    CLEAN_SCAN_ONLY = (
-        '{"ts_ns":"9","window_s":5.0,'
-        '"topics":[{"topic":"/scan","pub_inter_hz":20.0,"pub_intra_hz":0.0}],'
-        '"nodes":["/perception"],"warns":[]}'
-    )
+    # Windows from different processes interleave in a shared log (or in merged
+    # per-pid logs): 77 nodes x one window each per period. Staleness must be
+    # measured in TIME from the window timestamps, never in windows counted —
+    # a 5 Hz topic showed "stale 3w" on a 77-node Orin stack (2026-08-23) because
+    # three other processes' windows had landed since its own.
+    def w(self, ts_s, topics):
+        tt = ",".join(f'{{"topic":"{n}","pub_inter_hz":{hz}}}' for n, hz in topics)
+        return parse_jsonl_line(
+            f'{{"ts_ns":"{int(ts_s * 1e9)}","window_s":5.0,"topics":[{tt}],"nodes":[],"warns":[]}}'
+        )
 
-    def test_last_seen_tracks_presence(self):
-        # Review #32: a topic absent from later windows froze at its last rate
-        # with no marker. The model must expose staleness for the view to render.
+    def test_interleaved_windows_do_not_age_a_topic(self):
         s = StatsState()
-        s.apply(parse_jsonl_line(RECORD))          # /scan + /points
-        s.apply(parse_jsonl_line(self.CLEAN_SCAN_ONLY))  # /points vanished
-        assert s.topics["/scan"].last_seen == 2
-        assert s.topics["/points"].last_seen == 1
-        assert s.windows_seen - s.topics["/points"].last_seen == 1  # 1 window stale
+        s.apply(self.w(100.0, [("/a", 5.0)]))
+        s.apply(self.w(100.1, [("/b", 1.0)]))   # another process, same period
+        s.apply(self.w(100.2, [("/c", 1.0)]))
+        assert s.age_s("/a") == pytest.approx(0.2)
+        assert not s.is_stale("/a")
+
+    def test_topic_is_stale_once_more_than_a_window_and_a_half_passes(self):
+        s = StatsState()
+        s.apply(self.w(100.0, [("/a", 5.0)]))
+        s.apply(self.w(107.0, [("/b", 1.0)]))   # 7.0 s < 1.5 x 5 s
+        assert not s.is_stale("/a")
+        s.apply(self.w(108.0, [("/b", 1.0)]))   # 8.0 s > 7.5 s
+        assert s.is_stale("/a")
+        assert s.age_s("/a") == pytest.approx(8.0)
+
+    def test_out_of_order_window_does_not_rewind_the_clock(self):
+        s = StatsState()
+        s.apply(self.w(100.0, [("/a", 5.0)]))
+        s.apply(self.w(110.0, [("/b", 1.0)]))
+        s.apply(self.w(101.0, [("/c", 1.0)]))   # late flush from a slow process
+        assert s.age_s("/a") == pytest.approx(10.0)
+
+
+class TestRateHistorySampling:
+    # rate_history feeds the sparkline: one sample per topic per window PERIOD.
+    # Twenty subscribers each flushing a window for /tf_static in the same
+    # period must not push twenty samples — that fills the 60-slot history in
+    # three periods and changes the sparkline on every interleaved window.
+    def w(self, ts_s, hz):
+        return parse_jsonl_line(
+            f'{{"ts_ns":"{int(ts_s * 1e9)}","window_s":5.0,'
+            f'"topics":[{{"topic":"/a","recv_inter_hz":{hz}}}],"nodes":[],"warns":[]}}'
+        )
+
+    def test_same_period_windows_add_one_sample(self):
+        s = StatsState()
+        for ts in (100.0, 100.1, 100.2):
+            s.apply(self.w(ts, 2.0))
+        assert list(s.topics["/a"].rate_history) == [2.0]
+
+    def test_next_period_adds_a_sample(self):
+        s = StatsState()
+        s.apply(self.w(100.0, 2.0))
+        s.apply(self.w(105.0, 3.0))
+        assert list(s.topics["/a"].rate_history) == [2.0, 3.0]
+
+
+class TestPerSideMerge:
+    # /tf_static is published by one process and received by twenty. Each
+    # process's window carries only its own side; a recv-only window must not
+    # erase the pub rate learned from the publisher's window.
+    def test_recv_only_window_keeps_pub_fields(self):
+        s = StatsState()
+        s.apply(parse_jsonl_line(
+            '{"ts_ns":"1000000000","window_s":5.0,"topics":[{"topic":"/tf","pub_inter_hz":2.0,"pub_intra_hz":0.0}],"nodes":[],"warns":[]}'))
+        s.apply(parse_jsonl_line(
+            '{"ts_ns":"1100000000","window_s":5.0,"topics":[{"topic":"/tf","recv_inter_hz":2.0,"recv_intra_hz":0.0,"recv_endpoint_seen":true}],"nodes":[],"warns":[]}'))
+        t = s.topics["/tf"].latest
+        assert t.pub_inter_hz == 2.0
+        assert t.recv_inter_hz == 2.0
+        assert t.recv_endpoint_seen is True
+
+    def test_pub_side_refresh_overwrites_pub_only(self):
+        s = StatsState()
+        s.apply(parse_jsonl_line(
+            '{"ts_ns":"1000000000","window_s":5.0,"topics":[{"topic":"/tf","recv_inter_hz":9.0,"recv_max_dt_ms":50.0}],"nodes":[],"warns":[]}'))
+        s.apply(parse_jsonl_line(
+            '{"ts_ns":"1100000000","window_s":5.0,"topics":[{"topic":"/tf","pub_inter_hz":2.0,"pub_max_dt_ms":500.0}],"nodes":[],"warns":[]}'))
+        t = s.topics["/tf"].latest
+        assert (t.pub_inter_hz, t.pub_max_dt_ms) == (2.0, 500.0)
+        assert (t.recv_inter_hz, t.recv_max_dt_ms) == (9.0, 50.0)
 
 
 class TestWarnRetention:
-    def test_transient_warn_survives_in_recent(self):
+    def test_transient_warn_survives_in_recent_with_age_in_seconds(self):
         # Review #32: warns replaced wholesale each window made a one-window gap
-        # transient a sub-second blink. recent_warns retains it with its age.
+        # transient a sub-second blink. recent_warns retains it with its age —
+        # in seconds, since window counts mean nothing across processes.
         s = StatsState()
-        s.apply(parse_jsonl_line(RECORD))          # 2 warns fire in window 1
-        s.apply(parse_jsonl_line(TestStaleness.CLEAN_SCAN_ONLY))  # clean window
+        s.apply(parse_jsonl_line(RECORD))          # 2 warns fire at ts 1782887153.899
+        s.apply(parse_jsonl_line(
+            '{"ts_ns":"1782887160899445923","window_s":5.0,'
+            '"topics":[{"topic":"/scan","pub_inter_hz":20.0}],"nodes":["/perception"],"warns":[]}'))
         assert s.warns == []                       # live set: honest, empty
         kinds = [w.kind for _, w in s.recent_warns]
         assert "topic_gap" in kinds and "node_missing" in kinds
-        ages = [s.windows_seen - seen for seen, _ in s.recent_warns]
-        assert ages == [1, 1]                      # both fired one window ago
+        ages = [s.warn_age_s(ts) for ts, _ in s.recent_warns]
+        assert ages == pytest.approx([7.0, 7.0])

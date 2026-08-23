@@ -15,10 +15,13 @@ dependencies = ["textual>=1.0"]
 pulse-top = "pulse_top.app:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pytest-asyncio>=0.23"]
 
 [tool.setuptools.packages.find]
 include = ["pulse_top*"]
 
 [tool.setuptools.package-data]
 pulse_top = ["*.tcss"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
