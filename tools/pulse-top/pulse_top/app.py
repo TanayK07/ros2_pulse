@@ -49,6 +49,7 @@ def fmt(v: float | None, none: str = "—") -> str:
 
 
 class PulseTopApp(App):
+    TITLE = "pulse-top"
     CSS_PATH = "app.tcss"
     BINDINGS = [
         Binding("q", "quit", "quit"),

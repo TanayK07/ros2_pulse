@@ -6,6 +6,8 @@ nodes/warns always present, structured warns. A TUI that misread absence as zero
 would invent data the probe deliberately refused to claim.
 """
 
+import json
+
 import pytest
 
 from pulse_top.model import StatsState, parse_jsonl_line, sparkline
@@ -61,6 +63,29 @@ class TestParse:
     )
     def test_garbage_returns_none_never_raises(self, line):
         assert parse_jsonl_line(line) is None
+
+
+class TestWarnDetail:
+    def detail(self, hz, lo=19.0, hi=22.0):
+        rec = {"ts_ns": "1", "window_s": 1.0, "topics": [], "nodes": [],
+               "warns": [{"kind": "topic_rate", "topic": "/cmd_vel", "hz": hz, "min_hz": lo, "max_hz": hi}]}
+        return parse_jsonl_line(json.dumps(rec)).warns[0].detail
+
+    def test_below_min_names_the_min(self):
+        assert self.detail(10.0).endswith("< min 19.0Hz")
+
+    def test_above_max_names_the_max(self):
+        assert self.detail(25.0).endswith("> max 22.0Hz")
+
+    def test_rate_is_rounded_for_humans(self):
+        # The probe emits 6 decimals; a warn line is read by a person at 3 a.m.
+        assert self.detail(17.345761).startswith("/cmd_vel 17.3Hz ")
+
+    def test_in_range_never_claims_a_bound_was_crossed(self):
+        # A rate inside [min, max] cannot be "> max"; say what is known instead.
+        d = self.detail(20.0)
+        assert "> max" not in d and "< min" not in d
+        assert "19.0" in d and "22.0" in d
 
 
 class TestState:

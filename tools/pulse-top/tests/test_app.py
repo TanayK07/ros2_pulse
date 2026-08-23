@@ -75,3 +75,7 @@ class TestRepaintEconomy:
             rows = {row for row, _ in calls}
             assert rows == {"/a"}
             assert 0 < len(calls) < 6
+
+
+def test_window_title_is_the_product_name():
+    assert PulseTopApp.TITLE == "pulse-top"
