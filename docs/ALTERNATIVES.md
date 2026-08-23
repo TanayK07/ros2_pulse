@@ -2,11 +2,11 @@
 
 Two parts: **(A)** other ways to get "per-topic Hz + node liveness, incl. intra-process", built-in
 or third-party, and where each falls short; **(B)** how to benchmark ros2_pulse rigorously.
-Companion: [KNOWN_ISSUES.md](KNOWN_ISSUES.md), [TESTING_PLAN.md](TESTING_PLAN.md).
+Companion: [KNOWN_ISSUES.md](KNOWN_ISSUES.md).
 
 ---
 
-## Part A — ways to get similar output
+## Part A: ways to get similar output
 
 Constraint set ros2_pulse targets: **intra-process visibility + zero added DDS traffic + zero
 privilege + stock (unrebuilt) binaries + drop-in ready-to-read output**. No single off-the-shelf
@@ -18,7 +18,7 @@ tool meets all five. Rundown:
   intra-process** delivery (it receives over the middleware). No node liveness. Measured
   ([bench/RESULTS.md, observer effect](../bench/RESULTS.md)): `hz` costs 7 % of a core per
   watched 100 KB topic and `echo` 31 %; the rate they print is accurate, but pointing `hz` at an
-  intra-process topic makes the publisher serialize every message — +52 % CPU on that process,
+  intra-process topic makes the publisher serialize every message: +52 % CPU on that process,
   for a rate it could not see before you looked.
 - **Verdict.** Fine for a spot check on one inter-process topic; not an always-on graph probe,
   and not a neutral observer of intra-process traffic.
@@ -27,26 +27,26 @@ tool meets all five. Rundown:
 - **What.** rclcpp can publish per-subscription stats (`message_age`, `message_period`) on
   `/statistics` when enabled via `SubscriptionOptions::topic_stats_options` (opt-in per
   subscription, `state = Enable`).
-- **Gap (Humble).** Bypassed by intra-process comms —
+- **Gap (Humble).** Bypassed by intra-process comms,
   [ros2/rclcpp#2911](https://github.com/ros2/rclcpp/issues/2911). Also: opt-in per subscription (not
   automatic on stock binaries), **publishes over DDS** (adds traffic), receive-side only (no
   publish-side rate, no liveness), and gives period/age not a plain Hz.
 - **Upstream status.** #2911 was fixed by
-  [PR #3130](https://github.com/ros2/rclcpp/pull/3130) (merged to `rolling`, Apr 2026) — a
+  [PR #3130](https://github.com/ros2/rclcpp/pull/3130) (merged to `rolling`, Apr 2026), a
   type-erased stats handler wired into `SubscriptionIntraProcess`. **On `rolling`/newer the
   intra-process gap is closed.** No public Humble backport as of this writing, so ros2_pulse's
   intra claim holds for stock Humble but should be scoped to that. Even post-fix, built-in stats
-  remain opt-in, DDS-published, and receive-only — ros2_pulse still differs on zero-config +
+  remain opt-in, DDS-published, and receive-only, ros2_pulse still differs on zero-config +
   publish-side + zero-network + file output.
 
 ### `ros2_tracing` / LTTng + tracetools
 - **What.** The canonical instrumentation path. Hooks the same `ros_trace_*` tracepoints, records a
   CTF trace via an LTTng session, analyse offline with `tracetools_analysis` (pandas/Jupyter) to
   derive rates.
-- **Gap (distro-dependent — be precise).** On **Humble**, `libtracetools.so` is **not built
+- **Gap (distro-dependent, be precise).** On **Humble**, `libtracetools.so` is **not built
   against `lttng-ust`** (the bake-off measured **0 events** on stock `ros:humble`), so tracing
   needs a ROS rebuild. Since **Iron**, the LTTng tracer is a ROS dependency and **stock binaries
-  trace out-of-the-box** — on Jazzy+ the "needs a rebuild" argument is gone, and the honest
+  trace out-of-the-box**; on Jazzy+ the "needs a rebuild" argument is gone, and the
   differentiators are: no `lttng-sessiond`, no CTF post-processing, an *online* ready-to-read Hz
   file, and zero setup. Built for offline analysis either way, not a cheap always-on readout.
 - **Relationship.** ros2_pulse hooks the *same layer* but replaces "record everything → analyse
@@ -54,10 +54,10 @@ tool meets all five. Rundown:
   (it interposes the function symbols themselves). On LTTng-enabled distros the probe *forwards*
   to the real tracepoints, so it coexists with a live tracing session.
 
-### CARET (Tier IV) — the mechanism cousin
+### CARET (Tier IV): the mechanism cousin
 - **What.** [CARET](https://tier4.github.io/caret_doc/) is Tier IV's performance-analysis tool
   for ROS 2 (built for Autoware): callback/communication/**chain** latency, frequency, period and
-  jitter. Crucially, it uses the **same core mechanism as ros2_pulse** — `LD_PRELOAD` function
+  jitter. Crucially, it uses the **same core mechanism as ros2_pulse**, `LD_PRELOAD` function
   hooking over the tracetools layer to add/observe tracepoints without rebuilding ROS core.
   Independent, production-scale validation that preload-over-tracetools is sound.
 - **Gap (for this use case).** CARET is a *deep offline analysis* suite: it requires **LTTng**
@@ -66,10 +66,10 @@ tool meets all five. Rundown:
   heavyweight for "is every topic flowing right now".
 - **Relationship.** Same hook layer, opposite trade: CARET maximizes analytical depth at
   deployment cost; ros2_pulse maximizes deployability (zero deps, always-on, online Hz file) at
-  analytical depth. They compose — pulse for 24/7 fleet monitoring, CARET for the deep dive when
+  analytical depth. They compose: pulse for 24/7 fleet monitoring, CARET for the deep dive when
   pulse flags something.
 
-### `diagnostic_updater` topic diagnostics — the in-code incumbent
+### `diagnostic_updater` topic diagnostics: the in-code incumbent
 - **What.** `diagnostic_updater::TopicDiagnostic` / `HeaderlessTopicDiagnostic`: the standard ROS
   way to monitor a topic's rate against expected bounds, publishing to `/diagnostics`.
 - **Gap.** Requires **source changes in every node** (wrap each publisher / add an updater),
@@ -77,7 +77,7 @@ tool meets all five. Rundown:
 - **Relationship.** ros2_pulse is the zero-touch equivalent for a whole process tree; the
   expected-rate spec (ROADMAP R1) will close the "against bounds" half without per-node code.
 
-### rclpy (Python nodes) — a real limitation
+### rclpy (Python nodes): a real limitation
 - Publish side **works** for Python nodes: `rcl_publish` fires in the C `rcl` layer under rclpy.
 - Receive side is **invisible**: `callback_start` is emitted by rclcpp only, and rclpy was never
   instrumented at the client-library level
@@ -89,8 +89,8 @@ tool meets all five. Rundown:
 - **What.** Attach uprobes to `ros_trace_rcl_publish` / `ros_trace_callback_start` and aggregate in
   a kernel map. `bench/bpftrace_probe.bt` demonstrates it.
 - **Gap.** Needs **`CAP_SYS_ADMIN` + debugfs + a BTF/uprobe-capable kernel** (a privileged container
-  was required just to attach in the bake-off), and pays a **kernel trap per message** (~1–2 µs)
-  that scales with rate — fine at a few kHz, visible at point-cloud rates. A real portability risk
+  was required just to attach in the bake-off), and pays a **kernel trap per message** (~1-2 µs)
+  that scales with rate, fine at a few kHz, visible at point-cloud rates. A real portability risk
   on Jetson/Orin.
 - **Verdict.** Closest technical cousin (same hooks) but loses on privilege + kernel portability.
 
@@ -126,15 +126,15 @@ tool meets all five. Rundown:
 | eBPF uprobe | ✅ | none (kernel map) | CAP_SYS_ADMIN | ✅ | needs script | possible |
 | DDS monitor | ❌ | monitor traffic | none | ✅ | ❌ | partial |
 
-**The honest one-liner:** ros2_pulse is not "cheaper CPU than eBPF" (the bake-off shows both ≈ noise
+In one line: ros2_pulse is not "cheaper CPU than eBPF" (the bake-off shows both ≈ noise
 at moderate rates). It wins on **deployability**: intra-process + zero-network + zero-privilege +
 stock-binary + drop-in file, simultaneously. Keep the marketing there.
 
 ---
 
-## Part B — benchmarking methodology
+## Part B: benchmarking methodology
 
-The existing `bench/` is already sound (interleaved trials, microbench, honest verdicts). This
+The existing `bench/` is sound (interleaved trials, microbench). This
 codifies it and fills gaps. See `bench/RESULTS.md` for current numbers.
 
 ### Metrics that matter (and how to measure)
@@ -153,14 +153,14 @@ codifies it and fills gaps. See `bench/RESULTS.md` for current numbers.
 Single short samples carry ~±10% run-to-run variance (documented in `bench/RESULTS.md`), which
 swamps a <2% overhead signal. Rules:
 
-1. **Interleave** baseline and probe trials (A,B,A,B,…), don't run all-A then all-B — drift and
+1. **Interleave** baseline and probe trials (A,B,A,B,...); don't run all-A then all-B, because drift and
    thermal state bias blocked runs. `bench/run_overhead_repeated.sh` does this; keep N ≥ 6.
 2. **Pin** the workload (`taskset`/cpuset) and disable turbo/frequency scaling where possible.
-3. Report **mean ± stddev**, not a single delta. Treat anything inside ±1σ as "within noise" —
+3. Report **mean ± stddev**, not a single delta. Treat anything inside ±1σ as "within noise",
    don't claim a win there (the current verdict does this correctly).
 4. Use `hyperfine` for wall-clock A/B when the workload is a fixed-duration run.
 
-### Accuracy benchmark (missing today — add it)
+### Accuracy benchmark (missing today; add it)
 
 Overhead ≠ correctness. Add a harness that drives publishers at **known** rates and asserts the
 probe's reported Hz is within tolerance:
@@ -180,7 +180,7 @@ probe's reported Hz is within tolerance:
 - Keep the workload spec in `bench/RESULTS.md` (msg counts, sizes, rates) so numbers are
   comparable across runs/machines.
 - Record host (cores, CPU, kernel), container image + tag, and ROS distro alongside every result.
-- For the eBPF/LTTng legs, record the *enabling requirements* met (privileged? lttng-ust present?) —
+- For the eBPF/LTTng legs, record the *enabling requirements* met (privileged? lttng-ust present?),
   a "0 events" result is a finding, not a failure, and must be labelled as such.
 
 ### On-hardware (Orin/Jetson)

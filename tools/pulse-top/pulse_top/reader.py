@@ -7,11 +7,11 @@ them to U+FFFD. Decoding happens per completed line only.
 
 Attach behavior (PR #32 review): a first poll on a large backlog seeks to the tail
 (TAIL_BYTES before EOF, dropping the mid-record line it lands on) and every poll
-reads at most READ_CAP bytes, carrying the rest to the next tick — the UI thread
+reads at most READ_CAP bytes, carrying the rest to the next tick, the UI thread
 never blocks on hours of history it will only fold into a 60-window deque.
 
 Truncation (probe restart, logrotate copytruncate) is detected by the file shrinking
-below our offset — re-sync to the start rather than replaying or dying. A missing
+below our offset, re-sync to the start rather than replaying or dying. A missing
 file is quiet: the probe may simply not have started yet.
 """
 
@@ -68,7 +68,7 @@ class MultiFollower:
     """Follow every file matching a glob pattern (or one plain path).
 
     The probe's default output is one file per process, $TMPDIR/topic_freq.<pid>.log,
-    so a live stack is N files that appear as nodes start. Re-glob on every poll —
+    so a live stack is N files that appear as nodes start. Re-glob on every poll,
     a directory listing twice a second is nothing next to the cost of showing one
     node of a 77-node graph. A plain path (no glob metacharacters) is followed
     as-is so a deliberately shared file keeps working.

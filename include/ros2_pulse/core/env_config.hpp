@@ -14,7 +14,7 @@ namespace ros2_pulse::core {
 /// `noexcept` by contract: this runs inside the probe's Meyers-singleton constructor, which is
 /// reached from an `extern "C"` tracepoint called by rclcpp. An exception escaping here would
 /// unwind across that boundary into code not compiled to expect it and terminate the host process
-/// (see docs/issues/issue-5-env-parse-safety.md / KNOWN_ISSUES.md #5).
+/// (see KNOWN_ISSUES.md #5).
 ///
 /// Any input that is null (unset), empty / whitespace-only, non-numeric, carries trailing junk,
 /// is non-finite (`nan` / `inf`), or is `<= 0` yields @p def instead of throwing. Surrounding
@@ -30,7 +30,7 @@ double parsePeriodSeconds(const char* raw, double def) noexcept;
 /// Same `noexcept` contract and rationale as parsePeriodSeconds (KNOWN_ISSUES #5): reached from
 /// the tracepoint-driven singleton constructor, must never throw.
 ///
-/// `"0"` is a VALID value meaning "rotation disabled" — distinct from unusable input. Unset,
+/// `"0"` is a VALID value meaning "rotation disabled", distinct from unusable input. Unset,
 /// empty, non-integral (`"1.5"`), negative, or trailing-junk input yields @p def. Surrounding
 /// whitespace is tolerated.
 unsigned long long parseMaxBytes(const char* raw, unsigned long long def) noexcept;
@@ -46,13 +46,13 @@ enum class eStatsFormat {
 /// Same `noexcept` contract as the parsers above (KNOWN_ISSUES #5): reached from the
 /// tracepoint-driven singleton constructor, must never throw.
 ///
-/// Unset / empty / whitespace-only means "not asked for" and yields kText — the format an
+/// Unset / empty / whitespace-only means "not asked for" and yields kText, the format an
 /// operator gets without touching anything must be byte-identical to what every existing
-/// consumer parses. `"text"` and `"jsonl"` (exact, lowercase — the documented forms, matching
+/// consumer parses. `"text"` and `"jsonl"` (exact, lowercase, the documented forms, matching
 /// the strict `"1"`-only opt-in flags) select explicitly; surrounding whitespace is tolerated
 /// like the other env parsers because these are exported via the shell.
 ///
-/// Any OTHER value returns std::nullopt so the caller can warn once and fall back to text —
+/// Any OTHER value returns std::nullopt so the caller can warn once and fall back to text,
 /// distinct from the silent kText default, because a typo ("json", "JSONL") is an operator
 /// asking for something and not getting it, which must be said out loud (the spec-file error
 /// philosophy: never crash the host, never silently ignore a request).

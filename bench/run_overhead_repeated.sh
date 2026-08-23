@@ -1,7 +1,7 @@
 #!/bin/bash
 # Rigorous end-to-end overhead: PAIRED trials (baseline vs ours back-to-back) with the arm order
 # ALTERNATED each trial, so slow machine drift and any warm-up/order effect cancel in the
-# per-trial difference. Reports every sample plus mean/SD/SEM of the paired diffs — a delta is
+# per-trial difference. Reports every sample plus mean/SD/SEM of the paired diffs, a delta is
 # only believable if it clears ~2x the SEM (the KNOWN_ISSUES #15 hunt showed single runs swing
 # +/-4% and a fixed arm order can masquerade as overhead). Also runs the isolated hot-path
 # microbench (the clean per-operation signal).
@@ -58,6 +58,6 @@ echo "=== isolated hot-path microbench (clean per-operation signal) ==="
 if [ -f /pkg/bench/hotpath_bench.cpp ]; then
   g++ -O2 -std=c++17 -pthread /pkg/bench/hotpath_bench.cpp -o /work/hb && /work/hb 8
 else
-  echo "ERROR: /pkg/bench/hotpath_bench.cpp not found — mount the package at /pkg (-v <pkg>:/pkg)"
+  echo "ERROR: /pkg/bench/hotpath_bench.cpp not found, mount the package at /pkg (-v <pkg>:/pkg)"
 fi
 echo "=== DONE ==="

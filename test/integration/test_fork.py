@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
 # fork()-without-exec integration test (KNOWN_ISSUES #10): a child forked without exec inherits
-# m_started=true but no flush thread — on the buggy code it counts forever and never writes.
+# m_started=true but no flush thread, on the buggy code it counts forever and never writes.
 
 import os
 import subprocess
@@ -30,7 +30,7 @@ def test_forked_child_flushes_its_own_counts():
         env = ph.make_env(so, out, period="1.0")
         p = subprocess.Popen([node, "fork_pub"], env=env, stderr=subprocess.DEVNULL)
         rc = p.wait(timeout=30)
-        assert rc == 0, f"fork_pub rc={rc} — child crashed or deadlocked (KNOWN_ISSUES #10)"
+        assert rc == 0, f"fork_pub rc={rc}, child crashed or deadlocked (KNOWN_ISSUES #10)"
 
         assert os.path.exists(out), "no output file written at all"
         text = open(out).read()
@@ -39,7 +39,7 @@ def test_forked_child_flushes_its_own_counts():
         rates = [r for r in rates if r is not None and r > 0.0]
         assert rates, (
             f"child's /forked publishes never flushed (KNOWN_ISSUES #10)\n--- log ---\n{text}")
-        # ~200 Hz nominal; generous band — the point is "the child's counts survived", not
+        # ~200 Hz nominal; generous band, the point is "the child's counts survived", not
         # cadence precision (covered by the accuracy suite).
         assert max(rates) > 50.0, (
             f"/forked rate implausibly low ({max(rates):.1f} Hz)\n--- log ---\n{text}")

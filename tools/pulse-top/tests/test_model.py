@@ -137,7 +137,7 @@ class TestSparkline:
 class TestStaleness:
     # Windows from different processes interleave in a shared log (or in merged
     # per-pid logs): 77 nodes x one window each per period. Staleness must be
-    # measured in TIME from the window timestamps, never in windows counted —
+    # measured in TIME from the window timestamps, never in windows counted,
     # a 5 Hz topic showed "stale 3w" on a 77-node Orin stack (2026-08-23) because
     # three other processes' windows had landed since its own.
     def w(self, ts_s, topics):
@@ -174,7 +174,7 @@ class TestStaleness:
 class TestRateHistorySampling:
     # rate_history feeds the sparkline: one sample per topic per window PERIOD.
     # Twenty subscribers each flushing a window for /tf_static in the same
-    # period must not push twenty samples — that fills the 60-slot history in
+    # period must not push twenty samples, that fills the 60-slot history in
     # three periods and changes the sparkline on every interleaved window.
     def w(self, ts_s, hz):
         return parse_jsonl_line(
@@ -224,14 +224,14 @@ class TestPerSideMerge:
 class TestWarnRetention:
     def test_transient_warn_survives_in_recent_with_age_in_seconds(self):
         # Review #32: warns replaced wholesale each window made a one-window gap
-        # transient a sub-second blink. recent_warns retains it with its age —
+        # transient a sub-second blink. recent_warns retains it with its age,
         # in seconds, since window counts mean nothing across processes.
         s = StatsState()
         s.apply(parse_jsonl_line(RECORD))          # 2 warns fire at ts 1782887153.899
         s.apply(parse_jsonl_line(
             '{"ts_ns":"1782887160899445923","window_s":5.0,'
             '"topics":[{"topic":"/scan","pub_inter_hz":20.0}],"nodes":["/perception"],"warns":[]}'))
-        assert s.warns == []                       # live set: honest, empty
+        assert s.warns == []                       # live set is empty
         kinds = [w.kind for _, w in s.recent_warns]
         assert "topic_gap" in kinds and "node_missing" in kinds
         ages = [s.warn_age_s(ts) for ts, _ in s.recent_warns]

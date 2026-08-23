@@ -32,7 +32,7 @@ auto statFor(sLogWindow& win, const std::string& topic) -> sTopicStat& {
 // library enters this codebase (pulse-check links only the pure core, and the core is also
 // linked into an LD_PRELOAD probe). It is NOT a general JSON parser: it consumes the grammar
 // formatWindowJsonl emits, tolerates unknown KEYS by skipping their (arbitrarily nested)
-// values — so an older pulse-check keeps reading a newer probe's additive fields — and
+// values, so an older pulse-check keeps reading a newer probe's additive fields, and
 // rejects the line on any malformation. Rejection is per-LINE: jsonl's framing guarantees a
 // record never spans lines, so one truncated tail (crash mid-write) costs one window, exactly
 // like a torn text block.
@@ -96,7 +96,7 @@ void appendUtf8(std::string& out, unsigned cp) {
     }
 }
 
-// RFC 8259 §7 string, escapes included (\uXXXX with surrogate pairs — the emitter only writes
+// RFC 8259 §7 string, escapes included (\uXXXX with surrogate pairs, the emitter only writes
 // \u00xx for C0 controls, but a foreign writer's record should still round-trip).
 auto parseJsonString(sCursor& c, std::string& out) -> bool {
     if (!consume(c, '"')) {
@@ -167,7 +167,7 @@ auto parseJsonNumber(sCursor& c, double& out) -> bool {
 }
 
 // Skip any well-formed JSON value: how unknown keys stay tolerated without being understood.
-auto skipJsonValue(sCursor& c) -> bool {  // NOLINT(misc-no-recursion) — nesting is user-bounded
+auto skipJsonValue(sCursor& c) -> bool {  // NOLINT(misc-no-recursion), nesting is user-bounded
     skipWs(c);
     if (c.p == c.end) {
         return false;
@@ -239,7 +239,7 @@ auto parseJsonBool(sCursor& c, bool& out) -> bool {
     return false;
 }
 
-// One element of "topics": known keys land in the stat (gap keys also set the has_* flag —
+// One element of "topics": known keys land in the stat (gap keys also set the has_* flag,
 // PRESENCE is the measurement marker, mirroring the emitter's absence-means-unmeasured rule),
 // unknown keys are skipped.
 auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
@@ -290,7 +290,7 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
     if (!have_name) {
         return false;  // a rates entry with no topic is not attributable to anything
     }
-    // Merge via statFor like the text lines do — the emitter writes one entry per topic, but a
+    // Merge via statFor like the text lines do, the emitter writes one entry per topic, but a
     // foreign/duplicated record should still coalesce rather than shadow.
     auto& s = statFor(win, tmp.topic);
     const std::string name = s.topic;
@@ -300,7 +300,7 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
 }
 
 // One whole jsonl window record. Returns false on ANY malformation (including trailing bytes
-// after the closing brace — the framing is one object per line, nothing else on it).
+// after the closing brace, the framing is one object per line, nothing else on it).
 auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
     sCursor c{line.data(), line.data() + line.size()};
     if (!consume(c, '{')) {
@@ -385,7 +385,7 @@ auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
                     }
                 }
             } else {
-                // Every other top-level key — "warns" included, BY DESIGN — is skipped whole:
+                // Every other top-level key, "warns" included, BY DESIGN, is skipped whole:
                 // pulse-check re-derives verdicts from the raw rates, it never trusts
                 // probe-side warnings (same stance as the text parser skipping WARN lines).
                 if (!skipJsonValue(c)) {
@@ -421,7 +421,7 @@ auto parseLog(const std::string& text) -> std::vector<sLogWindow> {
             continue;
         }
 
-        // jsonl sniff (ROADMAP R6): a '{' first byte can only be a jsonl window — no text-format
+        // jsonl sniff (ROADMAP R6): a '{' first byte can only be a jsonl window, no text-format
         // line starts with it (and ROS names cannot: '{' is not a valid name character). Each
         // record is self-contained, so it parses without a current-window context; a malformed
         // '{' line (truncated tail after a crash) is skipped like any other noise. Sniffing per

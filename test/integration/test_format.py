@@ -3,7 +3,7 @@
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
 # Output format integration (ROADMAP R6): ROS_TOPIC_STATS_FORMAT=jsonl makes a REAL probed
-# process write one JSON object per window — every non-blank line must satisfy a standard
+# process write one JSON object per window, every non-blank line must satisfy a standard
 # JSON parser (python's json module, deliberately not our own reader: an independent
 # implementation is what proves the format claim). An unknown value warns once on stderr and
 # falls back to text, and pulse-check gates jsonl logs with the same verdicts as text ones.
@@ -38,7 +38,7 @@ def _write(d, name, text):
 
 
 def _jsonl_windows(text):
-    """Every non-blank line MUST parse as one JSON object — json.loads raising fails the test,
+    """Every non-blank line MUST parse as one JSON object, json.loads raising fails the test,
     which is the point: jsonlines.org compliance checked by an independent parser."""
     wins = []
     for ln in text.splitlines():
@@ -104,7 +104,7 @@ def test_unknown_format_warns_once_and_falls_back_to_text():
 
 def test_pulse_check_gates_jsonl_logs():
     """The R6 decision under test: pulse-check reads jsonl logs (per-line sniff in parseLog),
-    so switching the probe to the exporter-friendly format keeps CI/watchdog gating — same
+    so switching the probe to the exporter-friendly format keeps CI/watchdog gating, same
     verdicts, same exit codes, and NEVER a silent exit 0 on bad input."""
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "run.jsonl")
@@ -125,7 +125,7 @@ def test_pulse_check_gates_jsonl_logs():
         assert bad.returncode == 1, f"expected exit 1\n{bad.stdout}{bad.stderr}"
         assert "WARN TOPIC /chatter" in bad.stdout
 
-        # A file with no probe window in EITHER format stays bad input (exit 2) — the
+        # A file with no probe window in EITHER format stays bad input (exit 2), the
         # "must not silently exit 0" guarantee. First line is well-formed JSON but not a
         # probe window (no header fields); second is a truncated record.
         junk = _write(d, "junk.jsonl", '{"not": "a probe window"}\n{truncated\n')

@@ -1,7 +1,7 @@
 """View-layer tests, headless via Textual's pilot.
 
 Pinned here: staleness is rendered in seconds (not windows), and a tick that
-changes nothing on screen issues no DataTable cell updates — update_cell
+changes nothing on screen issues no DataTable cell updates, update_cell
 invalidates the table's row render caches and schedules a refresh
 unconditionally (Textual 8.2 _data_table.py), so 240 no-op calls per tick
 repainted the whole table twice a second over ssh (Orin, 2026-08-23).

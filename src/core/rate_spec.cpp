@@ -78,7 +78,7 @@ struct sSeenKeys {
     bool transport{false};
 };
 
-// "min_hz: 18" / "side: pub" — one flow-map item into the rule. Returns an error message, or
+// "min_hz: 18" / "side: pub", one flow-map item into the rule. Returns an error message, or
 // empty on success.
 auto applyRuleItem(const std::string& item, sRateRule& rule, sSeenKeys& seen) -> std::string {
     const auto colon = item.find(':');
@@ -109,7 +109,7 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, sSeenKeys& seen) ->
         if (!parseNonNegative(val, rule.max_gap_ms)) {
             return "bad max_gap_ms '" + val + "' (need a non-negative number)";
         }
-        // A gap bound of zero can never be satisfied — same class of unsatisfiable rule as
+        // A gap bound of zero can never be satisfied, same class of unsatisfiable rule as
         // min_hz > max_hz, so reject it rather than emit a WARN on every window forever.
         if (rule.max_gap_ms <= 0.0) {
             return "max_gap_ms must be > 0";
@@ -141,7 +141,7 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, sSeenKeys& seen) ->
     return {};
 }
 
-// The rate field a rule constrains. kAny means "how fast is this topic, however it travels" —
+// The rate field a rule constrains. kAny means "how fast is this topic, however it travels",
 // the split is a transport detail the operator usually doesn't spec. How the two buckets combine
 // differs by side, because only one of them counts disjoint events:
 //
@@ -150,13 +150,13 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, sSeenKeys& seen) ->
 //
 //   pub:  NOT disjoint on iron+. One publish() on an intra-process-enabled publisher fires
 //         rclcpp_intra_publish AND, whenever a non-intra subscriber is matched (or the QoS is
-//         TransientLocal, jazzy+), rcl_publish for the SAME message — rclcpp publisher.hpp
+//         TransientLocal, jazzy+), rcl_publish for the SAME message, rclcpp publisher.hpp
 //         computes `inter_process_publish_needed = get_subscription_count() >
 //         get_intra_process_subscription_count() || buffer_` and calls BOTH helpers on the true
 //         branch. Both tracepoints carry the same rcl_publisher_t*, so both land on one counter
 //         and a sum would report 2x the produce rate. max() is exact instead: it equals the one
 //         live bucket when only one path fires, and the single produce rate when both do.
-//         "Just read pub_inter" does not work — the all-in-process branch never calls rcl at all,
+//         "Just read pub_inter" does not work, the all-in-process branch never calls rcl at all,
 //         so pub_inter is 0 there. (No-op on humble, which has no intra-publish tracepoint.)
 auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double {
     const double inter = rule.side == eRateSide::kPub ? s.pub_inter_hz : s.recv_inter_hz;
@@ -174,7 +174,7 @@ auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double {
     }
 }
 
-// Bounds render compactly ("18", "22.5", "inf") — they echo the spec, unlike observed rates
+// Bounds render compactly ("18", "22.5", "inf"), they echo the spec, unlike observed rates
 // which keep the window format's 6dp.
 auto formatBound(double v) -> std::string {
     if (std::isinf(v)) {
@@ -221,7 +221,7 @@ auto readSpecFile(const char* path, std::string& out, std::string& error) -> boo
         return false;
     }
     if (static_cast<unsigned long long>(st.st_size) > kMaxSpecBytes) {
-        error = "larger than " + std::to_string(kMaxSpecBytes) + " bytes — not a spec?";
+        error = "larger than " + std::to_string(kMaxSpecBytes) + " bytes, not a spec?";
         ::close(fd);
         return false;
     }
@@ -254,7 +254,7 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
     // A leading UTF-8 BOM is a signature, not content (Unicode 23.8.1; YAML 1.2 §5.2 consumes
     // c-byte-order-mark as a document prefix, and libyaml/PyYAML/SnakeYAML all strip it). Without
     // this, a spec saved by Windows Notepad or PowerShell fails as
-    // "line 1: unknown top-level entry 'topics:'" — bytes the terminal renders invisibly, so the
+    // "line 1: unknown top-level entry 'topics:'", bytes the terminal renders invisibly, so the
     // message looks identical to the correct spelling and alerting silently turns off.
     // line_no still starts at 1, so error line numbers are unaffected. CRLF is handled by trim().
     if (text.compare(0, 3, "\xEF\xBB\xBF") == 0) {
@@ -375,7 +375,7 @@ auto parseRateSpec(const std::string& text, std::string& error) -> std::optional
 }
 
 // The single evaluation. Since R6 it produces STRUCTURED warnings; the historical string API
-// below is a pure projection of this result (renderWarnLine), so the two can never disagree —
+// below is a pure projection of this result (renderWarnLine), so the two can never disagree,
 // the same one-home principle as the emit gates living in TopicRegistry.
 auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicStat>& stats,
                               const std::vector<std::string>& active_nodes,
@@ -396,7 +396,7 @@ auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicSta
         if (found != nullptr) {
             hz = observedHz(rule, *found);
         } else if (!missing_as_zero) {
-            continue;  // some other process's endpoint — not this probe's business
+            continue;  // some other process's endpoint, not this probe's business
         }
         if (hz < rule.min_hz || hz > rule.max_hz) {
             sRateWarning w;
@@ -442,7 +442,7 @@ auto evaluateRateSpecWarnings(const sRateSpec& spec, const std::vector<sTopicSta
             continue;
         }
         if (!contains(known_nodes, name) && !missing_as_zero) {
-            continue;  // never initialized in this process — skip (probe mode)
+            continue;  // never initialized in this process, skip (probe mode)
         }
         sRateWarning w;
         w.kind = eWarnKind::kNodeMissing;

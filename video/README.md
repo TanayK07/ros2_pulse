@@ -2,7 +2,7 @@
 
 A 40-second silent-with-captions launch video for `ros2_pulse`, generated with
 [Remotion](https://www.remotion.dev/) so every number on screen is a value in
-[`src/data.ts`](src/data.ts) that cites the committed file it came from — the video can be
+[`src/data.ts`](src/data.ts) that cites the committed file it came from, so the video can be
 re-rendered when the numbers move, and never drift from them.
 
 Not part of the ROS package, not built in CI. Rendered output is attached to the GitHub
@@ -40,8 +40,8 @@ Mono, which sits on the grid (`PULSE_TOP_SVG_FONT` to override).
 
 ## Music
 
-Bed track: *Digital Cobalt (Synthwave)* by AvigeiaAvetian —
-https://pixabay.com/music/synthwave-digital-cobalt-synthwave-580426/ — Pixabay Content License
+Bed track: *Digital Cobalt (Synthwave)* by AvigeiaAvetian
+(https://pixabay.com/music/synthwave-digital-cobalt-synthwave-580426/), Pixabay Content License
 (free for commercial use, no attribution required). The license does not allow redistributing
 the file on its own, so `public/music/` is gitignored: download the MP3 from that page and save
 it as `public/music/digital-cobalt.mp3` before rendering. Gain 0.22, 20-frame fade in, 75-frame

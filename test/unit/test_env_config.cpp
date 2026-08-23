@@ -93,7 +93,7 @@ TEST(ParseStatsFormat, AcceptsDocumentedValues) {
 }
 
 // Anything else is an operator asking for a format they are not getting: nullopt, so the
-// caller warns ONCE and falls back to text — never crashes the host, never stays silent.
+// caller warns ONCE and falls back to text, never crashes the host, never stays silent.
 // Exact-lowercase-only matches the strict "1"-only opt-in flags elsewhere.
 TEST(ParseStatsFormat, UnknownValuesAreReportable) {
     EXPECT_FALSE(parseStatsFormat("json").has_value());   // the likely typo

@@ -2,7 +2,7 @@
 // past what the SEM supports.
 
 export const OBSERVER = {
-  // bench/out/observer_effect/summary.txt — ros:humble, 8 x ~100 KB @ 50 Hz + 30 light + 15 intra,
+  // bench/out/observer_effect/summary.txt, ros:humble, 8 x ~100 KB @ 50 Hz + 30 light + 15 intra,
   // N=10 rotated arms, watcher attached 8 s. Stock tools were ACCURATE: publisher held 50.000 Hz
   // in every arm. The cost is the watcher's own core share, and on intra-process topics, the
   // serialization the watcher switches on.
@@ -18,7 +18,7 @@ export const OBSERVER = {
 
 export const PROBE = {
   hotpathFixedNs: 0.3, // bench/RESULTS.md, x86-64
-  hotpathAltNs: '0.6–1.2',
+  hotpathAltNs: '0.6-1.2',
   orinHotpathFixedNs: 0.9, // test/orin/RESULTS.md
   orinHotpathAltNs: 2.1,
   orinJitterNs: 51, // +51.0 ± 0.6 ns/msg, Jetson AGX Orin

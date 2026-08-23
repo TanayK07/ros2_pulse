@@ -1,5 +1,5 @@
 #!/bin/bash
-# RMW support matrix for ros2_pulse (ROADMAP R6): prove — not assume — that the probe works
+# RMW support matrix for ros2_pulse (ROADMAP R6): prove, not assume, that the probe works
 # unmodified on middlewares other than the CI-tested rmw_fastrtps_cpp. The hooks sit above the
 # rmw layer (tracetools symbols called by rclcpp/rcl), so any conformant RMW should pass; this
 # script is what turns that "should" into evidence, and keeps the README's matrix rows
@@ -7,21 +7,21 @@
 #
 # Legs, each = talker+listener in separate processes + an intra-process node, probe preloaded,
 # rates asserted at 50 Hz +/-30% by test/rmw/rmw_matrix_check.py (same parser as CI):
-#   fastrtps       control leg — the CI-tested default; if THIS fails, blame the harness/host,
+#   fastrtps       control leg, the CI-tested default; if THIS fails, blame the harness/host,
 #                  not the middleware under test
 #   cyclonedds     ros-<distro>-rmw-cyclonedds-cpp, plain (UDP loopback) transport
 #   cyclonedds_shm CycloneDDS + iceoryx shared memory: iox-roudi daemon + CYCLONEDDS_URI with
 #                  <SharedMemory><Enable>true</>. Also runs the fixed-size UInt64 pair, because
-#                  String is not a self-contained type and is NOT SHM-eligible — without the
+#                  String is not a self-contained type and is NOT SHM-eligible, without the
 #                  fixed pair this leg would silently measure loopback UDP. Skipped (reported)
 #                  if the distro's libddsc was built without iceoryx.
-#   zenoh          ros-<distro>-rmw-zenoh-cpp — no DDS at all. Needs the zenoh router
+#   zenoh          ros-<distro>-rmw-zenoh-cpp, no DDS at all. Needs the zenoh router
 #                  (rmw_zenohd) up first: rmw_zenoh sessions reach the router at
 #                  tcp/localhost:7447 for discovery by default (multicast scouting off).
 #
 # Host usage:      test/rmw/run_rmw_matrix.sh [distro ...]        (default: jazzy)
 # Evidence lands in test/rmw/out/<distro>/<leg>/ (pulse logs, process stderr, daemon logs,
-# versions.txt) — the excerpts quoted in the README matrix come straight from there.
+# versions.txt), the excerpts quoted in the README matrix come straight from there.
 # Container path: re-invokes itself with --inside <distro> in ros:<distro>; the repo is
 # mounted read-only and copied, so a run can never dirty the working tree.
 set -u
@@ -74,7 +74,7 @@ if [ "${1:-}" = "--inside" ]; then
     mkdir -p "$OUT/cyclonedds_shm"
     ldd "$LIBDDSC" | grep iceoryx > "$OUT/cyclonedds_shm/libddsc_iceoryx_linkage.txt"
     # ${PULSE_ROLE} is expanded by cyclone's config reader per process (the check driver sets
-    # it to talker/listener/…), giving each process its own SHM trace file — the trace is the
+    # it to talker/listener/…), giving each process its own SHM trace file, the trace is the
     # transport-path evidence that samples really moved through iceoryx, not loopback UDP.
     cat > /tmp/cyclonedds_shm.xml <<'EOF'
 <?xml version="1.0" encoding="UTF-8" ?>
@@ -103,7 +103,7 @@ EOF
       echo "---- cyclone shm trace (data-path evidence) ----"
       grep -ilE "iceoryx|shm" "$OUT"/cyclonedds_shm/cdds-trace-*.log 2>/dev/null | head -4
     else
-      echo "FAIL cyclonedds_shm: iox-roudi died at start (see roudi.log — usually /dev/shm" \
+      echo "FAIL cyclonedds_shm: iox-roudi died at start (see roudi.log, usually /dev/shm" \
            "too small; the host side of this script passes --shm-size=1g for that reason)"
       FAILED=1
     fi
@@ -124,12 +124,12 @@ EOF
   if [ "$ROUTER_UP" = 1 ]; then
     run_leg zenoh rmw_zenoh_cpp
   else
-    echo "FAIL zenoh: router (rmw_zenohd) never opened tcp/7447 — see zenoh/router.log"
+    echo "FAIL zenoh: router (rmw_zenohd) never opened tcp/7447, see zenoh/router.log"
     FAILED=1
   fi
   kill "$ROUTER_PID" 2>/dev/null; wait "$ROUTER_PID" 2>/dev/null
 
-  # Evidence must belong to the host user, not root — otherwise the next run cannot clean up
+  # Evidence must belong to the host user, not root, otherwise the next run cannot clean up
   # its own out/ dir. /pulse_src is the host checkout, so its owner IS the host user.
   chown -R "$(stat -c %u:%g /pulse_src)" "$OUT" 2>/dev/null || true
 
@@ -148,7 +148,7 @@ for d in "${DISTROS[@]}"; do
   echo "############ ros:$d ############"
   # Distinct ROS_DOMAIN_ID per distro: DDS multicast discovery DOES cross containers on the
   # default docker bridge, so concurrent matrix runs (or any domain-0 ROS traffic on the host)
-  # would feed a leg's listener from a foreign talker — observed as RECV 100 Hz from two 50 Hz
+  # would feed a leg's listener from a foreign talker, observed as RECV 100 Hz from two 50 Hz
   # talkers when the humble and kilted runs overlapped. cksum keeps the mapping deterministic
   # (humble=66 jazzy=22 kilted=79 rolling=42) so evidence stays reproducible.
   DOM=$(( ( $(printf '%s' "$d" | cksum | cut -d' ' -f1) % 90 ) + 10 ))

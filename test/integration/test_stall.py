@@ -46,12 +46,12 @@ def test_dead_upstream_reads_zero():
 
         # Sanity: the topic was alive at some point.
         alive = [w for w in windows if w["recv"].get("/chatter", (0, 0))[0] > 0]
-        assert alive, f"/chatter never delivered — test setup broken\n--- log ---\n{text}"
+        assert alive, f"/chatter never delivered, test setup broken\n--- log ---\n{text}"
 
         # The regression: after the talker dies, /chatter must STILL be present, at zero.
         stalled = [w for w in windows if w["recv"].get("/chatter") == (0.0, 0.0)]
         assert stalled, (
-            "no window reports RECV /chatter inter=0.000000 after the upstream died — "
+            "no window reports RECV /chatter inter=0.000000 after the upstream died, "
             f"stall is invisible (KNOWN_ISSUES #12)\n--- log ---\n{text}")
 
 

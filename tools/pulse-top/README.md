@@ -3,7 +3,7 @@
 ![pulse-top demo](../../docs/assets/pulse-top-demo.gif)
 
 Live terminal dashboard over a `ros2_pulse` probe log. A pure log **consumer**:
-no ROS dependency, no node, no subscriptions — it tails the jsonl file the probe
+no ROS dependency, no node, no subscriptions; it tails the jsonl file the probe
 already writes, so watching costs the robot nothing and works over plain ssh or on
 a dead log after the incident.
 
@@ -17,12 +17,12 @@ graph-side tool can see.
 ```bash
 pip install ./tools/pulse-top          # or: pipx install ros2-pulse-top (once published)
 
-# probe side — emit jsonl:
+# probe side: emit jsonl
 export ROS_TOPIC_STATS_FORMAT=jsonl
 LD_PRELOAD=libros2_pulse.so ros2 launch my_robot bringup.launch.py
 
 # dashboard side (any shell, any machine with the file):
-pulse-top                               # every $TMPDIR/topic_freq.<pid>.log — one per probed process
+pulse-top                               # every $TMPDIR/topic_freq.<pid>.log (one per probed process)
 pulse-top /path/to/shared.log           # one explicit file (e.g. a fleet-wide ROS_TOPIC_STATS_OUTPUT_FILE)
 pulse-top '/var/log/topic_freq.*.log'   # a quoted glob; new files are picked up as nodes start
 pulse-top --demo                        # self-generated demo graph with a scripted incident
@@ -41,11 +41,11 @@ pulse-top --demo                        # self-generated demo graph with a scrip
 ## What it shows
 
 - **Topics**: per-topic publish/intra/receive Hz, max inter-arrival gap, 60-window
-  sparkline. Absence renders as `—` — the probe's "not measured" is never shown as 0.
+  sparkline. Absence renders as `—`; the probe's "not measured" is never shown as 0.
 - **Tree**: topic namespace hierarchy with live rates.
 - **Nodes**: liveness from `NODE` records; missing nodes flagged from structured warns.
 - **Warns**: the probe's structured `warns[]` (`topic_rate`, `topic_gap`,
-  `node_missing`) — parsed as JSON, no regex.
+  `node_missing`), parsed as JSON rather than regex.
 
 ## Development
 
@@ -57,7 +57,7 @@ env -u PYTHONPATH .venv/bin/python -m pytest tests/   # clear ROS's pytest plugi
 
 ## Reading a live stack (many processes, one view)
 
-Every probed process flushes its own window — a 77-node stack is ~15 windows/s interleaved
+Every probed process flushes its own window; a 77-node stack is ~15 windows/s interleaved
 across files (or within one shared file). The view is built for that:
 
 - **Stale is measured in time**, from the window timestamps: a topic is `stale 12s` once more
@@ -72,4 +72,4 @@ across files (or within one shared file). The view is built for that:
   nothing over ssh.
 
 `transition_event`, NITROS `_supported_types` and other one-shot topics going stale minutes
-after startup is the probe telling the truth: they fired once.
+after startup is correct: they fired once.

@@ -15,8 +15,8 @@ namespace ros2_pulse::core {
 namespace {
 std::atomic<uint64_t> g_next_registry_id{1};
 
-// Negative-cache sentinel (KNOWN_ISSUES #3). A callback proven NEVER to be a subscription — a timer
-// or service callback, for which callback_added never fired — resolves to this marker instead of
+// Negative-cache sentinel (KNOWN_ISSUES #3). A callback proven NEVER to be a subscription, a timer
+// or service callback, for which callback_added never fired, resolves to this marker instead of
 // nullptr, so repeat sightings are served from the shared-lock / thread-local fast paths rather than
 // re-taking the exclusive lock on every call. It is a unique, valid address that is never
 // dereferenced: every read site compares it by identity and skips (see onCallbackStart).
@@ -25,13 +25,13 @@ sTopicCounter* const kNotASubscription = &g_not_a_subscription;
 
 // Direct-mapped thread-local hot-path cache, shared by onPublish and onCallbackStart (publisher
 // handles and callback objects are distinct live allocations, so the key domains cannot
-// collide). A single-entry cache thrashed on the REALISTIC pattern — one thread alternating
-// between a few endpoints per cycle — pushing every operation onto the shared rw-lock
+// collide). A single-entry cache thrashed on the REALISTIC pattern, one thread alternating
+// between a few endpoints per cycle, pushing every operation onto the shared rw-lock
 // (KNOWN_ISSUES #13). A same-slot collision merely degrades that key to the shared-lock path
 // (it is a cache, not a map). Entries are scoped by registry id so a recycled instance address
 // can never be served a destroyed registry's counter (same guard the single-entry cache had).
 //
-// Sizing/hash (KNOWN_ISSUES #15): a bare (ptr>>4) index aliases on uniform allocator strides —
+// Sizing/hash (KNOWN_ISSUES #15): a bare (ptr>>4) index aliases on uniform allocator strides,
 // same-type handles at a 64-byte stride advanced the index by 4, so a 38-publisher farm shared
 // 4 of 16 slots and missed on ~every event; under a MultiThreadedExecutor each miss is a
 // CONTENDED rw-lock RMW + shared-counter bounce, measured at +2-4% workload CPU. 256 slots
@@ -62,18 +62,18 @@ inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
 // two threads can exchange out of order; without the guard the unsigned subtraction underflows
 // to ~1.8e19 ns and poisons max_dt permanently. Discarding those samples is the correct trade:
 // measured under 8-way contention on one endpoint, 0.6-9.7% of samples are dropped and the
-// reported max is over-stated by at most 5% — never garbage, never negative, and erring high is
+// reported max is over-stated by at most 5%, never garbage, never negative, and erring high is
 // the safe direction for a stall detector. Single-threaded delivery is exact.
 inline void noteArrival(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_dt_ns) {
     const auto now = static_cast<uint64_t>(
         std::chrono::steady_clock::now().time_since_epoch().count());
     const uint64_t prev = last_ns.exchange(now, std::memory_order_relaxed);
     if (prev == 0 || now <= prev) {
-        return;  // first arrival ever, or a reordered pair — no usable interval
+        return;  // first arrival ever, or a reordered pair, no usable interval
     }
     const uint64_t dt = now - prev;
     // std::atomic::fetch_max is C++26; this is the portable form. It costs nothing in steady
-    // state because new maxima follow the harmonic number — ~14 CAS per 500 messages.
+    // state because new maxima follow the harmonic number, ~14 CAS per 500 messages.
     uint64_t cur = max_dt_ns.load(std::memory_order_relaxed);
     while (dt > cur && !max_dt_ns.compare_exchange_weak(cur, dt, std::memory_order_relaxed)) {
     }
@@ -96,7 +96,7 @@ inline auto takeGap(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_d
         }
     }
     if (dt == 0) {
-        // A timestamp but no measured interval — the endpoint has been seen exactly once (and
+        // A timestamp but no measured interval, the endpoint has been seen exactly once (and
         // the open gap is not being folded). Reporting 0.000 would read as "perfectly regular",
         // which is the best possible value, inferred from a single data point. The only real
         // sample this discards is two arrivals inside one clock tick (~21 ns), which can never
@@ -120,13 +120,13 @@ auto TopicRegistry::shouldFilter(const std::string& topic) -> bool {
 auto TopicRegistry::shouldEmitTopic(const sTopicStat& stat, bool emit_idle) -> bool {
     // Fully-idle topic (declared but silent this window): keep it out of the file by default so a
     // large graph isn't padded with `TOPIC /x 0.000000` lines every window; only the explicit
-    // opt-in restores it. See docs/issues/issue-7-idle-topic-line.md.
+    // opt-in restores it. See KNOWN_ISSUES.md #7.
     const bool fully_idle = stat.pub_inter_count == 0 && stat.pub_intra_count == 0 &&
                             stat.recv_inter_count == 0 && stat.recv_intra_count == 0;
     if (fully_idle) {
         return emit_idle;
     }
-    // Non-idle: TOPIC is the publish-side line (split buckets, issue #1) — emit only when this
+    // Non-idle: TOPIC is the publish-side line (split buckets, issue #1), emit only when this
     // process actually published. A receive-only topic's rate lives on the RECV line instead.
     return stat.pub_inter_count > 0;
 }
@@ -250,7 +250,7 @@ auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
     }
     auto h = m_sub_to_subhandle.find(s->second);
     if (h == m_sub_to_subhandle.end()) {
-        return nullptr;  // subscription, but chain not populated yet — stay lazy, do NOT cache
+        return nullptr;  // subscription, but chain not populated yet, stay lazy, do NOT cache
     }
     auto c = m_subhandle_to_counter.find(h->second);
     if (c == m_subhandle_to_counter.end()) {
@@ -310,7 +310,7 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     sTlsSlot& slot = tlsSlotFor(callback);
     if (slot.id == m_id && slot.key == callback) {
         // slot.ctr is either a resolved counter or the kNotASubscription sentinel. The sentinel
-        // means "known timer/service callback" — skip it without touching the lock or a counter.
+        // means "known timer/service callback", skip it without touching the lock or a counter.
         if (slot.ctr != kNotASubscription) {
             if (is_intra_process) {
                 slot.ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
@@ -343,14 +343,14 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     }
     // A null result here means "subscription, not resolvable yet" (chain still being populated):
     // leave the thread-local slot untouched so the next delivery retries resolution. A non-null
-    // result — a real counter or the sentinel — is decisive, so cache it thread-locally; that lets
+    // result, a real counter or the sentinel, is decisive, so cache it thread-locally; that lets
     // even a not-a-subscription callback drop the shared lock on subsequent same-thread calls.
     if (ctr == nullptr) {
         return;
     }
     slot = {m_id, callback, ctr};
     if (ctr == kNotASubscription) {
-        return;  // proven timer/service callback — nothing to count
+        return;  // proven timer/service callback, nothing to count
     }
     if (is_intra_process) {
         ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
@@ -473,13 +473,13 @@ void TopicRegistry::forkRelease() { m_mu.unlock(); }
 void TopicRegistry::forkChildReset() {
     // The write lock taken in forkPrepare() CANNOT be released in the fork child: glibc's
     // rwlock records the writer's TID, and the forking thread's TID differs in the child, so
-    // pthread_rwlock_unlock is a silent no-op there — the registry would stay write-locked
+    // pthread_rwlock_unlock is a silent no-op there, the registry would stay write-locked
     // forever and the child's first shared_lock would hang (exactly the futex wait the
     // issue-10 regression test caught). The child is single-threaded and is the lock's owner
     // by inheritance, so re-initialize the mutex in place instead of unlocking it.
     new (&m_mu) std::shared_mutex();
     // Gap state (R5): last_ns is CLOCK_MONOTONIC, which is per-boot and process-independent, so
-    // an interval the child measures against it is real — keep it. The per-window maxima are the
+    // an interval the child measures against it is real, keep it. The per-window maxima are the
     // PARENT's observations and would be attributed to the child's first window, where a stale
     // large value can fire a max_gap_ms rule on a perfectly healthy child. That is why this
     // diverges from the inherited-counts smear documented in issue #10: a stale count cannot

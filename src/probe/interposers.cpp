@@ -67,7 +67,7 @@ auto envFlag(const char* key) -> bool {
 // (operators can still deliberately share a path); otherwise default to a PER-PROCESS path with the
 // pid embedded, so a normal multi-process ROS launch no longer has every LD_PRELOADed process
 // appending to one shared file with no locking. The default respects TMPDIR and falls back to
-// /tmp — a directory that exists everywhere, unlike the field-test mount it replaced.
+// /tmp, a directory that exists everywhere, unlike the field-test mount it replaced.
 // The two cases also differ in trust (see the open in flush()): the default lands in a
 // world-writable sticky directory with a predictable name, so its open refuses symlinks; an
 // explicit path is the operator's own and may legitimately be one (e.g. a link to another disk).
@@ -98,7 +98,7 @@ auto loadRateSpec() -> std::optional<sRateSpec> {
     std::string err;
     if (!readSpecFile(path, text, err)) {
         std::fprintf(stderr,
-                     "[ros2_pulse] cannot read ROS_TOPIC_STATS_EXPECTED '%s' (%s) — "
+                     "[ros2_pulse] cannot read ROS_TOPIC_STATS_EXPECTED '%s' (%s), "
                      "expected-rate alerting disabled\n",
                      path, err.c_str());
         return std::nullopt;
@@ -106,17 +106,17 @@ auto loadRateSpec() -> std::optional<sRateSpec> {
     auto spec = parseRateSpec(text, err);
     if (!spec.has_value()) {
         std::fprintf(stderr,
-                     "[ros2_pulse] invalid ROS_TOPIC_STATS_EXPECTED '%s' (%s) — "
+                     "[ros2_pulse] invalid ROS_TOPIC_STATS_EXPECTED '%s' (%s), "
                      "expected-rate alerting disabled\n",
                      path, err.c_str());
         return std::nullopt;
     }
     // An empty (or all-comment) spec parses cleanly into zero rules, which would arm alerting as
-    // a permanent no-op — the silent absence of monitoring this feature exists to prevent. Say so.
+    // a permanent no-op, the silent absence of monitoring this feature exists to prevent. Say so.
     if (spec->topics.empty() && spec->nodes.empty()) {
         std::fprintf(stderr,
                      "[ros2_pulse] ROS_TOPIC_STATS_EXPECTED '%s' declares no topics and no "
-                     "nodes — expected-rate alerting disabled\n",
+                     "nodes, expected-rate alerting disabled\n",
                      path);
         return std::nullopt;
     }
@@ -127,12 +127,12 @@ auto loadRateSpec() -> std::optional<sRateSpec> {
 class ProbeRuntime {
 public:
     static auto instance() -> ProbeRuntime& {
-        // LEAKY singleton — intentionally never destroyed (KNOWN_ISSUES #9). DDS transport and
+        // LEAKY singleton, intentionally never destroyed (KNOWN_ISSUES #9). DDS transport and
         // executor threads keep firing tracepoints while static destructors run in undefined
         // cross-library order; a Meyers singleton's destroyed registry/mutex made those
         // stragglers a use-after-free (reproducibly SIGSEGV under test/integration/
         // test_shutdown.py's exit_storm). Leaked, the runtime stays valid for any straggler at
-        // any point of teardown — late events just count into buckets that are never flushed.
+        // any point of teardown, late events just count into buckets that are never flushed.
         // The flush thread is stopped (and the tail window written) by the atexit hook below;
         // the OS reclaims the rest at process exit.
         static auto* s_instance = new ProbeRuntime();
@@ -148,7 +148,7 @@ public:
             // and every disabling path (unset, unreadable, malformed, zero-rule) lands on
             // spec=none. snprintf into a fixed buffer keeps the banner allocation-free.
             //
-            // ROS_TOPIC_STATS_QUIET=1 (ROADMAP R6) suppresses THIS banner and nothing else —
+            // ROS_TOPIC_STATS_QUIET=1 (ROADMAP R6) suppresses THIS banner and nothing else,
             // it exists for deployments that parse the wrapped process's stderr and can't
             // tolerate a foreign line. Scope decided deliberately narrow: the one-shot error
             // diagnostics (unreadable/malformed/zero-rule spec in loadRateSpec, unwritable
@@ -166,30 +166,30 @@ public:
                 } else {
                     std::snprintf(spec_desc, sizeof(spec_desc), "none");
                 }
-                std::fprintf(stderr, "[ros2_pulse] active — interposing tracetools layer "
+                std::fprintf(stderr, "[ros2_pulse] active, interposing tracetools layer "
                                      "(out=%s, format=%s, period=%.1fs, spec=%s, jitter=%s)\n",
                              m_out_path.c_str(),
                              m_format == eStatsFormat::kJsonl ? "jsonl" : "text", m_period_s,
                              spec_desc, m_registry.gapTracking() ? "on" : "off");
             }
-            // Counting effectively begins here (first tracepoint) — stamp the window start
+            // Counting effectively begins here (first tracepoint), stamp the window start
             // before the flush thread exists so the first window's denominator is measured
             // from the same origin the counts accumulate from (KNOWN_ISSUES #8b).
             m_window_start = std::chrono::steady_clock::now();
             // Heap-allocate the timer and LEAK any previous one (a fork()ed child re-arming
             // here still holds the parent's timer object, whose condition variable may carry
-            // waiter refs from the dead flush thread — destroying such a cv can block forever
+            // waiter refs from the dead flush thread, destroying such a cv can block forever
             // in pthread_cond_destroy). One small leak per fork generation, same philosophy as
             // the leaky runtime itself (KNOWN_ISSUES #9/#10).
             m_timer = new Timer([this]() { flush(); },
                                 std::chrono::milliseconds(static_cast<long>(m_period_s * 1000.0)));
             m_timer->start();
             // Process-lifecycle hooks, registered exactly once per PROCESS IMAGE (guarded by a
-            // flag the fork-child handler does NOT reset — atexit/atfork registrations are
+            // flag the fork-child handler does NOT reset, atexit/atfork registrations are
             // inherited across fork(), so re-registering per generation would stack duplicates
             // in grandchildren):
             //  - atexit (KNOWN_ISSUES #9): with the runtime leaked, nothing stops the flush
-            //    thread implicitly anymore — join it at exit and write the FINAL PARTIAL
+            //    thread implicitly anymore, join it at exit and write the FINAL PARTIAL
             //    window. Runs on the exiting thread, touches only leaked objects + libc.
             //  - pthread_atfork (KNOWN_ISSUES #10): quiesce our locks across fork() and let
             //    the child re-arm its own flush timer.
@@ -222,7 +222,7 @@ private:
         }
     }
     void forkChild() {
-        // Registry: RE-INIT, not unlock — pthread rwlock unlock is a silent no-op in the child
+        // Registry: RE-INIT, not unlock, pthread rwlock unlock is a silent no-op in the child
         // (stored writer TID no longer matches), which left the registry locked forever.
         m_registry.forkChildReset();
         if (m_timer) {
@@ -234,7 +234,7 @@ private:
         // fresh window origin, and let the NEXT tracepoint lazily re-arm the flush timer via
         // ensureStarted(). Until then the inherited atexit hook still guarantees a final flush
         // of whatever the child counts. Inherited pre-fork counts may smear into the child's
-        // first window — documented in docs/issues/issue-10-fork-without-exec.md.
+        // first window (KNOWN_ISSUES #10).
         m_out_path = resolveOutputPath();
         m_window_start = std::chrono::steady_clock::now();
         m_started.store(false);
@@ -242,7 +242,7 @@ private:
 
     // Single-generation size rotation (KNOWN_ISSUES #11): at/over the cap, atomically rename
     // <path> -> <path>.1 (replacing any previous generation) and let the append below start a
-    // fresh file. One stat() per window, on the flush thread — not the hot path. Reopen-per-
+    // fresh file. One stat() per window, on the flush thread, not the hot path. Reopen-per-
     // window is preserved, so external logrotate keeps working for operators who prefer it.
     void rotateIfNeeded() {
         if (m_max_bytes == 0) {
@@ -250,7 +250,7 @@ private:
         }
         struct stat st {};
         if (::stat(m_out_path.c_str(), &st) != 0) {
-            return;  // nothing written yet (or path inaccessible — the fopen below will warn)
+            return;  // nothing written yet (or path inaccessible, the fopen below will warn)
         }
         if (static_cast<unsigned long long>(st.st_size) < m_max_bytes) {
             return;
@@ -263,8 +263,8 @@ private:
         if (m_timer) {
             m_timer->stop();  // join the flush thread; periodic flushing ends here
         }
-        // Final partial window: still MEASURED and logged (window_s keeps its Hz honest,
-        // issue #8), but not alert-judged — see the exiting guard in flush().
+        // Final partial window: still MEASURED and logged (window_s keeps its Hz correct,
+        // issue #8), but not alert-judged, see the exiting guard in flush().
         flush(/*exiting=*/true);
     }
 
@@ -288,7 +288,7 @@ private:
           m_spec(loadRateSpec()) {
         // Output format (ROADMAP R6). Parsed in the ctor BODY so the unknown-value warning can
         // show the offending text. The ctor runs exactly once (tracepoint-reached singleton),
-        // so this warning is once-per-process by construction — same shape as the spec-file
+        // so this warning is once-per-process by construction, same shape as the spec-file
         // errors: say it out loud, fall back safely, never take the host down. Unset/empty is
         // the silent text default (no warning): byte-identical output for everyone who never
         // touches the variable.
@@ -297,7 +297,7 @@ private:
         if (!fmt.has_value()) {
             std::fprintf(stderr,
                          "[ros2_pulse] unknown ROS_TOPIC_STATS_FORMAT '%s' (expected 'text' or "
-                         "'jsonl') — falling back to text\n",
+                         "'jsonl'), falling back to text\n",
                          fmt_raw);
         }
         m_format = fmt.value_or(eStatsFormat::kText);
@@ -331,7 +331,7 @@ private:
         const double window_s = std::chrono::duration<double>(now_mono - m_window_start).count();
         m_window_start = now_mono;
         // Gap tracking (R5): fold the still-open interval into each endpoint's reported
-        // max, EXCEPT on the exit window — rclcpp teardown stops traffic before the
+        // max, EXCEPT on the exit window, rclcpp teardown stops traffic before the
         // process exits, so the open gap there measures the shutdown sequence and would
         // fire every max_gap_ms rule on a perfectly healthy stop.
         auto stats = m_registry.snapshot(window_s, /*fold_open_gap=*/!exiting);
@@ -343,11 +343,10 @@ private:
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
         // Build the whole window block up front, then emit it with ONE fwrite. A window under
         // BUFSIZ is a single write() at fclose, so its lines stay contiguous instead of
-        // interleaving mid-block with another process's per-line writes (see docs/issues/
-        // issue-4-per-process-output.md). The block carries the MEASURED window_s (issue #8b),
+        // interleaving mid-block with another process's per-line writes (KNOWN_ISSUES #4). The block carries the MEASURED window_s (issue #8b),
         // and the TOPIC emit decision (incl. the idle-topic policy gated by ROS_PULSE_EMIT_IDLE)
         // lives in the pure core so it stays unit-testable (issue #7).
-        // Expected-rate alerting (ROADMAP R1): evaluated here at flush time only — the hot path
+        // Expected-rate alerting (ROADMAP R1): evaluated here at flush time only, the hot path
         // never sees the spec. BOTH lifecycle transients are grace-skipped, because a window
         // shorter than the period makes count/window_s a 1-2 sample estimate (+-1/window_s Hz,
         // in either direction, and exactly 0 Hz when the sliver caught no message):
@@ -355,9 +354,9 @@ private:
         //    ramp-up partials that would cry wolf on start.
         //  - DETACH: the atexit window. rclcpp teardown ends traffic before the process does, and
         //    a run whose duration lands near a multiple of the period leaves a few-millisecond
-        //    tail — reproducibly `WARN TOPIC ... hz=0.000000` on a perfectly healthy shutdown.
+        //    tail, reproducibly `WARN TOPIC ... hz=0.000000` on a perfectly healthy shutdown.
         // The rates themselves are still logged for both; only the alert judgement is suppressed.
-        // (A `for: N consecutive windows` debounce would cover these generally — ROADMAP R1.1.)
+        // (A `for: N consecutive windows` debounce would cover these generally, ROADMAP R1.1.)
         const uint64_t window_index = m_windows_flushed.fetch_add(1, std::memory_order_relaxed);
         // Evaluated STRUCTURED (R6): jsonl gets warnings as data; text renders the exact
         // pre-R6 lines from the same result, so the two formats can never judge differently.
@@ -398,11 +397,11 @@ private:
         }
         if (!f) {
             // Don't silently drop every window (e.g. the output directory doesn't exist). Warn
-            // ONCE — this runs on the timer thread every window, so a per-window log would spam.
+            // ONCE, this runs on the timer thread every window, so a per-window log would spam.
             bool expected = false;
             if (m_warned_open_fail.compare_exchange_strong(expected, true)) {
                 std::fprintf(stderr,
-                             "[ros2_pulse] cannot open output file '%s' (%s) — dropping windows\n",
+                             "[ros2_pulse] cannot open output file '%s' (%s), dropping windows\n",
                              m_out_path.c_str(), std::strerror(errno));
             }
             return;
@@ -422,7 +421,7 @@ private:
     double m_period_s;
     unsigned long long m_max_bytes;
     bool m_emit_idle;
-    // ROS_TOPIC_STATS_QUIET=1: suppress the informational banner (never diagnostics — see
+    // ROS_TOPIC_STATS_QUIET=1: suppress the informational banner (never diagnostics, see
     // the rationale block in ensureStarted()).
     bool m_quiet;
     // Output format (R6): text (default, byte-identical to pre-R6) or jsonl. Set once in the
@@ -434,7 +433,7 @@ private:
     // the first one is grace-skipped for alerting; the exit window is skipped via flush(exiting).
     std::atomic<uint64_t> m_windows_flushed{0};
     // Start of the current stats window. Written in ensureStarted() (before the flush thread is
-    // created — the thread creation orders it) and thereafter only by flush() on the timer thread.
+    // created, the thread creation orders it) and thereafter only by flush() on the timer thread.
     std::chrono::steady_clock::time_point m_window_start{};
 };
 
@@ -503,7 +502,7 @@ ROS2_PULSE_EXPORT void ros_trace_rcl_publish(const void* pub_handle, const void*
 }
 
 // iron+ only: rclcpp publishes an intra-process message through the IntraProcessManager. On
-// humble this symbol is exported but never called (the tracepoint doesn't exist there) — the
+// humble this symbol is exported but never called (the tracepoint doesn't exist there), the
 // probe stays a single binary across distros.
 ROS2_PULSE_EXPORT void ros_trace_rclcpp_intra_publish(const void* publisher_handle,
                                                       const void* message) {

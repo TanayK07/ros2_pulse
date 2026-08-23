@@ -1,15 +1,15 @@
 // Isolated hot-path microbench. Legs:
-//   OLD          — the #1204-style global mutex + per-message string hash this design replaced
-//   single-entry — one (key,ctr) TLS slot per thread (the pre-issue-13 cache)
-//   mini-map     — 16-slot direct-mapped TLS cache (pre-issue-15; kept as the historical record)
-//   cache-256    — 256-slot TLS cache with the stride-breaking hash (CURRENT design, issue #15)
-//   cache-256+gap— the current design plus the R5 gap accumulator (steady_clock read + exchange
+//   OLD          - the #1204-style global mutex + per-message string hash this design replaced
+//   single-entry, one (key,ctr) TLS slot per thread (the pre-issue-13 cache)
+//   mini-map     - 16-slot direct-mapped TLS cache (pre-issue-15; kept as the historical record)
+//   cache-256    - 256-slot TLS cache with the stride-breaking hash (CURRENT design, issue #15)
+//   cache-256+gap, the current design plus the R5 gap accumulator (steady_clock read + exchange
 //                  + guarded CAS-max, mirroring noteArrival in src/core/topic_registry.cpp).
 //                  The (+gap − plain) delta is THE published R5 cost figure; a raw clock leg is
 //                  printed alongside so the attribution ("~96% of it is the vDSO clock read")
 //                  stays checkable rather than folkloric.
 // each measured with a FIXED key per thread (best case) and ALTERNATING 4 keys per thread (the
-// realistic camera-pipeline pattern that thrashed the single-entry cache — KNOWN_ISSUES #13).
+// realistic camera-pipeline pattern that thrashed the single-entry cache, KNOWN_ISSUES #13).
 // g++ -O2 -std=c++17 -pthread.
 #include <atomic>
 #include <chrono>
@@ -53,7 +53,7 @@ struct NewMap : RegBase {
     if(it!=r.end()){ it->second->c.fetch_add(1,std::memory_order_relaxed); s={k,it->second}; } } };
 
 // current design: 256-slot TLS cache + stride-breaking hash (mirrors src/core/topic_registry.cpp
-// after KNOWN_ISSUES #15). Optionally runs the R5 gap accumulator on every hit — an exact replica
+// after KNOWN_ISSUES #15). Optionally runs the R5 gap accumulator on every hit, an exact replica
 // of noteArrival: exchange partitions the predecessor timestamp between racing threads, and the
 // now > prev guard drops reordered pairs instead of letting the unsigned subtraction underflow.
 struct GapCtr { std::atomic<uint64_t> c{0}; std::atomic<uint64_t> last{0}; std::atomic<uint64_t> maxdt{0}; };
@@ -137,8 +137,8 @@ int main(int argc,char** argv){ int th=argc>1?atoi(argv[1]):8; long tot=(long)th
     std::printf("%-28s %7.1f CPU ns/op\n","raw steady_clock (th thr)", clk_n); }
 
   // The published R5 figure is PER-MESSAGE CPU cost. The leg convention above is wall time
-  // amortized over all threads' ops, which divides the per-message cost by the parallelism —
-  // honest for throughput, misleading for "what does one message pay". Every thread runs the
+  // amortized over all threads' ops, which divides the per-message cost by the parallelism,
+  // fine for throughput, misleading for "what does one message pay". Every thread runs the
   // whole interval, so CPU ns/msg = amortized ns/op x threads. Print both so neither reading
   // is left as an exercise.
   const double d_fixed=(gap_fixed-base_fixed)*th, d_alt=(gap_alt-base_alt)*th;

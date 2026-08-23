@@ -23,13 +23,13 @@ source install/setup.bash
 
 ## What it reports
 
-1. **Environment** — RMW, CYCLONEDDS_URI, whether SHM is enabled, LD_PRELOAD.
-2. **Instrumentation present** — `ros_trace_*` symbol count in the Orin's `libtracetools.so`
+1. **Environment**: RMW, CYCLONEDDS_URI, whether SHM is enabled, LD_PRELOAD.
+2. **Instrumentation present**: `ros_trace_*` symbol count in the Orin's `libtracetools.so`
    (must be non-zero; if zero, the image was built without tracing and the probe can't hook).
-3. **CPU** — per-PID `utime+stime` delta over the window → cpu_s and %-of-core, top consumers.
-4. **Network** — unix/udp socket counts before/after. The probe opens **no** sockets and **no**
+3. **CPU**: per-PID `utime+stime` delta over the window → cpu_s and %-of-core, top consumers.
+4. **Network**: unix/udp socket counts before/after. The probe opens **no** sockets and **no**
    DDS endpoints, so any delta is the live stack, not the probe.
-5. **Captured data** — last window of `topic_freq.log`, plus counts of topics with inter- and
+5. **Captured data**: last window of `topic_freq.log`, plus counts of topics with inter- and
    **intra**-process traffic (nonzero intra proves the intra-process capability on real nodes).
 
 ## Comparisons to capture

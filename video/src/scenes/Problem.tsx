@@ -34,7 +34,7 @@ export const Problem: React.FC = () => (
         cmd="ros2 topic hz /points"
         lines={[
           [`${OBSERVER.hzWatcherCorePct} %`, 'of a core to watch one 100 KB topic'],
-          [`${OBSERVER.hzReportedHz} Hz`, `printed — accurate; true rate ${OBSERVER.truePublishHz}`],
+          [`${OBSERVER.hzReportedHz} Hz`, `printed, accurate; true rate ${OBSERVER.truePublishHz}`],
           ['blind', 'to intra-process delivery'],
         ]}
       />
@@ -43,7 +43,7 @@ export const Problem: React.FC = () => (
         accent={C.bad}
         cmd="ros2 topic echo /points"
         lines={[
-          [`${OBSERVER.echoWatcherCorePct} %`, 'of a core — one topic, to /dev/null'],
+          [`${OBSERVER.echoWatcherCorePct} %`, 'of a core, one topic, to /dev/null'],
           ['1', 'topic at a time'],
           ['0', 'subscribers is what the probe adds instead'],
         ]}

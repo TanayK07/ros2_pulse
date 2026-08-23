@@ -126,7 +126,7 @@ awk -v b="$CPU_BASE" -v w="$CPU_OURS"  -v d="$OURS_DISK" 'BEGIN{printf "%-22s %-
 awk -v b="$CPU_BASE" -v w="$CPU_EBPF"  -v c="$BPF_CPU"   'BEGIN{if(w=="n/a"){print "ebpf: n/a"}else printf "%-22s %-14s %-16s %-12s +%.1f%%\n","ebpf (uprobe)",w,c,"0",100*(w-b)/b}'
 awk -v b="$CPU_BASE" -v w="$CPU_LTTNG" -v c="$LTTNG_CPU" -v d="$TRACE_DISK" 'BEGIN{if(w=="n/a"){print "lttng: n/a"}else printf "%-22s %-14s %-16s %-12s +%.1f%%\n","lttng (ros2_tracing)",w,c,d,100*(w-b)/b}'
 echo "(workload_cpu = added CPU to monitored processes; monitor_cpu = the monitor's own process cost)"
-echo "NOTE: each leg above is a SINGLE 10s sample — run-to-run variance is ~±10%, which swamps a"
+echo "NOTE: each leg above is a SINGLE 10s sample, run-to-run variance is ~±10%, which swamps a"
 echo "      <2% signal (the LTTng no-op leg has measured -9% vs baseline here). Treat any |delta|<10%"
 echo "      as noise; for the real overhead figure use run_overhead_repeated.sh (interleaved, N=6)."
 echo "==================== DONE ===================="

@@ -8,7 +8,7 @@
 // Designed to run clean under ThreadSanitizer.
 //
 // Publish-side and receive-side use DISTINCT topic names, so the totals are exact and do NOT
-// depend on issue #1 (single-process double counting) — this stays green before and after the
+// depend on issue #1 (single-process double counting), this stays green before and after the
 // fix PRs.
 
 #include <gtest/gtest.h>
@@ -102,15 +102,15 @@ TEST(ConcurrencyStress, ManyThreadsManyTopicsExactTotals) {
     }
 }
 
-// ROADMAP R5 ("JitterMaxIsRaceFree" in docs/design-r5-gap-visibility.md): many threads hammer
+// ROADMAP R5 (JitterMaxIsRaceFree): many threads hammer
 // ONE endpoint per side, so noteArrival's exchange partition and its now > prev guard run under
-// real contention — and under TSan in the sanitizer lanes. The guard is what this regresses:
+// real contention, and under TSan in the sanitizer lanes. The guard is what this regresses:
 // `now` is sampled before the exchange, so two threads can exchange out of order, and without
 // the guard the unsigned subtraction underflows to ~1.8e19 ns and poisons max_dt permanently.
 // Hence the two-sided assertion:
-//   - a deliberate mid-run stall must be visible (max_dt_ms >= the stall — sleep_for guarantees
+//   - a deliberate mid-run stall must be visible (max_dt_ms >= the stall, sleep_for guarantees
 //     at least the requested duration, and no other arrival can land inside it), and
-//   - max_dt_ms can never exceed the measured wall time of the whole test — the underflow value
+//   - max_dt_ms can never exceed the measured wall time of the whole test, the underflow value
 //     is ~570 years, so one unguarded reordered pair fails this bound.
 TEST(ConcurrencyStress, JitterMaxIsRaceFree) {
     const int kThreads = envInt("ROS2_PULSE_STRESS_THREADS", 8);
@@ -125,7 +125,7 @@ TEST(ConcurrencyStress, JitterMaxIsRaceFree) {
     reg.onCallbackAdded(cbHandle(0), rclSub(0));
 
     // Tight contended bursts on a single publisher handle and a single callback (both intra and
-    // inter deliveries — the recv accumulator is transport-merged, so both must feed one series).
+    // inter deliveries, the recv accumulator is transport-merged, so both must feed one series).
     const auto hammer = [&reg, kThreads, kRounds] {
         std::vector<std::thread> ts;
         ts.reserve(kThreads);
@@ -146,7 +146,7 @@ TEST(ConcurrencyStress, JitterMaxIsRaceFree) {
     std::this_thread::sleep_for(std::chrono::milliseconds(kStallMs));  // the known gap
     hammer();
 
-    // fold_open_gap=false so only intervals measured by noteArrival itself are reported — the
+    // fold_open_gap=false so only intervals measured by noteArrival itself are reported, the
     // snapshot-time fold is a separate mechanism with its own single-threaded tests.
     auto snap = reg.snapshot(1.0, /*fold_open_gap=*/false);
     const double elapsed_ms =
@@ -156,13 +156,13 @@ TEST(ConcurrencyStress, JitterMaxIsRaceFree) {
     ASSERT_NE(p, nullptr);
     ASSERT_TRUE(p->has_pub_max_dt);
     EXPECT_GE(p->pub_max_dt_ms, static_cast<double>(kStallMs));
-    EXPECT_LE(p->pub_max_dt_ms, elapsed_ms) << "max_dt exceeds test wall time — underflow?";
+    EXPECT_LE(p->pub_max_dt_ms, elapsed_ms) << "max_dt exceeds test wall time, underflow?";
 
     const auto* rcv = findTopic(snap, "/recv_0");
     ASSERT_NE(rcv, nullptr);
     ASSERT_TRUE(rcv->has_recv_max_dt);
     EXPECT_GE(rcv->recv_max_dt_ms, static_cast<double>(kStallMs));
-    EXPECT_LE(rcv->recv_max_dt_ms, elapsed_ms) << "max_dt exceeds test wall time — underflow?";
+    EXPECT_LE(rcv->recv_max_dt_ms, elapsed_ms) << "max_dt exceeds test wall time, underflow?";
 
     // Exact counts still hold with gap tracking enabled: the two mechanisms share a hot path
     // and must not perturb each other.
@@ -191,7 +191,7 @@ TEST(ConcurrencyStress, TopicSetStaysBounded) {
     const size_t expected_topics = static_cast<size_t>(2 * kTopics);
 
     // Hammer a lot of traffic through, then take many snapshots. Also feed a stream of
-    // never-resolvable callbacks (timers/services) — these must not add topics.
+    // never-resolvable callbacks (timers/services), these must not add topics.
     for (int i = 0; i < kTopics; ++i) {
         for (int k = 0; k < 1000; ++k) {
             reg.onPublish(pubHandle(i));

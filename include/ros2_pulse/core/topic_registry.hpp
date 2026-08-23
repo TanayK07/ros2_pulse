@@ -19,7 +19,7 @@ namespace ros2_pulse::core {
 /// @brief One topic's running message counts, split by role + transport.
 ///
 /// Separate publish and receive buckets so a same-process publisher and subscriber of one topic
-/// never fetch_add the same field (KNOWN_ISSUES.md #1 — see docs/issues/issue-1-double-count.md).
+/// never fetch_add the same field (KNOWN_ISSUES.md #1).
 struct sTopicCounter {
     std::string topic;
     // True once a subscription callback for this topic has RESOLVED (first delivered message).
@@ -38,7 +38,7 @@ struct sTopicCounter {
     //
     // last_* is the timestamp of the previous arrival and is deliberately NOT reset by snapshot():
     // the first message of window N+1 must measure its gap back into window N, or a stall that
-    // straddles a flush would be silently discarded — precisely the case this exists to catch.
+    // straddles a flush would be silently discarded, precisely the case this exists to catch.
     // 0 means "no arrival ever", which is how a never-active endpoint stays unreported.
     std::atomic<uint64_t> pub_last_ns{0};
     std::atomic<uint64_t> recv_last_ns{0};
@@ -57,7 +57,7 @@ struct sTopicStat {
     double pub_intra_hz{0.0};
     double recv_inter_hz{0.0};
     double recv_intra_hz{0.0};
-    // A subscription for this topic has delivered at least once — emit RECV even at zero so a
+    // A subscription for this topic has delivered at least once, emit RECV even at zero so a
     // dead upstream reads 0.0 instead of vanishing (KNOWN_ISSUES #12).
     bool recv_endpoint_seen{false};
     // Largest inter-arrival gap seen this window, per side (ROADMAP R5). Valid only when the
@@ -71,8 +71,8 @@ struct sTopicStat {
 
 /// @brief One initialized node plus its recent-activity bookkeeping.
 ///
-/// Liveness is inferred from topic traffic (there is no node-teardown tracepoint on Humble — see
-/// docs/issues/issue-2-node-liveness.md). @c counters are the per-topic counters this node owns as a
+/// Liveness is inferred from topic traffic (there is no node-teardown tracepoint on Humble, see
+/// KNOWN_ISSUES.md #2). @c counters are the per-topic counters this node owns as a
 /// publisher or subscriber; @c idle_windows counts consecutive windows in which none of them saw
 /// traffic. A node is reported active while @c idle_windows is below the registry's K.
 struct sNode {
@@ -84,7 +84,7 @@ struct sNode {
 /// @brief Pure C++ core of the probe. Holds the ROS-graph handle→topic maps and per-endpoint
 /// atomic counters, resolves callback→topic lazily, and aggregates windowed frequencies.
 ///
-/// NO ROS / tracetools dependency — testable in isolation. The probe layer feeds it raw handles
+/// NO ROS / tracetools dependency, testable in isolation. The probe layer feeds it raw handles
 /// captured from the interposed tracetools functions.
 ///
 /// Thread-safety: graph-init methods (rare) take a write lock; hot-path methods (onPublish,
@@ -124,7 +124,7 @@ public:
     /// @p fold_open_gap closes the currently-open interval into each side's reported gap, i.e.
     /// reports max(observed gaps, now - last arrival). Without it an endpoint that has gone
     /// completely silent produces no inter-arrival pair at all and would vanish from the gap
-    /// report — missing the TOTAL stall, the worst case R5 exists to catch. Pass false for the
+    /// report, missing the TOTAL stall, the worst case R5 exists to catch. Pass false for the
     /// atexit window: rclcpp teardown stops traffic before the process exits, so the open gap
     /// there measures the shutdown sequence and would fire every gap rule on a healthy stop.
     auto snapshot(double window_s, bool fold_open_gap = true) -> std::vector<sTopicStat>;
@@ -145,19 +145,19 @@ public:
 
     /// Decide whether the receive-side `RECV` line should be written for this window's stat:
     /// when the window saw receive traffic, or when the topic is a proven receive endpoint
-    /// (delivered at least once) — so a stalled upstream reads an explicit 0.0 every window
+    /// (delivered at least once), so a stalled upstream reads an explicit 0.0 every window
     /// instead of vanishing (KNOWN_ISSUES #12). Never-active subscriptions stay suppressed
     /// (issue #7 rationale: declared-but-silent is noise, active-then-stopped is signal).
     static auto shouldEmitRecv(const sTopicStat& stat) -> bool;
 
     /// Observability hook: number of times onCallbackStart has escalated to the EXCLUSIVE
-    /// (write) lock to run the full resolution chain. In steady state this must stay flat —
+    /// (write) lock to run the full resolution chain. In steady state this must stay flat,
     /// resolved callbacks and proven non-subscriptions are served from the shared-lock and
     /// thread-local fast paths. Used by the KNOWN_ISSUES #3 write-lock-storm regression tests.
     auto writeLockResolutions() const -> uint64_t;
 
     /// Observability hook: number of times a hot-path call missed the thread-local cache and
-    /// took the SHARED lock. Steady state for a warm per-thread working set must stay flat —
+    /// took the SHARED lock. Steady state for a warm per-thread working set must stay flat,
     /// the KNOWN_ISSUES #13 regression asserts alternating endpoints don't thrash the cache.
     /// Incremented only on the miss path (cold after warm-up), so the counter itself costs
     /// nothing where it matters.
@@ -168,13 +168,13 @@ public:
     void forkPrepare();     ///< before fork: take the write lock
     void forkRelease();     ///< after fork, PARENT only: release it
     void forkChildReset();  ///< after fork, CHILD only: re-init the lock (unlock is a no-op
-                            ///< there — the rwlock's stored writer TID no longer matches)
+                            ///< there, the rwlock's stored writer TID no longer matches)
 
 private:
     // Caller must hold the EXCLUSIVE lock: this may insert into m_cb_to_counter. Resolves
     // callback→counter through the chain (callback → rclcpp-sub → rcl-handle → counter) and caches
     // the result. Returns nullptr while the chain of a real subscription is not yet populated (kept
-    // uncached, so lazy resolution retries), or the kNotASubscription sentinel — cached — for a
+    // uncached, so lazy resolution retries), or the kNotASubscription sentinel, cached, for a
     // callback with no m_cb_to_sub entry at all (a timer/service callback that can never resolve).
     auto resolveCallback(const void* callback) -> sTopicCounter*;
     auto counterForTopic(const std::string& topic) -> sTopicCounter*;

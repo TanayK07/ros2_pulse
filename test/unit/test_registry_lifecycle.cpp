@@ -2,7 +2,7 @@
 //
 // Fix-independent regression guard: the thread-local hot-path cache in onPublish /
 // onCallbackStart is scoped by a per-registry id (m_id). When a registry is destroyed and a
-// new one is constructed — possibly at the SAME heap address — the new instance must NEVER
+// new one is constructed, possibly at the SAME heap address, the new instance must NEVER
 // serve a counter that belonged to the destroyed one. This is the subtlest invariant in the
 // core (a classic use-after-free footgun) and it is already correct on main; this test pins
 // it down under both the plain and ASan build lanes.
@@ -43,7 +43,7 @@ TEST(RegistryLifecycle, PublishCacheNeverServesDestroyedInstance) {
         ASSERT_NE(o, nullptr);
         EXPECT_EQ(o->pub_inter_count, 2u);
     }
-    delete reg1;  // thread-local last_ctr is now dangling — must never be dereferenced again
+    delete reg1;  // thread-local last_ctr is now dangling, must never be dereferenced again
 
     // Fresh instance; may be recycled at reg1's address. Same handle, different topic.
     auto* reg2 = new TopicRegistry();

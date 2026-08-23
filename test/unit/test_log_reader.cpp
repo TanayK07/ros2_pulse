@@ -89,7 +89,7 @@ TEST(LogReader, EmptyAndGarbageInput) {
 }
 
 // R5 JITTER lines round-trip through the real formatter: the max_dt values AND the has_* flags
-// must both survive, because absence is a semantic ("never measured"), not a zero — pulse-check's
+// must both survive, because absence is a semantic ("never measured"), not a zero, pulse-check's
 // exit-2 path keys on the flag, so a reader that dropped it would turn "cannot answer" into
 // "healthy". Also pins that a stat formatted WITHOUT the flags parses back without them.
 TEST(LogReader, RoundTripsJitterLines) {
@@ -104,7 +104,7 @@ TEST(LogReader, RoundTripsJitterLines) {
     s.recv_max_dt_ms = 812.4;
     s.has_recv_max_dt = true;
 
-    sTopicStat bare;  // same topic shape, no measured gap — flags must stay false through parse
+    sTopicStat bare;  // same topic shape, no measured gap, flags must stay false through parse
     bare.topic = "/imu";
     bare.pub_inter_count = 50;
     bare.pub_inter_hz = 100.0;
@@ -139,7 +139,7 @@ using ros2_pulse::core::formatWindowJsonl;
 
 // Round-trip through the real jsonl emitter with every field kind populated: rates on both
 // sides, endpoint flag, and gap fields WITH their has_* semantics (a parsed absent gap must
-// read unmeasured, not zero — pulse-check's unmeasured-gap exit-2 path depends on it).
+// read unmeasured, not zero, pulse-check's unmeasured-gap exit-2 path depends on it).
 TEST(LogReader, JsonlRoundTripsAllFields) {
     sTopicStat s;
     s.topic = "/points";
@@ -187,7 +187,7 @@ TEST(LogReader, JsonlRoundTripsAllFields) {
 }
 
 // A log written by a pre-R5 probe has no JITTER lines at all; it must parse exactly as before
-// with both has_* flags false on every stat — the additive-format promise, read direction.
+// with both has_* flags false on every stat, the additive-format promise, read direction.
 TEST(LogReader, PreR5LogParsesWithoutJitterFields) {
     const std::string text =
         "# ts_ns=100 window_s=5.000\n"
@@ -206,7 +206,7 @@ TEST(LogReader, PreR5LogParsesWithoutJitterFields) {
 }
 
 // A JITTER line whose side is neither `pub` nor `recv` (a future side, or corruption) is skipped
-// like any unknown line — and must NOT conjure a topic entry as a side effect: statFor only runs
+// like any unknown line, and must NOT conjure a topic entry as a side effect: statFor only runs
 // after a full pattern match. Same for a JITTER line with a non-numeric value.
 TEST(LogReader, UnknownJitterSideIsIgnored) {
     const std::string text =
@@ -259,7 +259,7 @@ TEST(LogReader, MixedTextAndJsonlWindows) {
     EXPECT_EQ(windows[1].nodes[0], "/perception");
 }
 
-// Malformed '{' lines (truncated tail after a crash, junk) are skipped like any other noise —
+// Malformed '{' lines (truncated tail after a crash, junk) are skipped like any other noise,
 // never a throw, never a bogus window. Unknown KEYS in well-formed records are skipped too,
 // so a newer probe's additive fields don't break an older pulse-check (mirrors the WARN-line
 // tolerance of the text parser).

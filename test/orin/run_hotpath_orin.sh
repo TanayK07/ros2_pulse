@@ -1,11 +1,11 @@
 #!/bin/bash
-# ros2_pulse — Orin hot-path microbench: the +24 ns question, answered on Tegra silicon.
+# ros2_pulse, Orin hot-path microbench: the +24 ns question, answered on Tegra silicon.
 #
 # Every published perf number is x86-64. Two of them ride on this box's clock:
 #   1. ROS_TOPIC_STATS_JITTER=1 costs +24 ns/msg (bench/hotpath_bench.cpp, fixed leg).
 #   2. ~96% of that is ONE CLOCK_MONOTONIC read through the vDSO. Some Tegra kernels route
-#      that read through a syscall instead — the "raw steady_clock (1 thread)" leg answers
-#      this directly: ~20–40 ns means the vDSO path works and the x86 story stands;
+#      that read through a syscall instead, the "raw steady_clock (1 thread)" leg answers
+#      this directly: ~20-40 ns means the vDSO path works and the x86 story stands;
 #      >=150 ns means syscall fallback, and the README's R5 cost table needs an
 #      Orin-specific row before the repo goes public.
 #
@@ -30,7 +30,7 @@ echo "=== platform ==="
   echo "governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unreadable)"
   # Tegra power state lives on the HOST; record it if visible, demand it if not.
   command -v nvpmodel >/dev/null 2>&1 && nvpmodel -q 2>/dev/null | head -4 \
-    || echo "nvpmodel: not visible here — run 'sudo nvpmodel -q' on the host and paste into platform.txt"
+    || echo "nvpmodel: not visible here, run 'sudo nvpmodel -q' on the host and paste into platform.txt"
 } | tee "$OUT/platform.txt"
 
 echo
@@ -73,4 +73,4 @@ else
   echo "         Check governor/nvpmodel pinning and rerun before drawing conclusions." | tee -a "$OUT/summary.txt"
 fi
 echo
-echo "Artifacts in $OUT — commit the whole directory (platform.txt, summary.*, trial_*.txt)."
+echo "Artifacts in $OUT, commit the whole directory (platform.txt, summary.*, trial_*.txt)."

@@ -70,7 +70,7 @@ def test_accuracy_first_window_not_inflated():
         first_intra = pair[1]
         hi = ph.KNOWN_RATE_HZ * (1.0 + TOL)
         assert first_intra <= hi, (
-            f"first window intra={first_intra:.2f}Hz exceeds {hi:.2f}Hz — first-window "
+            f"first window intra={first_intra:.2f}Hz exceeds {hi:.2f}Hz, first-window "
             f"inflation (KNOWN_ISSUES #8)\n--- log ---\n{text}")
 
 

@@ -7,7 +7,7 @@
 # The probe's whole compatibility claim with ros2_tracing rests on one line of design: every
 # interposer forwards to the real libtracetools function via dlsym(RTLD_NEXT) (see
 # src/probe/interposers.cpp). If that forwarding works, a LIVE LTTng session and the probe are
-# not rivals — the same tracepoint call feeds BOTH consumers: the probe counts it, then the real
+# not rivals, the same tracepoint call feeds BOTH consumers: the probe counts it, then the real
 # ros_trace_* body hands it to lttng-ust. Nothing had ever asserted this; a silently dropped
 # forward (e.g. a typo'd dlsym name returning nullptr) would pass every other test in this suite
 # and only be noticed by the first user who runs `ros2 trace` alongside us.
@@ -20,8 +20,8 @@
 # Skip-vs-fail design (this is where the assertion gets its teeth):
 #   - lttng CLI absent, sessiond won't start, no trace viewer  -> SKIP: environment can't test.
 #   - libtracetools.so NOT linked against lttng-ust            -> SKIP: the real tracepoint body
-#     is a no-op, so 0 events proves nothing about our forwarding. This is stock ros:humble —
-#     the bench/run_bakeoff.sh bake-off measured exactly 0 events there — hence this test skips
+#     is a no-op, so 0 events proves nothing about our forwarding. This is stock ros:humble,
+#     the bench/run_bakeoff.sh bake-off measured exactly 0 events there, hence this test skips
 #     on the humble CI lane and RUNS on jazzy/kilted (Iron+ ships the lttng-ust backend).
 #     The ldd check is deliberately preferred over a canary trace run: ldd distinguishes
 #     "environment can't test this" from "probe broke forwarding", a canary can't tell a broken
@@ -68,12 +68,12 @@ def _tracetools_skip_reason():
         return "libtracetools.so not found on AMENT_PREFIX_PATH"
     # The load-bearing check: is the REAL tracepoint body wired to lttng-ust? On stock humble
     # tracetools is compiled with TRACETOOLS_DISABLED-style no-op bodies (not linked against
-    # lttng-ust), so an LTTng session captures nothing no matter what we forward — skipping
+    # lttng-ust), so an LTTng session captures nothing no matter what we forward, skipping
     # there is correct and expected. Iron+ links the backend in the stock binaries.
     out = subprocess.run(["ldd", lib], capture_output=True, text=True, check=False)
     if "lttng-ust" not in out.stdout:
         return (f"{lib} is not linked against lttng-ust (stock humble ships no-op "
-                "tracepoints; Iron+ required) — coexistence untestable here")
+                "tracepoints; Iron+ required), coexistence untestable here")
     return None
 
 
@@ -94,7 +94,7 @@ def _ensure_sessiond():
     """Make sure a session daemon is reachable; return a skip reason or None.
 
     `lttng list` auto-spawns a per-user sessiond in most setups, but minimal containers can
-    lack that path — try an explicit daemonized spawn (--no-kernel: we only need the userspace
+    lack that path, try an explicit daemonized spawn (--no-kernel: we only need the userspace
     domain, and skipping the kernel domain avoids module-load noise as root) before giving up.
     """
     if subprocess.run(["lttng", "list"], capture_output=True, check=False).returncode == 0:
@@ -161,7 +161,7 @@ class LttngSession:
 
 
 def _run_unprobed_talker(run_s):
-    """Run the talker WITHOUT the probe (plain env) for run_s seconds — baseline leg."""
+    """Run the talker WITHOUT the probe (plain env) for run_s seconds, baseline leg."""
     _, node = ph.probe_paths()
     p = subprocess.Popen([node, "talker"], env=dict(os.environ))
     try:
@@ -189,11 +189,11 @@ def test_probe_and_live_lttng_session_coexist():
                               rel_tol=0.30, note="(with live LTTng session)")
         events = sess.ros2_event_count()
         # (b) Forwarding delivered events to lttng-ust. >0 is the claim; a 6 s 50 Hz talker
-        # actually produces hundreds of rcl_publish events alone, so 0 here — in an environment
-        # the skip-guards proved capable of tracing — means dlsym(RTLD_NEXT) forwarding is
+        # actually produces hundreds of rcl_publish events alone, so 0 here, in an environment
+        # the skip-guards proved capable of tracing, means dlsym(RTLD_NEXT) forwarding is
         # broken, which is precisely the regression this test exists to catch.
         assert events > 0, (
-            "live LTTng session captured 0 ros2:* events while the probe was preloaded — "
+            "live LTTng session captured 0 ros2:* events while the probe was preloaded, "
             "interposer forwarding (dlsym RTLD_NEXT) is broken; probe log was:\n" + text)
 
 
@@ -203,7 +203,7 @@ def test_unprobed_talker_baseline():
     This is what gives the coexistence assertion teeth: if this passes and the probed run
     captured 0 events, the fault is provably in the probe's forwarding, not in LTTng, the
     sessiond, or the tracetools backend. (And if the environment can't trace at all, both
-    tests skip together via the ldd/sessiond guards — skip means untestable, fail means us.)
+    tests skip together via the ldd/sessiond guards, skip means untestable, fail means us.)
     """
     _skip_unless_testable()
     with tempfile.TemporaryDirectory() as d:
@@ -212,7 +212,7 @@ def test_unprobed_talker_baseline():
             _run_unprobed_talker(run_s=4.0)
         events = sess.ros2_event_count()
         assert events > 0, (
-            "un-probed talker produced 0 ros2:* events despite lttng-ust-linked tracetools — "
+            "un-probed talker produced 0 ros2:* events despite lttng-ust-linked tracetools, "
             "LTTng environment is broken in a way the skip-guards did not catch")
 
 

@@ -105,7 +105,7 @@ TEST(SpecIo, AcceptsAtCapRejectsOverCap) {
 }
 
 // A directory opens fine and reads EISDIR, which used to yield empty text that parses as a
-// perfectly valid zero-rule spec — alerting silently armed as a permanent no-op.
+// perfectly valid zero-rule spec, alerting silently armed as a permanent no-op.
 TEST(SpecIo, RejectsDirectory) {
     ScratchDir d;
     std::string text;
@@ -148,8 +148,8 @@ TEST(SpecIo, RejectsMissingPathWithErrno) {
     EXPECT_FALSE(readSpecFile("", text, err));
 }
 
-// An empty spec file reads fine and parses fine — into zero rules. The reader's job is to hand
-// that up honestly; refusing to ARM a no-op spec is the caller's (see loadRateSpec).
+// An empty spec file reads fine and parses fine, into zero rules. The reader's job is to hand
+// that up; refusing to ARM a no-op spec is the caller's (see loadRateSpec).
 TEST(SpecIo, EmptyFileReadsAndParsesToZeroRules) {
     ScratchDir d;
     const std::string p = d.writeFile("empty.yaml", "");
