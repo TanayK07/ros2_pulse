@@ -38,6 +38,15 @@ Frames are rasterized from Textual SVG screenshots with cairosvg. cairosvg draws
 wider than Textual's cell grid (text runs collide), so the SVG font is swapped for DejaVu Sans
 Mono, which sits on the grid (`PULSE_TOP_SVG_FONT` to override).
 
+## Music
+
+Bed track: *Digital Cobalt (Synthwave)* by AvigeiaAvetian —
+https://pixabay.com/music/synthwave-digital-cobalt-synthwave-580426/ — Pixabay Content License
+(free for commercial use, no attribution required). The license does not allow redistributing
+the file on its own, so `public/music/` is gitignored: download the MP3 from that page and save
+it as `public/music/digital-cobalt.mp3` before rendering. Gain 0.22, 20-frame fade in, 75-frame
+fade out (`src/Launch.tsx`).
+
 ## Updating a number
 
 Change it in `src/data.ts` (with the file it now comes from), re-render. Nothing else in the

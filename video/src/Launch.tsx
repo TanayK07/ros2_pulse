@@ -1,4 +1,4 @@
-import {AbsoluteFill} from 'remotion';
+import {AbsoluteFill, Audio, interpolate, staticFile} from 'remotion';
 import {TransitionSeries, linearTiming} from '@remotion/transitions';
 import {fade} from '@remotion/transitions/fade';
 import {slide} from '@remotion/transitions/slide';
@@ -24,8 +24,23 @@ const N_TRANSITIONS = 5;
 export const LAUNCH_DURATION_FRAMES =
   Object.values(SCENES).reduce((a, b) => a + b, 0) - N_TRANSITIONS * T;
 
+// Bed: "Digital Cobalt (Synthwave)" by AvigeiaAvetian, Pixabay Content License (no attribution,
+// no redistribution of the file itself — so public/music/ is gitignored; see README).
+const MUSIC_GAIN = 0.22;
+const FADE_IN = 20;
+const FADE_OUT = 75;
+
 export const Launch: React.FC = () => (
   <AbsoluteFill style={{backgroundColor: C.bg}}>
+    <Audio
+      src={staticFile('music/digital-cobalt.mp3')}
+      volume={(f) =>
+        interpolate(f, [0, FADE_IN, LAUNCH_DURATION_FRAMES - FADE_OUT, LAUNCH_DURATION_FRAMES], [0, MUSIC_GAIN, MUSIC_GAIN, 0], {
+          extrapolateLeft: 'clamp',
+          extrapolateRight: 'clamp',
+        })
+      }
+    />
     <TransitionSeries>
       <TransitionSeries.Sequence durationInFrames={SCENES.hook}>
         <Hook />
