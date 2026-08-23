@@ -17,6 +17,7 @@ file is quiet: the probe may simply not have started yet.
 
 from __future__ import annotations
 
+import glob
 import os
 
 
@@ -61,3 +62,34 @@ class FileFollower:
             lines = lines[1:]
             self._skip_partial = False
         return [ln.decode("utf-8", errors="replace") for ln in lines if ln]
+
+
+class MultiFollower:
+    """Follow every file matching a glob pattern (or one plain path).
+
+    The probe's default output is one file per process, $TMPDIR/topic_freq.<pid>.log,
+    so a live stack is N files that appear as nodes start. Re-glob on every poll —
+    a directory listing twice a second is nothing next to the cost of showing one
+    node of a 77-node graph. A plain path (no glob metacharacters) is followed
+    as-is so a deliberately shared file keeps working.
+    """
+
+    def __init__(self, pattern: str):
+        self.pattern = pattern
+        self._followers: dict[str, FileFollower] = {}
+
+    @property
+    def files(self) -> list[str]:
+        return sorted(self._followers)
+
+    def poll(self) -> list[str]:
+        if glob.has_magic(self.pattern):
+            for path in glob.glob(self.pattern):
+                if path not in self._followers:
+                    self._followers[path] = FileFollower(path)
+        elif not self._followers:
+            self._followers[self.pattern] = FileFollower(self.pattern)
+        out: list[str] = []
+        for path in self.files:
+            out.extend(self._followers[path].poll())
+        return out

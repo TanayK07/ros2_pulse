@@ -21,7 +21,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane, Tree
 
 from .model import StatsState, parse_jsonl_line, sparkline
-from .reader import FileFollower
+from .reader import MultiFollower
 
 ACCENT = "#b48cf2"
 GOOD = "#7ee2a8"
@@ -31,6 +31,17 @@ DIM = "#7c8797"
 
 COLUMNS = ("TOPIC", "PUB Hz", "INTRA", "RECV", "GAP ms", "60s")
 SORTS = ("topic", "rate", "gap")
+
+
+def fmt_age(seconds: float) -> str:
+    """Human age for a stale row: 12s, 3m, 2h — seconds granularity only under a minute,
+    so a row's label (and hence its cell) changes at most once a second."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    return f"{s // 3600}h"
 
 
 def fmt(v: float | None, none: str = "—") -> str:
@@ -49,8 +60,14 @@ class PulseTopApp(App):
         super().__init__()
         self._path = path
         self._poll_s = poll_s
-        self._follower = FileFollower(path)
+        self._follower = MultiFollower(path)
         self._state = StatsState()
+        # Last-rendered (plain, style) per cell. DataTable.update_cell invalidates
+        # the row render caches and schedules a refresh even when the value is
+        # identical (Textual 8.2), so only cells whose text or style actually
+        # changed are pushed — 240 no-op updates a tick repainted the whole table
+        # twice a second over ssh (Orin, 2026-08-23).
+        self._rendered: dict[tuple[str, str], tuple[str, str]] = {}
         self._sort = 0
         self._warns_only = False
         self._selected: str | None = None
@@ -99,7 +116,9 @@ class PulseTopApp(App):
         if key == "topic":
             items.sort(key=lambda it: it[0])
         elif key == "rate":
-            items.sort(key=lambda it: -it[1].rate)
+            # live rows by rate, then stale rows by rate — a stale 20 Hz topic
+            # must not sit above a live 5 Hz one.
+            items.sort(key=lambda it: (self._state.is_stale(it[0]), -it[1].rate))
         else:
             items.sort(key=lambda it: -(it[1].latest.pub_max_dt_ms or it[1].latest.recv_max_dt_ms or 0.0))
         return items
@@ -119,19 +138,20 @@ class PulseTopApp(App):
         warn_part = f"[bold {WARN}]{n} warns[/]" if n else f"[{DIM}]0 warns[/]"
         self.query_one("#topbar", Static).update(
             f"[bold {ACCENT}]pulse-top[/] [{DIM}]{self._path} · "
-            f"window {s.window_s:.1f}s · {s.windows_seen} seen[/]  {warn_part}"
+            f"{len(self._follower.files)} file(s) · window {s.window_s:.1f}s · "
+            f"{s.windows_seen} windows[/]  {warn_part}"
         )
 
     def _row_cells(self, name: str, st) -> tuple:
         t = st.latest
         # The probe omits silent topics per window: absence is "no traffic seen",
         # not "still at the old rate". Render stale rows as stale, never repeat
-        # the last measurement as if current (PR #32 review).
-        age = self._state.windows_seen - st.last_seen
-        if age > 0:
+        # the last measurement as if current (PR #32 review). Age is wall time
+        # from the window timestamps — windows from every process interleave.
+        if self._state.is_stale(name):
             stale = Text("—", justify="right", style=DIM)
             return (
-                Text(f"{name}  · stale {age}w", style=DIM),
+                Text(f"{name}  · stale {fmt_age(self._state.age_s(name))}", style=DIM),
                 stale, stale.copy(), stale.copy(), stale.copy(),
                 Text(sparkline(st.rate_history), style=DIM),
             )
@@ -153,12 +173,19 @@ class PulseTopApp(App):
         have = [rk.value for rk in table.rows]
         if want != have:
             table.clear()
+            self._rendered.clear()
             for name, st in rows:
-                table.add_row(*self._row_cells(name, st), key=name)
+                cells = self._row_cells(name, st)
+                table.add_row(*cells, key=name)
+                for col, cell in zip(COLUMNS, cells):
+                    self._rendered[(name, col)] = (cell.plain, str(cell.style))
         else:
             for name, st in rows:
                 for col, cell in zip(COLUMNS, self._row_cells(name, st)):
-                    table.update_cell(name, col, cell)
+                    sig = (cell.plain, str(cell.style))
+                    if self._rendered.get((name, col)) != sig:
+                        self._rendered[(name, col)] = sig
+                        table.update_cell(name, col, cell)
         if self._selected is None and want:
             self._selected = want[0]
 
@@ -258,15 +285,15 @@ class PulseTopApp(App):
         # instead of blinking for one window period (PR #32 review). Live warns
         # bold; historical ones dimmed with "Nw ago".
         out = Text()
-        for i, (seen, w) in enumerate(reversed(self._state.recent_warns)):
+        for i, (fired, w) in enumerate(reversed(self._state.recent_warns)):
             if i:
                 out.append("\n")
-            age = self._state.windows_seen - seen
-            if age == 0:
+            age = self._state.warn_age_s(fired)
+            if w in self._state.warns:
                 c = WARN if w.kind == "topic_rate" else BAD
                 out.append(f"{w.kind:<14}", style=f"bold {c}").append(" ").append(w.detail)
             else:
-                out.append(f"{w.kind:<14} {w.detail} · {age}w ago", style=DIM)
+                out.append(f"{w.kind:<14} {w.detail} · {fmt_age(age)} ago", style=DIM)
         self.query_one("#warns-list", Static).update(
             out if out.plain else Text("no warns seen", style=DIM)
         )
@@ -290,11 +317,13 @@ class PulseTopApp(App):
 
 
 def default_log_path() -> str | None:
-    tmp = os.environ.get("TMPDIR") or tempfile.gettempdir()
-    candidates = glob.glob(os.path.join(tmp, "topic_freq.*.log")) + glob.glob(
-        os.path.join("/tmp", "topic_freq.*.log")
-    )
-    return max(candidates, key=os.path.getmtime) if candidates else None
+    """Glob for every per-process probe log, not the newest one: a live stack is
+    one file per node and the newest file is one node of it."""
+    for d in (os.environ.get("TMPDIR") or tempfile.gettempdir(), "/tmp"):
+        pattern = os.path.join(d, "topic_freq.*.log")
+        if glob.glob(pattern):
+            return pattern
+    return None
 
 
 def main() -> int:
@@ -302,7 +331,11 @@ def main() -> int:
         prog="pulse-top",
         description="Live TUI over a ros2_pulse jsonl log (run the probe with ROS_TOPIC_STATS_FORMAT=jsonl).",
     )
-    ap.add_argument("file", nargs="?", help="probe log (default: newest $TMPDIR/topic_freq.<pid>.log)")
+    ap.add_argument(
+        "file", nargs="?",
+        help="probe log, or a quoted glob like '/tmp/topic_freq.*.log' "
+             "(default: every $TMPDIR/topic_freq.<pid>.log)",
+    )
     ap.add_argument("--demo", action="store_true", help="run against a self-generated demo log")
     ap.add_argument("--poll", type=float, default=0.5, help="file poll interval seconds (default 0.5)")
     args = ap.parse_args()
