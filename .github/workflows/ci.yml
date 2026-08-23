@@ -25,19 +25,19 @@ jobs:
       # image so the distro's own tracetools/rclcpp binaries are what we interpose, that IS
       # the compatibility claim under test.
       #
-      # LTTng tooling for test_lttng_coexist.py comes through package.xml test_depends
-      # (rosdep keys `lttng-tools` + `babeltrace`, both verified in rosdistro base.yaml,
-      # there is no `babeltrace2` key), industrial_ci's rosdep step installs test_depends,
-      # so no ADDITIONAL_DEBS entry is needed and the tool list can't drift between CI and
-      # a local `rosdep install`. Net effect per lane: jazzy/kilted RUN the coexistence
-      # test (Iron+ tracetools links lttng-ust); humble installs the tools but the test
-      # self-skips on its ldd check, which is the documented, correct behaviour there.
+      # LTTng tooling for test_lttng_coexist.py: lttng-tools arrives through package.xml
+      # (rosdep key, installed by industrial_ci's rosdep step); babeltrace2 is installed here
+      # because it is deliberately NOT a declared dependency (babeltrace has no RHEL rosdep
+      # mapping, which would block RPM generation on the build farm). Net effect per lane:
+      # jazzy/kilted RUN the coexistence test (Iron+ tracetools links lttng-ust); humble
+      # installs the tools but the test self-skips on its ldd check, which is the documented,
+      # correct behaviour there.
       - uses: ros-industrial/industrial_ci@master
         env:
           ROS_DISTRO: ${{ matrix.ROS_DISTRO }}
           ROS_REPO: main
           DOCKER_IMAGE: ros:${{ matrix.ROS_DISTRO }}
-          ADDITIONAL_DEBS: build-essential
+          ADDITIONAL_DEBS: build-essential babeltrace2
           AGGREGATE_TEST_RESULTS: 'true'
 
   # pulse-top is a pure log consumer (no ROS dep), so its suite runs on a stock python.
@@ -107,5 +107,5 @@ jobs:
           # Rolling moved past ubuntu jammy; the official ros:rolling image tracks the right
           # base OS, which is what the previous (apt-from-scratch) setup tripped over.
           DOCKER_IMAGE: ros:rolling
-          ADDITIONAL_DEBS: build-essential
+          ADDITIONAL_DEBS: build-essential babeltrace2
           AGGREGATE_TEST_RESULTS: 'true'

@@ -5,6 +5,17 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-23
+
+Packaging fix for the apt release; no behaviour change.
+
+### Fixed
+- `babeltrace` is no longer a declared `test_depend`: it has no rosdep mapping for RHEL, and
+  humble, jazzy and kilted all release on RHEL, so the declaration blocked bloom's RPM
+  generation and would have failed the build farm. The LTTng coexistence test already skips
+  when no trace viewer is installed; CI installs `babeltrace2` explicitly so the jazzy and
+  kilted lanes keep running it.
+
 ### Added
 - **Observer-effect bench (`bench/run_observer_effect.sh`, raw under `bench/out/observer_effect/`):**
   what `ros2 topic hz` / `echo` cost and what they do to the topic. N=10 rotated arms on the
