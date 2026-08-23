@@ -35,8 +35,9 @@ def _window(i: int) -> dict:
         {"topic": "/tf", "pub_inter_hz": j(99.8, 0.4), "pub_intra_hz": 0.0,
          "recv_inter_hz": j(99.7, 0.4), "recv_intra_hz": 0.0, "recv_endpoint_seen": True},
         {"topic": "/cmd_vel",
-         "pub_inter_hz": j(18.4 - 1.5 * math.sin(i / 3.0)) if cmd_low else j(20.0),
-         "pub_intra_hz": 0.0, "recv_inter_hz": j(18.4) if cmd_low else j(20.0),
+         # sag well under the 19 Hz min: 14.5–17.5 Hz, so every warn is visibly out of range
+         "pub_inter_hz": j(16.0 - 1.5 * math.sin(i / 3.0)) if cmd_low else j(20.0),
+         "pub_intra_hz": 0.0, "recv_inter_hz": j(16.0) if cmd_low else j(20.0),
          "recv_intra_hz": 0.0, "recv_endpoint_seen": True},
     ]
     warns = []

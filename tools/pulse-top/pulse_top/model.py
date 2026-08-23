@@ -48,9 +48,15 @@ class Window:
 def _warn_detail(w: dict) -> str:
     kind = w.get("kind", "?")
     if kind == "topic_rate":
-        lo, hi = w.get("min_hz"), w.get("max_hz")
-        bound = f"< min {lo}Hz" if lo is not None and w.get("hz", 0) < lo else f"> max {hi}Hz"
-        return f"{w.get('topic')} {w.get('hz')}Hz {bound}"
+        lo, hi, hz = w.get("min_hz"), w.get("max_hz"), w.get("hz")
+        if lo is not None and hz is not None and hz < lo:
+            bound = f"< min {lo}Hz"
+        elif hi is not None and hz is not None and hz > hi:
+            bound = f"> max {hi}Hz"
+        else:  # the probe never warns in-range; say what is known, claim nothing
+            bound = f"bounds [{lo}, {hi}]Hz"
+        shown = f"{hz:.1f}" if isinstance(hz, (int, float)) else hz
+        return f"{w.get('topic')} {shown}Hz {bound}"
     if kind == "topic_gap":
         return f"{w.get('topic')} max_dt {w.get('max_dt_ms')}ms > max_gap {w.get('max_gap_ms')}ms"
     if kind == "node_missing":
