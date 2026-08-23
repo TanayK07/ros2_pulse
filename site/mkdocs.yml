@@ -1,0 +1,58 @@
+site_name: ros2_pulse
+site_description: Low-overhead ROS 2 topic rate and node liveness probe, inter- and intra-process, on stock binaries.
+site_url: https://tanayk07.github.io/ros2_pulse/
+repo_url: https://github.com/TanayK07/ros2_pulse
+repo_name: TanayK07/ros2_pulse
+edit_uri: ""
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: deep purple
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - toc.follow
+
+nav:
+  - Overview: index.md
+  - pulse-top: pulse-top.md
+  - Measurements:
+      - Benchmarks: benchmarks.md
+      - Jetson AGX Orin: orin.md
+      - Bench harness: bench-harness.md
+      - Orin runbook: orin-runbook.md
+  - Background:
+      - Design: design.md
+      - Alternatives: alternatives.md
+      - Known issues: known-issues.md
+      - Roadmap: roadmap.md
+      - Launch video: video.md
+  - Project:
+      - Changelog: changelog.md
+      - Contributing: contributing.md
+      - Security: security.md
+
+markdown_extensions:
+  - tables
+  - admonition
+  - attr_list
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
