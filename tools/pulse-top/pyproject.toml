@@ -9,7 +9,21 @@ description = "Live terminal dashboard over a ros2_pulse probe log — no ROS de
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
+keywords = ["ros2", "ros", "robotics", "observability", "tui", "textual"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Monitoring",
+]
 dependencies = ["textual>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/TanayK07/ros2_pulse"
+Repository = "https://github.com/TanayK07/ros2_pulse"
+Changelog = "https://github.com/TanayK07/ros2_pulse/blob/main/CHANGELOG.md"
+Issues = "https://github.com/TanayK07/ros2_pulse/issues"
 
 [project.scripts]
 pulse-top = "pulse_top.app:main"
