@@ -1,0 +1,21 @@
+== uname ==
+Linux ubuntu 5.15.148-tegra #1 SMP PREEMPT Mon Jun 16 08:24:48 PDT 2025 aarch64 aarch64 aarch64 GNU/Linux
+== nvpmodel ==
+NV Power Mode: MAXN
+0
+== tegra release ==
+# R36 (release), REVISION: 4.4, GCID: 41062509, BOARD: generic, EABI: aarch64, DATE: Mon Jun 16 16:07:13 UTC 2025
+# KERNEL_VARIANT: oot
+TARGET_USERSPACE_LIB_DIR=nvidia
+TARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia
+== cpu ==
+CPU(s):                             12
+Model name:                         Cortex-A78AE
+CPU max MHz:                        2201.6001
+== mem ==
+               total        used        free      shared  buff/cache   available
+Mem:            61Gi       7.4Gi       1.0Gi       3.3Gi        52Gi        49Gi
+== docker image ==
+<private registry image, ROS 2 humble, aarch64>
+== note ==
+stack state during Phase 2: idle (parked, nav2 lifecycle nodes unconfigured, max topic rate 5 Hz). OFF baseline at 35h uptime; ON at ~5min post-restart.

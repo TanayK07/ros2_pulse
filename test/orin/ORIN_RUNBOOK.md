@@ -7,20 +7,42 @@ LTTng. Run everything **inside the ROS container on the Orin**. Adjust `ros2_dev
 
 Nothing here modifies the running stack except toggling one env var + restarting (Phase 2/3).
 
+**Results of the 2026-08-23 run on a production AGX Orin: [`RESULTS.md`](RESULTS.md)**, raw
+files under [`out/`](out/).
+
 ---
 
 ## Phase 0 — build the package on the Orin
 
 ```bash
-# on the Orin host
-docker exec -it ros2_dev bash
-# inside the container:
-cd /root/ros2_ws/src/ros2_pulse
-git fetch origin --tags && git checkout v0.3.0   # pin the exact release the numbers describe
+# The repo is private and the robot must not end up holding credentials for it. Two ways in,
+# neither leaves a .git/ or a remote on the robot:
+
+# (a) no token at all — archive from your checkout, copy over ssh:
+git archive --format=tar.gz --prefix=ros2_pulse/ -o /tmp/ros2_pulse-v0.3.0.tar.gz v0.3.0
+scp /tmp/ros2_pulse-v0.3.0.tar.gz <orin>:/tmp/
+#   on the Orin host:  docker cp /tmp/ros2_pulse-v0.3.0.tar.gz ros2_dev:/tmp/
+#   in the container:  tar -xzf /tmp/ros2_pulse-v0.3.0.tar.gz -C /root/ros2_ws/src/
+
+# (b) robot has egress — short-lived read-only token, pasted without echo or history:
+#   in the container:
+#   set +o history; read -rs PAT
+#   mkdir -p /root/ros2_ws/src/ros2_pulse
+#   curl -fsSL -H "Authorization: Bearer $PAT" \
+#     https://api.github.com/repos/TanayK07/ros2_pulse/tarball/v0.3.0 \
+#     | tar -xz --strip-components=1 -C /root/ros2_ws/src/ros2_pulse
+#   unset PAT; set -o history        # and revoke the token on GitHub when the run is over
+
+# then, inside the container:
 cd /root/ros2_ws
 colcon build --packages-select ros2_pulse
 source install/setup.bash
 ```
+
+Teardown afterwards: remove `src/ros2_pulse`, `build/ros2_pulse`, `install/ros2_pulse` (on the
+host side if the workspace is a bind mount), the probe's output files, and any env-file lines
+added for Phase 2 — then restart the stack once so no process still references the deleted
+`.so`. Revoke the token if (b) was used.
 
 ## Phase 1 — does it work here, and what data do we get? (the core ask)
 
