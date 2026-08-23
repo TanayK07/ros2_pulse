@@ -7,20 +7,32 @@ LTTng. Run everything **inside the ROS container on the Orin**. Adjust `ros2_dev
 
 Nothing here modifies the running stack except toggling one env var + restarting (Phase 2/3).
 
+**Do-it version:** [`FIELD_CHECKLIST.md`](FIELD_CHECKLIST.md) — same phases as a copy-paste
+checklist with expected outputs, the hand-back table, and the teardown. This file is the rationale.
+
 ---
 
 ## Phase 0 — build the package on the Orin
 
 ```bash
+# on your machine (repo checkout). The repo is private and the robot must never hold
+# credentials for it: ship a self-contained git bundle instead of cloning from GitHub.
+git bundle create /tmp/ros2_pulse.bundle v0.3.0
+scp /tmp/ros2_pulse.bundle orin:/tmp/
+
 # on the Orin host
+docker cp /tmp/ros2_pulse.bundle ros2_dev:/tmp/
 docker exec -it ros2_dev bash
 # inside the container:
-cd /root/ros2_ws/src/ros2_pulse
-git fetch origin --tags && git checkout v0.3.0   # pin the exact release the numbers describe
+git clone /tmp/ros2_pulse.bundle /root/ros2_ws/src/ros2_pulse
+cd /root/ros2_ws/src/ros2_pulse && git checkout v0.3.0   # pin the exact release the numbers describe
 cd /root/ros2_ws
 colcon build --packages-select ros2_pulse
 source install/setup.bash
 ```
+
+Teardown (remove every trace of the package from the robot once results are off it) is in
+[`FIELD_CHECKLIST.md`](FIELD_CHECKLIST.md#teardown--remove-all-trace-10-min-after-results-are-confirmed-off-the-robot).
 
 ## Phase 1 — does it work here, and what data do we get? (the core ask)
 
