@@ -1,0 +1,3 @@
+tracetools=/opt/ros/humble/lib/libtracetools.so
+ros_trace symbols: 29
+lttng: not linked

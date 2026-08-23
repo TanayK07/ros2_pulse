@@ -532,5 +532,10 @@ boundary the first message after the stall carries the full dt however it stradd
 falls back to a syscall (~hundreds of ns), which would change the cost story on exactly the
 platform this probe targets. `test/orin/` exists for this.
 
+> **Measured 2026-08-23 on a Jetson AGX Orin (kernel 5.15.148-tegra):** raw clock read
+> 38.7 ns, R5 delta **+51.0 ns/msg ± 0.6** (fixed) / +55.6 (alt-4). vDSO path works; no
+> syscall fallback. ~2.1× the x86 number, fully explained by the slower clock. Raw trials in
+> [`test/orin/RESULTS.md`](../test/orin/RESULTS.md).
+
 Also update: `probe_harness.py` gains a `_JITTER_RE` **deliberately not `$`-anchored**, with a
 comment saying why — that is what makes a later `min_dt_ms` append free.

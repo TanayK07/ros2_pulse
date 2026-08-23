@@ -1,0 +1,32 @@
+# ts_ns=1787462175649504347 window_s=2.002
+TOPIC /chatter 0.499522
+NODE /talker
+
+# ts_ns=1787462175655388431 window_s=2.005
+RECV /chatter inter=0.997681 intra=0.000000
+NODE /listener
+
+# ts_ns=1787462177649450618 window_s=2.000
+TOPIC /chatter 1.000001
+NODE /talker
+
+# ts_ns=1787462177655346830 window_s=2.000
+RECV /chatter inter=1.000001 intra=0.000000
+NODE /listener
+
+# ts_ns=1787462179649450775 window_s=2.000
+TOPIC /chatter 1.000000
+NODE /talker
+
+# ts_ns=1787462179655347210 window_s=2.000
+RECV /chatter inter=1.000000 intra=0.000000
+NODE /listener
+
+# ts_ns=1787462181538333079 window_s=1.889
+TOPIC /chatter 1.058826
+NODE /talker
+
+# ts_ns=1787462181541458650 window_s=1.886
+RECV /chatter inter=0.530191 intra=0.000000
+NODE /listener
+

@@ -1,0 +1,6 @@
+Linux ubuntu 5.15.148-tegra #1 SMP PREEMPT Mon Jun 16 08:24:48 PDT 2025 aarch64 aarch64 aarch64 GNU/Linux
+clocksource: arch_sys_counter
+model name	: ARMv8 Processor rev 1 (v8l)
+cores: 9
+governor: schedutil
+nvpmodel: not visible here — run 'sudo nvpmodel -q' on the host and paste into platform.txt

@@ -1,0 +1,17 @@
+threads=8 topics=50 total=40000000 alt=4
+OLD mutex+strhash (fixed)      369.4 ns/op       2.7 M/s
+single-entry TLS (fixed)         0.9 ns/op    1075.8 M/s
+single-entry TLS (alt-4)       223.2 ns/op       4.5 M/s
+mini-map-16 TLS (fixed)          0.9 ns/op    1125.7 M/s
+mini-map-16 TLS (alt-4)          2.1 ns/op     471.8 M/s
+cache-256 TLS (fixed)            0.9 ns/op    1154.8 M/s
+cache-256 TLS (alt-4)            2.1 ns/op     472.9 M/s
+cache-256+gap (fixed)            7.1 ns/op     140.4 M/s
+cache-256+gap (alt-4)            9.5 ns/op     105.5 M/s
+raw steady_clock (1 thread)     39.0 ns/op
+raw steady_clock (th thr)       42.4 CPU ns/op
+
+R5 gap cost, +gap minus plain (ROS_TOPIC_STATS_JITTER=1):
+  fixed :  +50.0 CPU ns/msg  (wall-amortized  +6.3)
+  alt-4 :  +58.9 CPU ns/msg  (wall-amortized  +7.4)
+  clock read alone: 42.4 CPU ns -> 85% of the fixed-leg delta

@@ -80,6 +80,26 @@ stride-breaking cache holds alternation at ~1 ns/op — two orders of magnitude 
 LTTng-UST tracepoint (~158 ns, Bédard et al. 2022). Numbers move with host/thread count —
 treat ratios, not absolutes, as the signal.
 
+### aarch64 — Jetson AGX Orin (2026-08-23, production robot, clocks pinned)
+
+Same `hotpath_bench.cpp`, 10 trials × 8 threads, mean ± SEM. Full write-up and raw trials in
+[`test/orin/RESULTS.md`](../test/orin/RESULTS.md).
+
+| Leg | Orin (Cortex-A78AE @ 2.2 GHz) | x86-64 reference |
+|---|---|---|
+| OLD design (mutex + string hash), fixed | 351 ns/op | 141–167 ns/op |
+| single-entry TLS cache, alt-4 | 225 ns/op | 47–52 ns/op |
+| current TLS cache, fixed | **0.9 ns/op** | 0.3 ns/op |
+| current TLS cache, alt-4 | **2.1–2.2 ns/op** | 0.6–1.2 ns/op |
+| raw `steady_clock::now()`, 1 thread | 38.7 ns ± 0.08 | ~21 ns |
+| R5 jitter clock read, fixed (`JITTER=1`) | **+51.0 ns/msg ± 0.6** | +24.4 ns/msg ± 0.02 |
+| R5 jitter clock read, alt-4 | +55.6 ns/msg ± 0.9 | — |
+
+The ratios carry over: the cache fix holds alternation two orders of magnitude under the old
+design on aarch64 too, and the R5 cost is the clock read (89 % of the delta) — the vDSO path
+works on the 5.15 Tegra kernel, so the syscall-fallback risk flagged in the R5 design did not
+materialize.
+
 ## Verdict
 
 - **CPU cost is ≈2 % on a worst-case synthetic stress and proportionally less on real

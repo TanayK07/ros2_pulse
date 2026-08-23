@@ -6,6 +6,17 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **On-Orin validation (`test/orin/RESULTS.md`, raw under `test/orin/out/`):** v0.3.0 run on a
+  production Jetson AGX Orin (L4T R36.4, Humble/CycloneDDS, 77 nodes). Hot-path bench on
+  aarch64: 0.9 ns/op fixed, 2.1 ns/op alternating; the opt-in jitter clock read costs
+  **+51 ns/msg ± 0.6** (x86: +24) and the `CLOCK_MONOTONIC` vDSO works — the syscall-fallback
+  risk from the R5 design is closed. Probe loaded into every process of the deployed stack on
+  stock binaries, 0 sockets, all v0.3.0 features (`JITTER`, `jsonl`, `QUIET`) verified on
+  target. Production log committed with operator node/topic names redacted. README, bench
+  results and the R5 design note carry the aarch64 numbers.
+- `test/orin/run_orin_probe_test.sh` honors `ROS_TOPIC_STATS_OUTPUT_FILE` and records process
+  names with the CPU samples so ON/OFF runs can be matched across a stack restart.
+  `ORIN_RUNBOOK.md` Phase 0 no longer needs git credentials on the robot.
 - **pulse-top (`tools/pulse-top/`):** live terminal dashboard over the probe's jsonl log
   (`pip install ./tools/pulse-top`, command `pulse-top`). A pure log consumer — no ROS
   dependency, no node, no subscriptions — so watching costs the probed system nothing and

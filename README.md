@@ -110,7 +110,7 @@ A missing preload lib is non-fatal (`ld.so` warns and ignores), so it is safe to
 | `ROS_TOPIC_STATS_OUTPUT_FILE` | `$TMPDIR/topic_freq.<pid>.log` (`/tmp` if `TMPDIR` unset) | Where the stats file is appended (per-process by default; set an explicit path to share one file deliberately). The default open refuses symlinks (`O_NOFOLLOW`) since it lives in a world-writable directory; an explicit path may be a symlink. |
 | `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` | `5.0` | Flush/snapshot window, in seconds. |
 | `ROS_TOPIC_STATS_MAX_BYTES` | `10485760` (10 MiB) | Size cap: at/over it the file rotates to `<path>.1` (single generation, worst-case disk = 2× cap per process). `0` disables rotation (pure append). Reopen-per-window is kept, so external logrotate also works. |
-| `ROS_TOPIC_STATS_JITTER` | `0` | When `1`, measure per-endpoint inter-arrival gaps and emit a `JITTER <topic> <side> max_dt_ms=…` line for each side that saw traffic. Also switched on implicitly by any `max_gap_ms` rule in the spec, so a declared rule is never silently unchecked. Costs one clock read per message (+24 ns measured, ~0.012% of a core at 4900 msg/s) — hence opt-in. |
+| `ROS_TOPIC_STATS_JITTER` | `0` | When `1`, measure per-endpoint inter-arrival gaps and emit a `JITTER <topic> <side> max_dt_ms=…` line for each side that saw traffic. Also switched on implicitly by any `max_gap_ms` rule in the spec, so a declared rule is never silently unchecked. Costs one clock read per message (+24 ns on x86-64, +51 ns on Jetson AGX Orin — ~0.01–0.03 % of a core at 4900 msg/s; [measured](test/orin/RESULTS.md)) — hence opt-in. |
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a **declared-but-silent** topic (one with no traffic in the window). By default (`0`) such topics are omitted, so a large graph isn't padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected; `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a **stalled** upstream stays visible) and omits never-active topics. |
 | `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting — never crash the host. |
 | `ROS_TOPIC_STATS_QUIET` | `0` | When `1`, suppress the `[ros2_pulse] active` stderr banner — for deployments that parse the wrapped process's stderr. Silences the **informational banner only**: error diagnostics (unreadable/malformed/zero-rule spec, unwritable output file) still print, because each of those disables something you explicitly configured, and silently disabled alerting is the 0.2.0 bug class this flag must not reintroduce. |
@@ -254,6 +254,13 @@ with lower aggregate rates see proportionally less.
 
 ¹ uprobe = per-event kernel trap (~µs), grows with message rate. ² stock `libtracetools.so` isn't
 always linked to lttng-ust; then the tracepoints are no-ops. See [`bench/RESULTS.md`](bench/RESULTS.md).
+
+**On a Jetson AGX Orin** (aarch64, L4T R36.4, production 77-node Humble/CycloneDDS stack):
+the probe loads into every process on the stock deployed binaries, opens 0 sockets, and the
+hot path measures **0.9 ns/op** fixed / **2.1 ns/op** alternating. The opt-in jitter clock read
+costs **+51 ns/msg ± 0.6** (vs +24 on x86) — the `CLOCK_MONOTONIC` vDSO works on this kernel,
+the difference is a slower clock, not a syscall fallback. Raw trials and the redacted
+production log: [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
 
 ## Limitations
 

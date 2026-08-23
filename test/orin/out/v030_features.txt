@@ -1,0 +1,70 @@
+# ts_ns=1787462216217381689 window_s=2.003
+TOPIC /chatter 0.499309
+JITTER /chatter pub max_dt_ms=993.906
+NODE /talker
+
+# ts_ns=1787462216225277437 window_s=2.007
+RECV /chatter inter=0.996292 intra=0.000000
+JITTER /chatter recv max_dt_ms=999.792
+NODE /listener
+
+# ts_ns=1787462219977519310 window_s=2.000
+TOPIC /chatter 1.000054
+JITTER /chatter pub max_dt_ms=999.962
+NODE /talker
+
+# ts_ns=1787462219985520878 window_s=2.000
+RECV /chatter inter=1.000001 intra=0.000000
+JITTER /chatter recv max_dt_ms=999.999
+NODE /listener
+
+# ts_ns=1787462221977510155 window_s=2.000
+TOPIC /chatter 1.000005
+JITTER /chatter pub max_dt_ms=999.996
+NODE /talker
+
+# ts_ns=1787462221985521098 window_s=2.000
+RECV /chatter inter=1.000000 intra=0.000000
+JITTER /chatter recv max_dt_ms=999.996
+NODE /listener
+
+# ts_ns=1787462223977519880 window_s=2.000
+TOPIC /chatter 0.999995
+JITTER /chatter pub max_dt_ms=999.953
+NODE /talker
+
+# ts_ns=1787462223985729631 window_s=2.000
+RECV /chatter inter=0.999896 intra=0.000000
+JITTER /chatter recv max_dt_ms=999.950
+NODE /listener
+
+# ts_ns=1787462225874942450 window_s=1.889
+RECV /chatter inter=0.529321 intra=0.000000
+JITTER /chatter recv max_dt_ms=1000.005
+NODE /listener
+
+# ts_ns=1787462225875296452 window_s=1.898
+TOPIC /chatter 1.053863
+JITTER /chatter pub max_dt_ms=999.994
+NODE /talker
+
+{"ts_ns":"1787462228003214171","window_s":2.000,"topics":[{"topic":"/chatter","recv_inter_hz":0.499958,"recv_intra_hz":0.000000,"recv_endpoint_seen":true}],"nodes":["/listener"],"warns":[]}
+{"ts_ns":"1787462228004611715","window_s":2.002,"topics":[{"topic":"/chatter","pub_inter_hz":0.499449,"pub_intra_hz":0.000000}],"nodes":["/talker"],"warns":[]}
+{"ts_ns":"1787462230003167226","window_s":2.000,"topics":[{"topic":"/chatter","recv_inter_hz":0.999999,"recv_intra_hz":0.000000,"recv_endpoint_seen":true}],"nodes":["/listener"],"warns":[]}
+{"ts_ns":"1787462230004570818","window_s":2.000,"topics":[{"topic":"/chatter","pub_inter_hz":1.000001,"pub_intra_hz":0.000000}],"nodes":["/talker"],"warns":[]}
+{"ts_ns":"1787462232003167511","window_s":2.000,"topics":[{"topic":"/chatter","recv_inter_hz":1.000000,"recv_intra_hz":0.000000,"recv_endpoint_seen":true}],"nodes":["/listener"],"warns":[]}
+{"ts_ns":"1787462232004573374","window_s":2.000,"topics":[{"topic":"/chatter","pub_inter_hz":0.999999,"pub_intra_hz":0.000000}],"nodes":["/talker"],"warns":[]}
+{"ts_ns":"1787462234003165076","window_s":2.000,"topics":[{"topic":"/chatter","recv_inter_hz":1.000001,"recv_intra_hz":0.000000,"recv_endpoint_seen":true}],"nodes":["/listener"],"warns":[]}
+{"ts_ns":"1787462234004573563","window_s":2.000,"topics":[{"topic":"/chatter","pub_inter_hz":1.000000,"pub_intra_hz":0.000000}],"nodes":["/talker"],"warns":[]}
+{"ts_ns":"1787462235895667459","window_s":1.891,"topics":[{"topic":"/chatter","pub_inter_hz":1.057589,"pub_intra_hz":0.000000}],"nodes":["/talker"],"warns":[]}
+{"ts_ns":"1787462235898008581","window_s":1.895,"topics":[{"topic":"/chatter","recv_inter_hz":1.055494,"recv_intra_hz":0.000000,"recv_endpoint_seen":true}],"nodes":["/listener"],"warns":[]}
+# ts_ns=1787462238082688795 window_s=2.000
+TOPIC /chatter 0.499958
+NODE /talker
+
+# ts_ns=1787462240082648153 window_s=2.000
+TOPIC /chatter 1.000000
+NODE /talker
+
+QUIET=1 banner lines: 0
+default banner lines: 1
