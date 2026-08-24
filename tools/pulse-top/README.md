@@ -15,7 +15,7 @@ graph-side tool can see.
 ## Run
 
 ```bash
-pip install ./tools/pulse-top          # or: pipx install ros2-pulse-top (once published)
+pip3 install ros2-pulse-top             # from PyPI; or from a checkout: pip install ./tools/pulse-top
 
 # probe side: emit jsonl
 export ROS_TOPIC_STATS_FORMAT=jsonl
