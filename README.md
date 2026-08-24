@@ -13,7 +13,7 @@ under a nanosecond per message; the whole probe costs about 2 % of workload CPU 
 
 ![pulse-top: live terminal dashboard over the probe's jsonl log, catching a /scan stall and a /cmd_vel rate sag as they happen](docs/assets/pulse-top-demo.gif)
 
-*`pulse-top --demo`: the probe's log, live. Sparklines per topic, intra-process rates, structured warnings with ages. [Install](tools/pulse-top/).*
+*`pulse-top --demo`: the probe's log, live. Sparklines per topic, intra-process rates, structured warnings with ages. Install: `pip3 install ros2-pulse-top` ([details](tools/pulse-top/)).*
 
 [![40-second launch video: the cost of ros2 topic hz and echo, the one-line probe, pulse-top catching a stall, the measured numbers](docs/assets/launch-video-poster.jpg)](https://github.com/TanayK07/ros2_pulse/releases/download/v0.4.0/ros2_pulse-launch.mp4)
 
@@ -94,6 +94,12 @@ The pure C++ core (`core/`) has no ROS dependency and is unit tested on its own;
 ```bash
 cd ~/ros2_ws/src && git clone https://github.com/TanayK07/ros2_pulse.git
 cd ~/ros2_ws && colcon build --packages-select ros2_pulse && source install/setup.bash
+```
+
+The [`pulse-top`](tools/pulse-top/) dashboard installs separately, no ROS environment needed:
+
+```bash
+pip3 install ros2-pulse-top
 ```
 
 Requires ROS 2 Humble, Jazzy or Kilted (all three are CI-tested on stock `ros:<distro>` images,
