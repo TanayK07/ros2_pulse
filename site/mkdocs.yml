@@ -9,6 +9,7 @@ site_dir: site
 
 theme:
   name: material
+  custom_dir: overrides
   palette:
     - scheme: slate
       primary: deep purple
