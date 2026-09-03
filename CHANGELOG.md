@@ -5,6 +5,16 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **apt install instructions.** The rosdistro entries for humble, jazzy and kilted merged on
+  2026-08-30 and the build farm has published `ros-<distro>-ros2-pulse` 0.4.1-2 to
+  `ros2-testing`; README now documents `apt install` plus how to enable the testing repository
+  before the next sync to the main ROS 2 repository.
+- **Social preview card (`docs/assets/social-preview.png`).** Used as the repository's social
+  preview and as `og:image` / `twitter:image` on the docs site, so links to either render a
+  real card instead of GitHub's default. The docs metadata lives in `site/overrides/main.html`,
+  wired up with `theme.custom_dir`.
+
 ## [0.4.1] - 2026-08-23
 
 Packaging fix for the apt release; no behaviour change.

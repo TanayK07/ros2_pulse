@@ -91,10 +91,31 @@ The pure C++ core (`core/`) has no ROS dependency and is unit tested on its own;
 
 ## Install
 
+### apt
+
+Binary packages are built for Humble, Jazzy and Kilted:
+
+```bash
+sudo apt update && sudo apt install ros-$ROS_DISTRO-ros2-pulse
+```
+
+They are in `ros2-testing` today and reach the main ROS 2 apt repository at the next sync. To
+install before that sync, add the testing repository first:
+
+```bash
+echo "deb http://packages.ros.org/ros2-testing/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+  | sudo tee /etc/apt/sources.list.d/ros2-testing.list
+sudo apt update
+```
+
+### From source
+
 ```bash
 cd ~/ros2_ws/src && git clone https://github.com/TanayK07/ros2_pulse.git
 cd ~/ros2_ws && colcon build --packages-select ros2_pulse && source install/setup.bash
 ```
+
+### pulse-top
 
 The [`pulse-top`](tools/pulse-top/) dashboard installs separately, no ROS environment needed:
 
