@@ -101,8 +101,9 @@ Binary packages are built for Humble, Jazzy and Kilted:
 sudo apt update && sudo apt install ros-$ROS_DISTRO-ros2-pulse
 ```
 
-They are in `ros2-testing` today and reach the main ROS 2 apt repository at the next sync. To
-install before that sync, add the testing repository first:
+Jazzy is in the main ROS 2 apt repository (synced 2026-09-11), so that line is all it needs.
+Humble and Kilted are in `ros2-testing` and reach the main repository at their next sync; to
+install them before that, add the testing repository first:
 
 ```bash
 echo "deb http://packages.ros.org/ros2-testing/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
