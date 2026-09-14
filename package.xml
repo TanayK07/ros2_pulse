@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ros2_pulse</name>
-  <version>0.4.1</version>
+  <version>0.5.0</version>
   <description>
     Near-zero-overhead ROS 2 probe for per-topic message frequency and active-node liveness,
     covering both inter-process and intra-process traffic. Works on stock ROS 2 binaries via an
@@ -16,9 +16,14 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- pulse_bridge only: the optional sidecar that republishes the probe's jsonl log on
+       /statistics. The probe .so itself links neither (interposed symbols resolve at run). -->
+  <depend>rclcpp</depend>
+  <depend>statistics_msgs</depend>
+
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>
-  <test_depend>rclcpp</test_depend>
+  <test_depend>rclpy</test_depend>
   <test_depend>std_msgs</test_depend>
   <test_depend>ros2run</test_depend>
   <!-- LTTng coexistence test (ROADMAP R3): drives a live LTTng session next to the probe and

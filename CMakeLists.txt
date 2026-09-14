@@ -101,6 +101,16 @@ else()
   # `ros2 run ros2_pulse pulse-check`, or invoked by path from watchdogs/CI (no ROS needed).
   install(TARGETS pulse-check RUNTIME DESTINATION lib/${PROJECT_NAME})
 
+  # pulse_bridge: optional sidecar that tails the probe's jsonl log and republishes each window
+  # on /statistics (statistics_msgs). Its own process, so the probe .so stays out of the DDS
+  # graph and free of rclcpp; this is the only target here that links it.
+  find_package(rclcpp REQUIRED)
+  find_package(statistics_msgs REQUIRED)
+  add_executable(pulse_bridge src/bridge/pulse_bridge.cpp)
+  target_link_libraries(pulse_bridge PRIVATE
+    ${PROJECT_NAME}_core rclcpp::rclcpp ${statistics_msgs_TARGETS})
+  install(TARGETS pulse_bridge RUNTIME DESTINATION lib/${PROJECT_NAME})
+
   if(BUILD_TESTING)
     find_package(ament_cmake_gtest REQUIRED)
     ament_add_gtest(test_topic_registry ${ROS2_PULSE_CORE_TEST_SOURCES})
@@ -161,6 +171,10 @@ else()
       # Output formats (ROADMAP R6): jsonl windows parse with an independent JSON parser,
       # unknown formats warn once + fall back to text, pulse-check gates jsonl logs.
       ament_add_pytest_test(integration_format test/integration/test_format.py
+        TIMEOUT 120)
+      # pulse_bridge: a hand-written jsonl log comes back on /statistics in the built-in
+      # topic-statistics shape, appended windows are followed, text logs are refused.
+      ament_add_pytest_test(integration_bridge test/integration/test_bridge.py
         TIMEOUT 120)
     endif()
   endif()

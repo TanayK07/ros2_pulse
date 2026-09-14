@@ -116,7 +116,7 @@ tool meets all five. Rundown:
 
 | Method | Intra-proc | Added DDS traffic | Privilege | Stock binaries | Ready-to-read Hz | Node liveness |
 |---|---|---|---|---|---|---|
-| ros2_pulse | ✅ | none | none | ✅ | ✅ (file) | ✅ (see issue #2) |
+| ros2_pulse | ✅ | none (probe); optional `pulse_bridge` sidecar publishes `/statistics` | none | ✅ | ✅ (file, `/statistics`) | ✅ (see issue #2) |
 | `ros2 topic hz` | ❌ | yes (subscriber) | none | ✅ | ✅ (stdout, 1 topic) | ❌ |
 | Built-in topic stats (Humble) | ❌ (#2911) | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
 | Built-in topic stats (rolling, #3130) | ✅ | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |

@@ -5,7 +5,26 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-09
+
+Adds an optional `/statistics` sidecar. The probe itself is unchanged.
+
 ### Added
+- **`pulse_bridge` (`ros2 run ros2_pulse pulse_bridge`):** tails the probe's jsonl log(s) and
+  republishes every window on `/statistics` as `statistics_msgs/MetricsMessage`, in the shape
+  rclcpp's built-in topic statistics use (`unit` `ms`, `AVERAGE` = message period,
+  `SAMPLE_COUNT`, `MAXIMUM` = largest gap when measured), so existing consumers of that topic
+  read pulse windows, intra-process included, with no integration work. Parameters: `files`,
+  `glob` (default `$TMPDIR/topic_freq.*.log`, re-expanded every poll), `topic`, `unit`
+  (`ms`|`Hz`), `poll_period_s`, `source_name`. Runs as its own process so the probe stays out of
+  the DDS graph and free of rclcpp; `package.xml` now declares `rclcpp` and `statistics_msgs`
+  for this executable only. Rate is measured at the subscription when the process has one, at
+  the publisher otherwise; inter/intra report the busier path, never the sum. Text-format logs
+  are refused with one warning per file. Asked for on ROS Discourse (topic 57637).
+- **core `metrics_mapper` and `line_follower`:** the window-to-sample mapping and the
+  incremental line reader behind the bridge, ROS-free so both run in the standalone gtest lane
+  (16 tests). `test/integration/test_bridge.py` covers the message shape, tail-follow of a
+  window appended after startup, the `Hz` unit and text-log refusal (3 tests).
 - **apt install instructions.** The rosdistro entries for humble, jazzy and kilted merged on
   2026-08-30 and the build farm has published `ros-<distro>-ros2-pulse` 0.4.1-2 to
   `ros2-testing`; README now documents `apt install` plus how to enable the testing repository
