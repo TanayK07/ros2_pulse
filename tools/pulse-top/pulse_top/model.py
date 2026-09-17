@@ -195,6 +195,12 @@ def _has_recv(tw: TopicWindow) -> bool:
     return tw.recv_endpoint_seen or any(getattr(tw, f) is not None for f in _RECV_FIELDS[:3])
 
 
+def _has_recv_rate(tw: TopicWindow) -> bool:
+    """A receive side WITH a rate in it. recv_endpoint_seen or a recv gap alone is a
+    side with no measurement, and absent is never a 100% deficit."""
+    return tw.recv_inter_hz is not None or tw.recv_intra_hz is not None
+
+
 @dataclass
 class _LagTrack:
     """recv_lag state for one (topic, source log) pair: the consecutive-window streak
@@ -243,7 +249,12 @@ class StatsState:
 
     def is_stale(self, topic: str) -> bool:
         st = self.topics[topic]
-        return self.age_s(topic) > self.STALE_FACTOR * st.window_s
+        return not self._fresh(max(0, self.last_ts_ns - st.last_ts_ns), st.window_s)
+
+    def _fresh(self, age_ns: float, window_s: float) -> bool:
+        """Within STALE_FACTOR periods of the given window. The one rule behind
+        stale rows, recv_lag pub/recv pairing and recv_lag expiry."""
+        return age_ns <= self.STALE_FACTOR * window_s * 1e9
 
     def warn_age_s(self, fired_ts_ns: int) -> float:
         return max(0, self.last_ts_ns - fired_ts_ns) / 1e9
@@ -304,27 +315,38 @@ class StatsState:
         """
         if self.lag_windows <= 0:
             return []
-        for tw in window.topics:
-            if not _has_recv(tw):
-                continue
-            track = self._lag.setdefault((tw.topic, source), _LagTrack())
-            track.ts_ns, track.window_s = window.ts_ns, window.window_s
-            recv = (tw.recv_inter_hz or 0.0) + (tw.recv_intra_hz or 0.0)
-            pub = self._paired_pub_hz(tw.topic, window)
-            self._step_lag(track, tw.topic, source, pub, recv, window)
+        if window.window_s > 0:  # the parser tolerates a malformed 0; the tick must survive it
+            for tw in window.topics:
+                if _has_recv_rate(tw):
+                    self._track_recv(tw, source, window)
         self._expire_lag()
         return [t.warn for t in self._lag.values() if t.warn is not None]
 
+    def _track_recv(self, tw: TopicWindow, source: str | None, window: Window) -> None:
+        key = (tw.topic, source)
+        track = self._lag.get(key)
+        if track is None:
+            track = self._lag[key] = _LagTrack()
+        track.ts_ns, track.window_s = window.ts_ns, window.window_s
+        recv = (tw.recv_inter_hz or 0.0) + (tw.recv_intra_hz or 0.0)
+        pub = self._paired_pub_hz(tw.topic, window)
+        self._step_lag(track, tw.topic, source, pub, recv, window)
+
     def _paired_pub_hz(self, topic: str, window: Window) -> float | None:
-        """P for a recv window, or None when the topic has no fresh pub observation.
-        Window boundaries are per process; two equal periods at any phase offset
-        overlap by at least period - |offset|, so within STALE_FACTOR of the
-        larger period the two means agree at steady state."""
+        """P for a recv window, or None when the topic has no pub observation that
+        can pair with it. Window boundaries are per process; two equal periods at
+        any phase offset overlap by at least period - |offset|, so within
+        STALE_FACTOR of the period the two means agree at steady state. Periods
+        more than STALE_FACTOR apart never pair: a publisher flushing every 5 s
+        against 1 s subscriber windows reads 100, 0, 0, 0, 0 on a healthy pipe."""
         st = self.topics[topic]
         if st.pub_ts_ns == 0:
             return None
-        horizon_ns = self.STALE_FACTOR * max(window.window_s, st.pub_window_s) * 1e9
-        if abs(window.ts_ns - st.pub_ts_ns) > horizon_ns:
+        long_s = max(window.window_s, st.pub_window_s)
+        short_s = min(window.window_s, st.pub_window_s)
+        if short_s <= 0 or long_s > self.STALE_FACTOR * short_s:
+            return None
+        if not self._fresh(abs(window.ts_ns - st.pub_ts_ns), long_s):
             return None
         return max(st.latest.pub_inter_hz or 0.0, st.latest.pub_intra_hz or 0.0)
 
@@ -336,15 +358,15 @@ class StatsState:
         deficit = (pub - recv) / pub
         # Two thresholds: the relative tolerance, and an absolute floor of two
         # messages per window, since one message can cross a window boundary
-        # from phase offset alone (a 20% swing at 1 Hz on 5 s windows).
-        lagging = deficit > self.lag_tol and pub - recv > 2.0 / window.window_s
-        if lagging:
-            track.streak += 1
-        elif deficit <= self.lag_tol / 2:
-            track.streak, track.warn = 0, None
-        else:
-            return  # hysteresis band: hold, neither flap nor re-fire
-        if not lagging or track.streak < self.lag_windows:
+        # from phase offset alone (a 20% swing at 1 Hz on 5 s windows). A
+        # shortfall inside the floor is healthy whatever the ratio says.
+        inside_floor = pub - recv <= 2.0 / window.window_s
+        if inside_floor or deficit <= self.lag_tol:
+            if inside_floor or deficit <= self.lag_tol / 2:
+                track.streak, track.warn = 0, None
+            return  # else hysteresis band: hold, neither flap nor re-fire
+        track.streak += 1
+        if track.streak < self.lag_windows:
             return
         if track.warn is None:  # transition to active: one recent_warns entry, not one per window
             track.warn = Warn("recv_lag", topic=topic, source=source)
@@ -353,14 +375,19 @@ class StatsState:
         w.pub_hz, w.recv_hz, w.deficit, w.windows = pub, recv, deficit, track.streak
         w.detail = _lag_detail(topic, pub, recv, deficit, track.streak)
 
+    # A tracker idle for this many of its own periods is dropped, or one per
+    # process that ever flushed would be kept and scanned on every window.
+    LAG_PRUNE_PERIODS = 10
+
     def _expire_lag(self) -> None:
         # A subscriber process that exits stops flushing while the publisher's
         # windows keep the row live; a warn with no recv observation behind it
         # for more than STALE_FACTOR periods is cleared, by time, like stale rows.
-        for track in self._lag.values():
-            if track.warn is None:
-                continue
-            if self.last_ts_ns - track.ts_ns > self.STALE_FACTOR * track.window_s * 1e9:
+        for key, track in list(self._lag.items()):
+            age_ns = self.last_ts_ns - track.ts_ns
+            if age_ns > self.LAG_PRUNE_PERIODS * track.window_s * 1e9:
+                del self._lag[key]
+            elif track.warn is not None and not self._fresh(age_ns, track.window_s):
                 track.streak, track.warn = 0, None
 
 

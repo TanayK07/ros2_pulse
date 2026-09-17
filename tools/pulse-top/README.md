@@ -97,14 +97,17 @@ Rules, applied to every window that carries a topic's receive side:
 - **The publish observation must be fresh:** within 1.5 window periods of the receive window,
   the same rule that marks a row stale. A publisher that stops publishing vanishes from its own
   windows while the subscriber keeps reporting an explicit `0.0`; that pair is a dead upstream,
-  not lag, and it resets the streak.
+  not lag, and it resets the streak. The two processes must also flush on comparable periods
+  (within a factor of 1.5); otherwise nothing is compared, below.
 - **A window is lagging** when the deficit exceeds `--lag-tol` (default `0.10`) and the
   shortfall exceeds two messages per window (one message can cross a window boundary from phase
-  offset alone; at 1 Hz on 5 s windows that is a 20% swing).
+  offset alone; at 1 Hz on 5 s windows that is a 20% swing). A shortfall inside that floor is
+  healthy whatever the ratio says.
 - **`--lag-windows` consecutive lagging windows fire the warn** (default `3`, which absorbs a
   subscriber's partial first window; `0` disables the detector). A deficit under half the
-  tolerance clears it; in between, the warn holds, so a topic hovering at the threshold
-  neither flaps nor re-fires. A warn whose subscriber stopped flushing clears after 1.5 periods.
+  tolerance, or a shortfall inside the two-message floor, clears it; a deficit between half the
+  tolerance and the tolerance holds, so a topic hovering at the threshold neither flaps nor
+  re-fires. A warn whose subscriber stopped flushing clears after 1.5 periods.
 - **Trackers are keyed by topic and source file,** so a healthy subscriber process and a lagging
   one do not reset each other. Receive above publish (two subscriptions in one process, two
   publishers) is never a warn.
@@ -120,10 +123,16 @@ deficit means messages were published and did not reach this process's subscript
 the same rate. It cannot name which messages, cannot distinguish a QoS/history drop (best-effort
 loss, `KeepLast` overflow at the reader) from an executor that is behind and overwriting its
 buffer, and cannot see a process that is not probed. Sequence-number loss detection needs the
-wire. Two further limits: with one shared log (`ROS_TOPIC_STATS_OUTPUT_FILE` set fleet-wide)
+wire. Four further limits. With one shared log (`ROS_TOPIC_STATS_OUTPUT_FILE` set fleet-wide)
 there is no per-process provenance, a healthy and a lagging subscriber alternate in one tracker
-and the warn does not fire; and on Humble an all-in-process intra topic has no publish-side rate,
+and the warn does not fire. On Humble an all-in-process intra topic has no publish-side rate,
 so nothing is compared (Iron+ pairs `pub_intra_hz` with `recv_intra_hz` in the same window).
+Both processes must run a comparable `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD`, within a factor of
+1.5: a publisher flushing every 5 s against a subscriber flushing every 1 s reads 100, 0, 0, 0,
+0 on a healthy bursty pipe, so periods further apart than that are never paired. And windows
+are ordered by time only within one poll: on attach to a large publisher log the follower
+replays it 1 MiB per poll, so the subscriber's windows can pair against old publish timestamps
+and the warn is delayed until the backlog drains.
 
 The probe never writes `recv_lag`. Should a log-side tool (`pulse-check`, ROADMAP R1.1) emit it,
 the reserved shapes are jsonl

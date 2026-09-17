@@ -304,12 +304,14 @@ class TestRecvLag:
             assert self.lag(s) == []
 
     def test_hysteresis_holds_between_half_and_full_tol(self):
+        # The hold band needs the two-message floor to pass, so at 100 Hz on
+        # 1 s windows: 7.5% is 7.5 messages short, well over the floor.
         s = StatsState()
-        self.drive(s, 12.0, 3)
+        self.drive(s, 60.0, 3, pub_hz=100.0)
         assert self.lag(s)
-        self.drive(s, 18.5, 1, t0=103.0)     # 7.5% deficit: inside the hold band
+        self.drive(s, 92.5, 1, pub_hz=100.0, t0=103.0)   # 7.5% deficit: inside the hold band
         assert self.lag(s)
-        self.drive(s, 19.5, 1, t0=104.0)     # 2.5%: recovered
+        self.drive(s, 97.5, 1, pub_hz=100.0, t0=104.0)   # 2.5%: recovered
         assert s.warns == []
         retained = [(ts, w) for ts, w in s.recent_warns if w.kind == "recv_lag"]
         assert len(retained) == 1
@@ -431,3 +433,64 @@ class TestRecvLag:
         s = StatsState()
         self.drive(s, 12.0, 13)
         assert [w.kind for _, w in s.recent_warns] == ["recv_lag"]
+
+    def test_shortfall_inside_the_floor_is_not_lagging(self):
+        # Review of #55: a window over the tolerance but inside the two-message
+        # floor fell into the hold band, so non-consecutive lagging windows
+        # accumulated into a streak and an active warn whose recv came back to
+        # just inside the floor never cleared. Inside the floor is healthy: reset.
+        s = StatsState()
+        for i, hz in enumerate((0.4, 0.8) * 3):
+            s.apply(self.pubw(100.0 + 5 * i, 1.0, window_s=5.0))
+            s.apply(self.recvw(100.2 + 5 * i, hz, window_s=5.0))
+            assert s.warns == []
+        s = StatsState()
+        for i in range(3):
+            s.apply(self.pubw(100.0 + 5 * i, 1.0, window_s=5.0))
+            s.apply(self.recvw(100.2 + 5 * i, 0.4, window_s=5.0))
+        assert self.lag(s)
+        s.apply(self.pubw(115.0, 1.0, window_s=5.0))
+        s.apply(self.recvw(115.2, 0.8, window_s=5.0))    # 20% short, one message: healthy
+        assert s.warns == []
+
+    def test_unequal_periods_do_not_pair(self):
+        # Review of #55: a publisher flushing every 5 s against a subscriber
+        # flushing every 1 s reads 100, 0, 0, 0, 0 on a healthy bursty pipe.
+        # Periods more than STALE_FACTOR apart never pair; within it they do.
+        s = StatsState()
+        s.apply(self.pubw(100.0, 20.0, window_s=5.0))
+        for i in range(6):
+            s.apply(self.recvw(100.5 + i, 12.0))
+        assert s.warns == []
+        s = StatsState()
+        for i in range(3):
+            s.apply(self.pubw(100.0 + 1.4 * i, 20.0, window_s=1.4))
+            s.apply(self.recvw(100.1 + i, 12.0))
+        assert self.lag(s)
+
+    def test_recv_side_without_a_rate_is_not_evaluated(self):
+        # Review of #55: recv_endpoint_seen alone is a receive side with no rate
+        # in it. Absent is "not measured", never a 100% deficit.
+        s = StatsState()
+        for i in range(6):
+            s.apply(self.pubw(100.0 + i, 20.0))
+            s.apply(parse_jsonl_line(
+                f'{{"ts_ns":"{int((100.1 + i) * 1e9)}","window_s":1.0,'
+                '"topics":[{"topic":"/scan","recv_endpoint_seen":true}],"nodes":[],"warns":[]}'))
+        assert s.warns == []
+
+    def test_zero_window_record_does_not_raise(self):
+        # parse_jsonl_line tolerates window_s 0; the app's tick must survive it.
+        s = StatsState()
+        s.apply(self.pubw(100.0, 20.0))
+        s.apply(self.recvw(100.1, 12.0, window_s=0.0))
+        assert s.warns == []
+
+    def test_idle_trackers_are_pruned(self):
+        # One tracker per (topic, source) would otherwise grow with every process
+        # that ever flushed and be scanned on every window.
+        s = StatsState()
+        self.drive(s, 12.0, 3, source="B")
+        assert ("/scan", "B") in s._lag
+        s.apply(self.pubw(120.0, 20.0))          # 18 s idle, well past ten periods
+        assert ("/scan", "B") not in s._lag
