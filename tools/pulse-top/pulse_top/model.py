@@ -15,6 +15,17 @@ from dataclasses import dataclass, field
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 
+# recv_lag (issue #50): relative deficit above which a recv window counts as
+# lagging, and the consecutive lagging windows before the warn fires. Three
+# absorbs one bad window with margin: a subscriber that starts after the
+# publisher has one partial first window, one that exits has one partial last.
+LAG_TOL_DEFAULT = 0.10
+LAG_WINDOWS_DEFAULT = 3
+# The clause every recv_lag detail ends with. The probe counts callbacks, not
+# wire samples, so it cannot name lost messages or tell a QoS drop from an
+# executor that is behind; the text must never claim more than that.
+LAG_LIMIT_TEXT = "callbacks see fewer than published; drop or backlog, probe cannot tell which"
+
 
 @dataclass
 class TopicWindow:
@@ -34,6 +45,13 @@ class Warn:
     topic: str | None = None
     node: str | None = None
     detail: str = ""
+    # recv_lag only (issue #50): derived by this consumer, never written by the
+    # probe. Defaulted so the three probe kinds construct unchanged.
+    pub_hz: float | None = None
+    recv_hz: float | None = None
+    deficit: float | None = None
+    windows: int = 0
+    source: str | None = None
 
 
 @dataclass
@@ -62,6 +80,12 @@ def _warn_detail(w: dict) -> str:
     if kind == "node_missing":
         return f"{w.get('node')} expected alive, not seen"
     return json.dumps(w)
+
+
+def _lag_detail(topic: str, pub_hz: float, recv_hz: float, deficit: float, windows: int) -> str:
+    unit = "window" if windows == 1 else "windows"
+    return (f"{topic} recv {recv_hz:.1f}Hz < pub {pub_hz:.1f}Hz "
+            f"(-{round(deficit * 100)}%, {windows} {unit}) · {LAG_LIMIT_TEXT}")
 
 
 def parse_jsonl_line(line: str) -> Window | None:
@@ -124,6 +148,12 @@ class TopicState:
     # whichever process's window arrives first in it, twenty subscribers
     # flushing /tf_static in the same period are one data point, not twenty.
     hist_ts_ns: int = 0
+    # Timestamp and period of the newest window that carried the PUB side. The
+    # merged record cannot say whether its pub fields are from the last window
+    # or from ten minutes ago, and a dead publisher's last rate paired with a
+    # live recv 0.0 is exactly the recv_lag false positive to gate out.
+    pub_ts_ns: int = 0
+    pub_window_s: float = 0.0
 
     @property
     def rate(self) -> float:
@@ -149,19 +179,43 @@ def _merge_sides(into: TopicWindow, tw: TopicWindow) -> None:
     """
     if into is tw:
         return
-    if any(getattr(tw, f) is not None for f in _PUB_FIELDS):
+    if _has_pub(tw):
         for f in _PUB_FIELDS:
             setattr(into, f, getattr(tw, f))
-    if tw.recv_endpoint_seen or any(getattr(tw, f) is not None for f in _RECV_FIELDS[:3]):
+    if _has_recv(tw):
         for f in _RECV_FIELDS:
             setattr(into, f, getattr(tw, f))
+
+
+def _has_pub(tw: TopicWindow) -> bool:
+    return any(getattr(tw, f) is not None for f in _PUB_FIELDS)
+
+
+def _has_recv(tw: TopicWindow) -> bool:
+    return tw.recv_endpoint_seen or any(getattr(tw, f) is not None for f in _RECV_FIELDS[:3])
+
+
+@dataclass
+class _LagTrack:
+    """recv_lag state for one (topic, source log) pair: the consecutive-window streak
+    and, while active, the live Warn. The same object sits in recent_warns so the
+    Warns tab treats it as live while its numbers update, and it freezes at its
+    last numbers when it clears."""
+    streak: int = 0
+    warn: Warn | None = None
+    # Newest recv window evaluated, and its period, for the time-based expiry.
+    ts_ns: int = 0
+    window_s: float = 0.0
 
 
 class StatsState:
     """Rolling view over the window stream: per-topic history, node liveness, warns."""
 
-    def __init__(self, history: int = 60):
+    def __init__(self, history: int = 60, lag_tol: float = LAG_TOL_DEFAULT,
+                 lag_windows: int = LAG_WINDOWS_DEFAULT):
         self._history = history
+        self.lag_tol = lag_tol
+        self.lag_windows = lag_windows
         self.topics: dict[str, TopicState] = {}
         self.nodes: dict[str, bool] = {}
         self.warns: list[Warn] = []
@@ -169,6 +223,10 @@ class StatsState:
         # transient (a single stall) stays readable with an age instead of
         # blinking for one window period (PR #32 review).
         self.recent_warns: deque = deque(maxlen=50)
+        # Keyed by (topic, source log path): one file per process by default, so
+        # a healthy subscriber process and a lagging one do not alternate and
+        # reset each other's streak. A shared file has no provenance (None).
+        self._lag: dict[tuple[str, str | None], _LagTrack] = {}
         self.windows_seen = 0
         self.window_s = 0.0
         # Newest timestamp seen across all processes' windows. Monotone: a late
@@ -190,21 +248,17 @@ class StatsState:
     def warn_age_s(self, fired_ts_ns: int) -> float:
         return max(0, self.last_ts_ns - fired_ts_ns) / 1e9
 
-    def apply(self, window: Window | None) -> None:
+    def apply(self, window: Window | None, source: str | None = None) -> None:
+        """Fold one window in. source is the log file it came from (None for a
+        shared file); it is the provenance the recv_lag trackers are keyed by."""
         if window is None:
             return
         self.windows_seen += 1
         self.window_s = window.window_s
         self.last_ts_ns = max(self.last_ts_ns, window.ts_ns)
-        self.warns = window.warns
         for w in window.warns:
             self.recent_warns.append((window.ts_ns, w))
 
-        # Presence and warns are questions about NAMES, answer them with name
-        # sets, never record equality (PR #32 review: dataclass float-equality
-        # here silently changes behavior on the first TopicWindow schema change).
-        warned = {w.topic: w.kind for w in window.warns if w.topic}
-        present = {t.topic for t in window.topics}
         for tw in window.topics:
             st = self.topics.get(tw.topic)
             if st is None:
@@ -212,27 +266,102 @@ class StatsState:
                 st.rate_history = deque(maxlen=self._history)
                 self.topics[tw.topic] = st
             _merge_sides(st.latest, tw)
-            st.warn_kind = warned.get(tw.topic)
+            if _has_pub(tw) and window.ts_ns >= st.pub_ts_ns:
+                st.pub_ts_ns = window.ts_ns
+                st.pub_window_s = window.window_s
             if window.ts_ns >= st.last_ts_ns:
                 st.last_ts_ns = window.ts_ns
                 st.window_s = window.window_s
             if window.ts_ns - st.hist_ts_ns >= 0.5 * window.window_s * 1e9:
                 st.hist_ts_ns = window.ts_ns
                 st.rate_history.append(st.rate)
-        # A topic absent from this window but warned about (e.g. gap on a stalled
-        # topic that emitted nothing) still carries its warn.
-        for topic, kind in warned.items():
-            if topic in self.topics and topic not in present:
-                self.topics[topic].warn_kind = kind
+
+        self.warns = window.warns + self._eval_recv_lag(window, source)
+        # Warns are a question about NAMES, answer it with a name map, never
+        # record equality (PR #32 review: dataclass float-equality here silently
+        # changes behavior on the first TopicWindow schema change). A topic absent
+        # from this window but warned about (a gap on a stalled topic that emitted
+        # nothing, a recv_lag held by its tracker) still carries its warn; the
+        # probe's own verdict outranks a derived one.
+        warned = {w.topic: w.kind for w in reversed(self.warns) if w.topic}
         for name, st in self.topics.items():
-            if name not in present and name not in warned:
-                st.warn_kind = None
+            st.warn_kind = warned.get(name)
 
         for n in window.nodes:
             self.nodes[n] = True
         for w in window.warns:
             if w.kind == "node_missing" and w.node:
                 self.nodes[w.node] = False
+
+    def _eval_recv_lag(self, window: Window, source: str | None) -> list[Warn]:
+        """Derive recv_lag warns (issue #50) from this window's recv sides.
+
+        P is the newest pub observation for the topic, R this window's recv rate,
+        each combined by the probe's own rule (pub: busier path, recv: sum). Only
+        a recv window advances or resets its tracker; windows from other processes
+        neither. A pub observation older than STALE_FACTOR periods (dead or idle
+        publisher, KNOWN_ISSUES #12: recv reads an explicit 0.0) cannot pair.
+        """
+        if self.lag_windows <= 0:
+            return []
+        for tw in window.topics:
+            if not _has_recv(tw):
+                continue
+            track = self._lag.setdefault((tw.topic, source), _LagTrack())
+            track.ts_ns, track.window_s = window.ts_ns, window.window_s
+            recv = (tw.recv_inter_hz or 0.0) + (tw.recv_intra_hz or 0.0)
+            pub = self._paired_pub_hz(tw.topic, window)
+            self._step_lag(track, tw.topic, source, pub, recv, window)
+        self._expire_lag()
+        return [t.warn for t in self._lag.values() if t.warn is not None]
+
+    def _paired_pub_hz(self, topic: str, window: Window) -> float | None:
+        """P for a recv window, or None when the topic has no fresh pub observation.
+        Window boundaries are per process; two equal periods at any phase offset
+        overlap by at least period - |offset|, so within STALE_FACTOR of the
+        larger period the two means agree at steady state."""
+        st = self.topics[topic]
+        if st.pub_ts_ns == 0:
+            return None
+        horizon_ns = self.STALE_FACTOR * max(window.window_s, st.pub_window_s) * 1e9
+        if abs(window.ts_ns - st.pub_ts_ns) > horizon_ns:
+            return None
+        return max(st.latest.pub_inter_hz or 0.0, st.latest.pub_intra_hz or 0.0)
+
+    def _step_lag(self, track: _LagTrack, topic: str, source: str | None,
+                  pub: float | None, recv: float, window: Window) -> None:
+        if pub is None or pub <= 0:
+            track.streak, track.warn = 0, None
+            return
+        deficit = (pub - recv) / pub
+        # Two thresholds: the relative tolerance, and an absolute floor of two
+        # messages per window, since one message can cross a window boundary
+        # from phase offset alone (a 20% swing at 1 Hz on 5 s windows).
+        lagging = deficit > self.lag_tol and pub - recv > 2.0 / window.window_s
+        if lagging:
+            track.streak += 1
+        elif deficit <= self.lag_tol / 2:
+            track.streak, track.warn = 0, None
+        else:
+            return  # hysteresis band: hold, neither flap nor re-fire
+        if not lagging or track.streak < self.lag_windows:
+            return
+        if track.warn is None:  # transition to active: one recent_warns entry, not one per window
+            track.warn = Warn("recv_lag", topic=topic, source=source)
+            self.recent_warns.append((window.ts_ns, track.warn))
+        w = track.warn
+        w.pub_hz, w.recv_hz, w.deficit, w.windows = pub, recv, deficit, track.streak
+        w.detail = _lag_detail(topic, pub, recv, deficit, track.streak)
+
+    def _expire_lag(self) -> None:
+        # A subscriber process that exits stops flushing while the publisher's
+        # windows keep the row live; a warn with no recv observation behind it
+        # for more than STALE_FACTOR periods is cleared, by time, like stale rows.
+        for track in self._lag.values():
+            if track.warn is None:
+                continue
+            if self.last_ts_ns - track.ts_ns > self.STALE_FACTOR * track.window_s * 1e9:
+                track.streak, track.warn = 0, None
 
 
 def sparkline(values, width: int = 16) -> str:

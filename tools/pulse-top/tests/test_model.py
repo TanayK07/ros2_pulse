@@ -236,3 +236,198 @@ class TestWarnRetention:
         assert "topic_gap" in kinds and "node_missing" in kinds
         ages = [s.warn_age_s(ts) for ts, _ in s.recent_warns]
         assert ages == pytest.approx([7.0, 7.0])
+
+
+class TestRecvLag:
+    # Issue #50: a publisher's process reports the pub rate, a subscriber's process
+    # reports the callback rate, and a sustained gap between them means messages
+    # left one process and did not reach the other's callback. The probe cannot
+    # see across processes (each judges only the endpoints it hosts), so the
+    # consumer derives this warn from the per-side merge it already performs.
+    # Rate-level inference only: the probe counts callbacks, not wire samples.
+    def pubw(self, ts_s, hz, window_s=1.0, topic="/scan"):
+        return parse_jsonl_line(
+            f'{{"ts_ns":"{int(ts_s * 1e9)}","window_s":{window_s},'
+            f'"topics":[{{"topic":"{topic}","pub_inter_hz":{hz},"pub_intra_hz":0.0}}],"nodes":[],"warns":[]}}'
+        )
+
+    def recvw(self, ts_s, hz, window_s=1.0, topic="/scan"):
+        return parse_jsonl_line(
+            f'{{"ts_ns":"{int(ts_s * 1e9)}","window_s":{window_s},'
+            f'"topics":[{{"topic":"{topic}","recv_inter_hz":{hz},"recv_intra_hz":0.0,'
+            f'"recv_endpoint_seen":true}}],"nodes":[],"warns":[]}}'
+        )
+
+    def lag(self, s):
+        return [w for w in s.warns if w.kind == "recv_lag"]
+
+    def drive(self, s, recv_hz, n, pub_hz=20.0, t0=100.0, source=None):
+        """n periods of a 1 s publisher window followed by a subscriber window."""
+        for i in range(n):
+            s.apply(self.pubw(t0 + i, pub_hz))
+            s.apply(self.recvw(t0 + i + 0.1, recv_hz), source=source)
+
+    def test_steady_equal_rates_no_warn(self):
+        s = StatsState()
+        self.drive(s, 20.0, 6)
+        assert s.warns == []
+
+    def test_fires_only_after_n_consecutive_windows(self):
+        s = StatsState()
+        self.drive(s, 12.0, 2)
+        assert self.lag(s) == []
+        self.drive(s, 12.0, 1, t0=102.0)
+        (w,) = self.lag(s)
+        assert w.topic == "/scan"
+        assert (w.pub_hz, w.recv_hz, w.windows) == (20.0, 12.0, 3)
+        assert w.deficit == pytest.approx(0.4)
+        assert s.topics["/scan"].warn_kind == "recv_lag"
+
+    def test_detail_states_the_limit(self):
+        # A person at 3 a.m. must not chase the wrong fault: the text says the
+        # probe cannot tell a drop from a backlog, never just "dropped".
+        s = StatsState()
+        self.drive(s, 12.0, 3)
+        d = self.lag(s)[0].detail
+        assert "< pub" in d and "-40%" in d and "cannot tell which" in d
+
+    def test_recv_above_pub_is_not_a_warn(self):
+        # Two subscriptions in one process sum into one counter: R > P, healthy.
+        s = StatsState()
+        self.drive(s, 40.0, 4)
+        assert s.warns == []
+
+    def test_one_bad_window_then_recovery_resets(self):
+        s = StatsState()
+        for i, hz in enumerate((12.0, 20.0, 12.0, 20.0, 12.0, 20.0)):
+            self.drive(s, hz, 1, t0=100.0 + i)
+            assert self.lag(s) == []
+
+    def test_hysteresis_holds_between_half_and_full_tol(self):
+        s = StatsState()
+        self.drive(s, 12.0, 3)
+        assert self.lag(s)
+        self.drive(s, 18.5, 1, t0=103.0)     # 7.5% deficit: inside the hold band
+        assert self.lag(s)
+        self.drive(s, 19.5, 1, t0=104.0)     # 2.5%: recovered
+        assert s.warns == []
+        retained = [(ts, w) for ts, w in s.recent_warns if w.kind == "recv_lag"]
+        assert len(retained) == 1
+        assert s.warn_age_s(retained[0][0]) > 0
+
+    def test_dead_publisher_is_not_recv_lag(self):
+        # KNOWN_ISSUES #12: a proven receive endpoint keeps emitting an explicit
+        # 0.0 when the upstream dies. The merged pub rate is then stale, and a
+        # stale pub observation must not pair with a live recv window.
+        s = StatsState()
+        s.apply(self.pubw(100.0, 20.0))
+        for t in (101.0, 102.0, 103.0, 104.0, 105.0):
+            s.apply(self.recvw(t, 0.0))
+        assert s.warns == []
+        assert not s.is_stale("/scan")       # the recv side is still flushing
+
+    def test_recv_only_or_pub_only_topic_never_evaluates(self):
+        s = StatsState()
+        for i in range(6):
+            s.apply(self.recvw(100.0 + i, 12.0))
+        assert s.warns == []
+        s = StatsState()
+        for i in range(6):
+            s.apply(self.pubw(100.0 + i, 20.0))
+        assert s.warns == []
+
+    def test_absolute_floor_protects_low_rate_topics(self):
+        # One message per window can cross a boundary from phase offset alone;
+        # at 1 Hz on 5 s windows that is a 20% swing the relative rule would flag.
+        s = StatsState()
+        for i in range(5):
+            s.apply(self.pubw(100.0 + 5 * i, 1.0, window_s=5.0))
+            s.apply(self.recvw(100.2 + 5 * i, 0.8, window_s=5.0))
+        assert s.warns == []
+        s = StatsState()
+        for i in range(3):
+            s.apply(self.pubw(100.0 + 5 * i, 1.0, window_s=5.0))
+            s.apply(self.recvw(100.2 + 5 * i, 0.4, window_s=5.0))   # 3 msgs short
+        assert self.lag(s)
+
+    def test_interleaved_foreign_windows_do_not_reset_streak(self):
+        s = StatsState()
+        for i in range(3):
+            s.apply(self.pubw(100.0 + i, 20.0))
+            s.apply(self.recvw(100.1 + i, 12.0))
+            s.apply(self.recvw(100.2 + i, 200.0, topic="/imu"))   # another process
+        assert self.lag(s)
+
+    def test_warn_persists_across_other_processes_windows(self):
+        s = StatsState()
+        self.drive(s, 12.0, 3)
+        for t in (102.2, 102.3, 102.4):
+            s.apply(self.recvw(t, 200.0, topic="/imu"))
+        assert self.lag(s)
+        assert s.topics["/scan"].warn_kind == "recv_lag"
+
+    def test_lagging_subscriber_that_vanishes_clears_by_time(self):
+        # The subscriber process exits: its file stops, the publisher's windows
+        # keep the row live. A warn with no recv observation behind it for more
+        # than 1.5 periods is cleared, by time, the same way rows go stale.
+        s = StatsState()
+        self.drive(s, 12.0, 3)
+        s.apply(self.pubw(103.0, 20.0))
+        assert self.lag(s)                   # 0.9 s since the last recv window
+        s.apply(self.pubw(104.0, 20.0))
+        assert s.warns == []                 # 1.9 s > 1.5 s
+        assert [w.kind for _, w in s.recent_warns] == ["recv_lag"]
+
+    def test_per_source_streaks(self):
+        # Provenance is the log file. A healthy subscriber process and a lagging
+        # one must not alternate and reset each other's streak.
+        s = StatsState()
+        for i in range(6):
+            s.apply(self.pubw(100.0 + i, 20.0))
+            s.apply(self.recvw(100.1 + i, 20.0), source="A")
+            s.apply(self.recvw(100.2 + i, 12.0), source="B")
+        (w,) = self.lag(s)
+        assert w.source == "B"
+        # One shared log (ROS_TOPIC_STATS_OUTPUT_FILE fleet-wide) has no provenance:
+        # the two processes alternate in one tracker. Documented false negative.
+        s = StatsState()
+        for i in range(6):
+            s.apply(self.pubw(100.0 + i, 20.0))
+            s.apply(self.recvw(100.1 + i, 20.0))
+            s.apply(self.recvw(100.2 + i, 12.0))
+        assert s.warns == []
+
+    def test_lag_windows_zero_disables(self):
+        s = StatsState(lag_windows=0)
+        self.drive(s, 12.0, 6)
+        assert s.warns == []
+
+    def test_unaligned_pub_window_within_one_period_pairs(self):
+        s = StatsState()
+        for i in range(3):
+            s.apply(self.pubw(100.0 + i, 20.0))
+            s.apply(self.recvw(100.7 + i, 12.0))
+        assert self.lag(s)
+        s = StatsState()
+        s.apply(self.pubw(100.0, 20.0))      # publisher never flushes again
+        for t in (100.7, 101.7, 102.7):
+            s.apply(self.recvw(t, 12.0))
+        assert s.warns == []
+
+    def test_intra_same_window_both_sides(self):
+        # Iron+: one process publishes and receives intra-process, both sides in
+        # one window. P is the busier pub path (max), same rule as the probe.
+        s = StatsState()
+        for i in range(3):
+            s.apply(parse_jsonl_line(
+                f'{{"ts_ns":"{int((100.0 + i) * 1e9)}","window_s":1.0,'
+                '"topics":[{"topic":"/scan","pub_inter_hz":0.0,"pub_intra_hz":30.0,'
+                '"recv_inter_hz":0.0,"recv_intra_hz":18.0,"recv_endpoint_seen":true}],'
+                '"nodes":[],"warns":[]}'))
+        (w,) = self.lag(s)
+        assert w.pub_hz == 30.0
+
+    def test_recent_warns_not_flooded(self):
+        s = StatsState()
+        self.drive(s, 12.0, 13)
+        assert [w.kind for _, w in s.recent_warns] == ["recv_lag"]
