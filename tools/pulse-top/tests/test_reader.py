@@ -106,6 +106,20 @@ class TestMultiFollower:
         assert mf.poll() == ["two"]
         assert len(mf.files) == 2
 
+    def test_poll_tagged_returns_path_and_line(self, tmp_path):
+        # Issue #50: recv_lag trackers are keyed by source file, the only
+        # provenance the probe leaves (jsonl records carry no pid). poll() keeps
+        # its flat shape for callers that do not care.
+        from pulse_top.reader import MultiFollower
+        a = tmp_path / "topic_freq.1.log"
+        b = tmp_path / "topic_freq.2.log"
+        a.write_text("one\n")
+        b.write_text("two\n")
+        mf = MultiFollower(str(tmp_path / "topic_freq.*.log"))
+        assert mf.poll_tagged() == [(str(a), "one"), (str(b), "two")]
+        a.write_text("one\nthree\n")
+        assert mf.poll() == ["three"]
+
     def test_single_plain_path_still_works(self, tmp_path):
         from pulse_top.reader import MultiFollower
         f = tmp_path / "shared.log"

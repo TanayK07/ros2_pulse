@@ -5,6 +5,22 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **pulse-top 0.3.0: `recv_lag` warn (issue #50).** When a publisher's process and a
+  subscriber's process are both probed, pulse-top pairs the topic's publish rate (busier path)
+  with its callback rate (inter + intra) and warns once the callbacks sit more than `--lag-tol`
+  (default 10%) and more than two messages per window under the publish rate for
+  `--lag-windows` (default 3) consecutive windows; it clears under half the tolerance and holds
+  in between. A publish observation older than 1.5 periods cannot pair, so a dead or idle
+  publisher (recv reads an explicit 0.0, KNOWN_ISSUES #12) is not lag; trackers are keyed by
+  topic and source log, so a healthy subscriber process does not mask a lagging one, and a warn
+  whose subscriber stopped flushing clears by time. Amber in the table (RECV cell), strip and
+  Warns tab, with deficit, windows and source file in the sidebar; the text says the probe
+  counts callbacks, not wire samples, so it cannot tell a drop from a backlog. Derived by the
+  consumer: the probe, its output format, the spec grammar and `pulse-check` are unchanged.
+  Test node mode `slow_listener <ms>` and `test/integration/test_recv_lag.py` prove the two
+  logs carry the gap and the model derives the warn from them; 21 new pulse-top tests.
+
 ## [0.5.0] - 2026-09-09
 
 Adds an optional `/statistics` sidecar. The probe itself is unchanged.

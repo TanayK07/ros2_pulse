@@ -20,7 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane, Tree
 
-from .model import StatsState, parse_jsonl_line, sparkline
+from .model import LAG_TOL_DEFAULT, LAG_WINDOWS_DEFAULT, StatsState, parse_jsonl_line, sparkline
 from .reader import MultiFollower
 
 ACCENT = "#b48cf2"
@@ -48,6 +48,14 @@ def fmt(v: float | None, none: str = "—") -> str:
     return none if v is None else f"{v:.1f}"
 
 
+def warn_color(kind: str | None) -> str | None:
+    """Colour for a warn kind: red for a measured stall or a missing node, amber for
+    a rate judgement or an inference (topic_rate, recv_lag), None without a warn."""
+    if kind is None:
+        return None
+    return BAD if kind in ("topic_gap", "node_missing") else WARN
+
+
 class PulseTopApp(App):
     TITLE = "pulse-top"
     CSS_PATH = "app.tcss"
@@ -57,12 +65,13 @@ class PulseTopApp(App):
         Binding("w", "toggle_warns_only", "warns only"),
     ]
 
-    def __init__(self, path: str, poll_s: float = 0.5):
+    def __init__(self, path: str, poll_s: float = 0.5, lag_tol: float = LAG_TOL_DEFAULT,
+                 lag_windows: int = LAG_WINDOWS_DEFAULT):
         super().__init__()
         self._path = path
         self._poll_s = poll_s
         self._follower = MultiFollower(path)
-        self._state = StatsState()
+        self._state = StatsState(lag_tol=lag_tol, lag_windows=lag_windows)
         # Last-rendered (plain, style) per cell. DataTable.update_cell invalidates
         # the row render caches and schedules a refresh even when the value is
         # identical (Textual 8.2), so only cells whose text or style actually
@@ -98,13 +107,18 @@ class PulseTopApp(App):
         self.set_interval(self._poll_s, self._tick)
 
     def _tick(self) -> None:
-        changed = False
-        for line in self._follower.poll():
+        # A poll reads file by file, so a backlog (attach, post-mortem) would
+        # hand the model the publisher's whole file before the subscriber's
+        # first window. Order the batch by ts_ns: the recv_lag pairing is a
+        # question of time, and the source file is the tracker's provenance.
+        batch = []
+        for path, line in self._follower.poll_tagged():
             w = parse_jsonl_line(line)
             if w is not None:
-                self._state.apply(w)
-                changed = True
-        if changed:
+                batch.append((w.ts_ns, path, w))
+        for _, path, w in sorted(batch, key=lambda b: b[0]):
+            self._state.apply(w, source=path)
+        if batch:
             self._refresh_all()
 
     # ---- rendering ----
@@ -156,13 +170,15 @@ class PulseTopApp(App):
                 stale, stale.copy(), stale.copy(), stale.copy(),
                 Text(sparkline(st.rate_history), style=DIM),
             )
-        color = BAD if st.warn_kind in ("topic_gap", "node_missing") else WARN if st.warn_kind else None
+        color = warn_color(st.warn_kind)
         gap = t.pub_max_dt_ms if t.pub_max_dt_ms is not None else t.recv_max_dt_ms
+        # recv_lag: the eye should land on the column that is low.
+        recv_style = f"bold {WARN}" if st.warn_kind == "recv_lag" else ""
         return (
             Text(name, style=f"bold {color}" if color else ""),
             Text(fmt(t.pub_inter_hz), justify="right"),
             Text(fmt(t.pub_intra_hz), justify="right", style=GOOD if t.pub_intra_hz else DIM),
-            Text(fmt(t.recv_inter_hz), justify="right"),
+            Text(fmt(t.recv_inter_hz), justify="right", style=recv_style),
             Text(fmt(gap), justify="right", style=f"bold {BAD}" if st.warn_kind == "topic_gap" else DIM),
             Text(sparkline(st.rate_history), style=color or DIM),
         )
@@ -199,8 +215,7 @@ class PulseTopApp(App):
         out = Text()
         out.append("WARNS · structured from jsonl", style=f"{DIM} bold")
         for w in self._state.warns:
-            c = WARN if w.kind == "topic_rate" else BAD
-            out.append("\n").append(w.kind, style=f"bold {c}").append(" ").append(w.detail)
+            out.append("\n").append(w.kind, style=f"bold {warn_color(w.kind)}").append(" ").append(w.detail)
         if not self._state.warns:
             out.append("\n").append("none", style=DIM)
         self.query_one("#warns-strip", Static).update(out)
@@ -214,6 +229,11 @@ class PulseTopApp(App):
         t = st.latest
         spark = sparkline(st.rate_history, width=24)
         color = BAD if st.warn_kind else ACCENT
+        # Every lagging subscriber process of this topic, worst first: the row
+        # shows the worst and how many there are, the source row names the worst.
+        lags = sorted((w for w in self._state.warns if w.kind == "recv_lag" and w.topic == self._selected),
+                      key=lambda w: -(w.deficit or 0.0))
+        lag = lags[0] if lags else None
         rows = [
             ("pub inter ", f"{fmt(t.pub_inter_hz)} Hz"),
             ("pub intra ", f"{fmt(t.pub_intra_hz)} Hz"),
@@ -222,7 +242,10 @@ class PulseTopApp(App):
             ("pub gap   ", f"{fmt(t.pub_max_dt_ms)} ms"),
             ("recv gap  ", f"{fmt(t.recv_max_dt_ms)} ms"),
             ("endpoint  ", "seen" if t.recv_endpoint_seen else "—"),
+            ("recv lag  ", self._lag_cell(lags)),
         ]
+        if lag and lag.source:  # which subscriber process: the log file is the only provenance
+            rows.append(("lag source", os.path.basename(lag.source)))
         out = Text()
         out.append("SELECTED", style=f"{DIM} bold").append("\n")
         out.append(self._selected or "", style=f"bold {color}")
@@ -231,9 +254,16 @@ class PulseTopApp(App):
             out.append("\n").append(label, style=DIM).append(" ").append(value)
         sb.update(out)
 
+    @staticmethod
+    def _lag_cell(lags: list) -> str:
+        if not lags:
+            return "—"
+        more = f" ({len(lags)} sources)" if len(lags) > 1 else ""
+        return f"-{round(lags[0].deficit * 100)}% over {lags[0].windows}w{more}"
+
     def _leaf_label(self, part: str, st) -> Text:
         # Text.assemble, not markup: namespace parts are log-derived (PR #32 review).
-        color = BAD if st.warn_kind == "topic_gap" else WARN if st.warn_kind else DIM
+        color = warn_color(st.warn_kind) or DIM
         return Text.assemble(part, " ", (f"{st.rate:.1f}", color))
 
     def _refresh_tree(self) -> None:
@@ -290,9 +320,11 @@ class PulseTopApp(App):
             if i:
                 out.append("\n")
             age = self._state.warn_age_s(fired)
-            if w in self._state.warns:
-                c = WARN if w.kind == "topic_rate" else BAD
-                out.append(f"{w.kind:<14}", style=f"bold {c}").append(" ").append(w.detail)
+            # Identity, not equality: a cleared recv_lag episode keeps its last
+            # numbers, and a later episode with the same numbers is a different
+            # object that must not render its predecessor as live.
+            if any(w is live for live in self._state.warns):
+                out.append(f"{w.kind:<14}", style=f"bold {warn_color(w.kind)}").append(" ").append(w.detail)
             else:
                 out.append(f"{w.kind:<14} {w.detail} · {fmt_age(age)} ago", style=DIM)
         self.query_one("#warns-list", Static).update(
@@ -339,6 +371,16 @@ def main() -> int:
     )
     ap.add_argument("--demo", action="store_true", help="run against a self-generated demo log")
     ap.add_argument("--poll", type=float, default=0.5, help="file poll interval seconds (default 0.5)")
+    ap.add_argument(
+        "--lag-tol", type=float, default=LAG_TOL_DEFAULT, metavar="FRACTION",
+        help=f"recv_lag: relative deficit of callbacks under the publish rate that counts a window "
+             f"as lagging (default {LAG_TOL_DEFAULT})",
+    )
+    ap.add_argument(
+        "--lag-windows", type=int, default=LAG_WINDOWS_DEFAULT, metavar="N",
+        help=f"recv_lag: consecutive lagging windows before the warn fires, 0 disables "
+             f"(default {LAG_WINDOWS_DEFAULT})",
+    )
     args = ap.parse_args()
 
     if args.demo:
@@ -355,7 +397,7 @@ def main() -> int:
             )
             return 2
 
-    PulseTopApp(path, poll_s=args.poll).run()
+    PulseTopApp(path, poll_s=args.poll, lag_tol=args.lag_tol, lag_windows=args.lag_windows).run()
     return 0
 
 
