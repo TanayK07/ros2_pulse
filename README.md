@@ -15,9 +15,9 @@ under a nanosecond per message; the whole probe costs about 2 % of workload CPU 
 
 *`pulse-top --demo`: the probe's log, live. Sparklines per topic, intra-process rates, structured warnings with ages. Install: `pip3 install ros2-pulse-top` ([details](tools/pulse-top/)).*
 
-[![40-second launch video: the cost of ros2 topic hz and echo, the one-line probe, pulse-top catching a stall, the measured numbers](docs/assets/launch-video-poster.jpg)](https://github.com/TanayK07/ros2_pulse/releases/download/v0.4.0/ros2_pulse-launch.mp4)
+[![40-second launch video: the cost of ros2 topic hz and echo, the one-line probe, pulse-top catching a stall, the measured numbers](docs/assets/launch-video-poster.jpg)](https://www.youtube.com/watch?v=kxVW-43J12M)
 
-*Forty seconds on what watching a topic costs and what the probe does instead. [Watch the video](https://github.com/TanayK07/ros2_pulse/releases/download/v0.4.0/ros2_pulse-launch.mp4) (MP4, 10 MB) or read the [docs](https://tanayk07.github.io/ros2_pulse/).*
+*Forty seconds on what watching a topic costs and what the probe does instead. [Watch the video](https://www.youtube.com/watch?v=kxVW-43J12M) (40 s, YouTube) or read the [docs](https://tanayk07.github.io/ros2_pulse/).*
 
 ---
 
