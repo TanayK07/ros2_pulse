@@ -12,6 +12,10 @@ the verdict from a log with no ROS installed and exits 0/1/2. See README, "Expec
 alerting".
 
 Open: a `for: N` debounce so a rule fires only after N consecutive bad windows (R1.1).
+pulse-top's `recv_lag` (issue #50) is the consumer-side form of that debounce: N consecutive
+windows with callbacks under the publish rate, evaluated per subscriber log. A `pulse-check`
+`recv_lag` needs the window history and per-log evaluation R1.1 would introduce and should ride
+on it, reusing the semantics and the reserved jsonl/text shapes in `tools/pulse-top/README.md`.
 
 ## R2. Timer liveness (rescoped, not started)
 

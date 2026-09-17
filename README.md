@@ -185,6 +185,8 @@ Schema rules, pinned by golden-byte unit tests:
 - `warns` are structured (`kind` is `topic_rate`, `topic_gap` or `node_missing`, with the
   numbers as JSON numbers) rather than preformatted strings. An unbounded `max_hz` omits the
   key, since JSON has no `Infinity`. The text `WARN` line is a rendering of the same data.
+  `pulse-top`'s `recv_lag` (callbacks under the publish rate, compared across two processes'
+  windows) is derived by that consumer and never written by the probe.
 - Topic and node names are escaped per RFC 8259, so a hostile name cannot break the
   one-object-per-line framing.
 
