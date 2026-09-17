@@ -18,6 +18,7 @@ CMakeFiles/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+dist/
 
 # editors / OS
 .vscode/

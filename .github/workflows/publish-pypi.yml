@@ -19,7 +19,9 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install build twine
-      - run: python -m build
+      # A clean dist/: a stale wheel left from an earlier release would make
+      # `pip install dist/*.whl` below resolve two versions of the same package.
+      - run: rm -rf dist && python -m build
       - run: twine check dist/*
       - name: version must match the tag
         if: startsWith(github.ref, 'refs/tags/pulse-top-v')
