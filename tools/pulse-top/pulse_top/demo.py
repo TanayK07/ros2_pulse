@@ -2,7 +2,9 @@
 
 Writes real probe-schema jsonl (same shapes test_model.py pins) to a temp file on a
 background thread. The story loops: steady traffic, a /scan stall that fires a
-topic_gap warn, /cmd_vel drifting under its min rate, /localization going missing.
+topic_gap warn, /cmd_vel drifting under its min rate, /camera/image_raw callbacks
+falling under its publish rate (recv_lag, derived by pulse-top, not the probe),
+/localization going missing.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ def _window(i: int) -> dict:
     stall = i % 24 in (10, 11)          # /scan stalls two windows per loop
     cmd_low = 8 <= i % 24 <= 14         # /cmd_vel sags mid-loop
     loc_missing = i % 24 >= 18          # /localization dies late in the loop
+    cam_lag = 15 <= i % 24 <= 20        # /camera/image_raw callbacks fall under the pub rate
     j = lambda base, amp=0.15: round(base + random.uniform(-amp, amp), 6)
 
     topics = [
@@ -30,8 +33,10 @@ def _window(i: int) -> dict:
          "recv_inter_hz": j(10.0), "recv_intra_hz": j(10.0), "recv_endpoint_seen": True},
         {"topic": "/imu", "pub_inter_hz": j(200.0, 0.5), "pub_intra_hz": 0.0,
          "recv_inter_hz": j(200.0, 0.5), "recv_intra_hz": 0.0, "recv_endpoint_seen": True},
+        # No probe warn for the sag: the model derives recv_lag from the rates alone (#50).
         {"topic": "/camera/image_raw", "pub_inter_hz": j(29.9), "pub_intra_hz": j(29.9),
-         "recv_inter_hz": j(29.9), "recv_intra_hz": j(29.9), "recv_endpoint_seen": True},
+         "recv_inter_hz": j(18.0) if cam_lag else j(29.9), "recv_intra_hz": 0.0,
+         "recv_endpoint_seen": True},
         {"topic": "/tf", "pub_inter_hz": j(99.8, 0.4), "pub_intra_hz": 0.0,
          "recv_inter_hz": j(99.7, 0.4), "recv_intra_hz": 0.0, "recv_endpoint_seen": True},
         {"topic": "/cmd_vel",

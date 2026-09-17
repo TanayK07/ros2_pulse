@@ -83,13 +83,18 @@ class MultiFollower:
         return sorted(self._followers)
 
     def poll(self) -> list[str]:
+        return [line for _, line in self.poll_tagged()]
+
+    def poll_tagged(self) -> list[tuple[str, str]]:
+        """New lines as (path, line): the file is the only provenance a record has
+        (jsonl carries no pid), and the recv_lag trackers are keyed by it."""
         if glob.has_magic(self.pattern):
             for path in glob.glob(self.pattern):
                 if path not in self._followers:
                     self._followers[path] = FileFollower(path)
         elif not self._followers:
             self._followers[self.pattern] = FileFollower(self.pattern)
-        out: list[str] = []
+        out: list[tuple[str, str]] = []
         for path in self.files:
-            out.extend(self._followers[path].poll())
+            out.extend((path, line) for line in self._followers[path].poll())
         return out
