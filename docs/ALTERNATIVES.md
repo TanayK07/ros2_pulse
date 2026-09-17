@@ -77,6 +77,27 @@ tool meets all five. Rundown:
 - **Relationship.** ros2_pulse is the zero-touch equivalent for a whole process tree; the
   expected-rate spec (ROADMAP R1) will close the "against bounds" half without per-node code.
 
+### greenwave_monitor (NVIDIA): the packaged subscriber
+- **What.** [greenwave_monitor](https://github.com/NVIDIA-ISAAC-ROS/greenwave_monitor) is a C++
+  node that subscribes to a configured list of topics and reports rate and latency, publishes them
+  as `/diagnostics`, and ships an ncurses dashboard (plus an optional Textual one). A header-only
+  library lets a node compute and publish the same diagnostics itself. On apt for Humble through
+  Rolling, Apache-2.0, no Isaac dependency.
+- **Gap.** It is a subscriber, so it carries the same two costs as `ros2 topic hz`: a real DDS
+  reader per watched topic, and no view of intra-process delivery. Pointing it at an
+  intra-process topic makes the publisher serialize for it, which is the observer effect measured
+  in [bench/RESULTS.md](../bench/RESULTS.md#observer-effect-what-watching-a-topic-with-the-stock-cli-costs-2026-08-23).
+  The inline library avoids that, at the price of a source change in every node, which is the
+  `diagnostic_updater` trade above. Topics must be listed up front; nothing is discovered.
+- **What it has that ros2_pulse does not.** End-to-end latency from a header stamp, a
+  `/diagnostics` integration that fleet tooling already consumes, and a maintained NVIDIA
+  packaging story on Isaac platforms.
+- **Relationship.** Closest packaged competitor for the "is every topic flowing" question on
+  inter-process topics. ros2_pulse wins where the traffic is intra-process, where adding a reader
+  is not acceptable, or where nobody wants to enumerate topics; greenwave wins where latency and
+  `/diagnostics` matter more than the observer cost. `pulse_bridge` narrows the integration gap by
+  publishing pulse windows on `/statistics`.
+
 ### rclpy (Python nodes): a real limitation
 - Publish side **works** for Python nodes: `rcl_publish` fires in the C `rcl` layer under rclpy.
 - Receive side is **invisible**: `callback_start` is emitted by rclcpp only, and rclpy was never
@@ -118,6 +139,7 @@ tool meets all five. Rundown:
 |---|---|---|---|---|---|---|
 | ros2_pulse | ✅ | none (probe); optional `pulse_bridge` sidecar publishes `/statistics` | none | ✅ | ✅ (file, `/statistics`) | ✅ (see issue #2) |
 | `ros2 topic hz` | ❌ | yes (subscriber) | none | ✅ | ✅ (stdout, 1 topic) | ❌ |
+| greenwave_monitor | ❌ | yes (subscriber) | none | ✅ | ✅ (/diagnostics, dashboard) | ❌ |
 | Built-in topic stats (Humble) | ❌ (#2911) | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
 | Built-in topic stats (rolling, #3130) | ✅ | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
 | ros2_tracing / LTTng | ✅ | none (CTF disk) | sessiond | ❌ Humble / ✅ Jazzy+ | ❌ (offline) | ✅ (offline) |

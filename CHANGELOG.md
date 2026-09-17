@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- docs/ALTERNATIVES.md compares against NVIDIA's `greenwave_monitor`, the packaged subscriber-based
+  monitor a Discourse reader said they were switching from; section plus a positioning-table row.
+
 ### Added
 - **pulse-top 0.3.0: `recv_lag` warn (issue #50).** When a publisher's process and a
   subscriber's process are both probed, pulse-top pairs the topic's publish rate (busier path)
