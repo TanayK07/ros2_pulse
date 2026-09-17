@@ -131,11 +131,16 @@ def run_single(mode, out_path, run_s=6.0, period="1.0", extra_env=None, mode_arg
         return f.read()
 
 
-def run_pair(out_talker, out_listener, run_s=6.0, period="1.0", extra_env=None):
-    """Run talker + listener as SEPARATE processes (true inter-process). Return (talker, listener)."""
+def run_pair(out_talker, out_listener, run_s=6.0, period="1.0", extra_env=None,
+             listener_mode="listener", listener_args=()):
+    """Run talker + listener as SEPARATE processes (true inter-process). Return (talker, listener).
+
+    listener_mode/listener_args pick the subscriber (slow_listener takes <callback_sleep_ms>).
+    """
     so, node = probe_paths()
     pt = subprocess.Popen([node, "talker"], env=make_env(so, out_talker, period, extra_env))
-    pl = subprocess.Popen([node, "listener"], env=make_env(so, out_listener, period, extra_env))
+    pl = subprocess.Popen([node, listener_mode, *(str(a) for a in listener_args)],
+                          env=make_env(so, out_listener, period, extra_env))
     try:
         time.sleep(run_s)
     finally:

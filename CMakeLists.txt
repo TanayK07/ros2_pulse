@@ -142,6 +142,10 @@ else()
       # Stall visibility: dead upstream must read RECV 0.0, not vanish (KNOWN_ISSUES #12).
       ament_add_pytest_test(integration_stall test/integration/test_stall.py
         TIMEOUT 120)
+      # recv_lag (issue #50): a slow subscriber's log reads well under the talker's publish rate
+      # and pulse-top's model derives the warn from the two files; a healthy pair never warns.
+      ament_add_pytest_test(integration_recv_lag test/integration/test_recv_lag.py
+        TIMEOUT 90)
       # Output rotation: ROS_TOPIC_STATS_MAX_BYTES bounds the file (KNOWN_ISSUES #11).
       ament_add_pytest_test(integration_rotation test/integration/test_rotation.py
         TIMEOUT 120)
