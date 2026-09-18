@@ -19,6 +19,8 @@ under a nanosecond per message; the whole probe costs about 2 % of workload CPU 
 
 *Forty seconds on what watching a topic costs and what the probe does instead. [Watch the video](https://www.youtube.com/watch?v=kxVW-43J12M) (40 s, YouTube) or read the [docs](https://tanayk07.github.io/ros2_pulse/).*
 
+*The long version, for systems programmers: [Watching a ROS 2 topic changes it](docs/blog/2026-09-18-watching-a-ros2-topic-changes-it.md), the observer-effect measurement and the symbol-interposition trick that avoids it.*
+
 ---
 
 ## Why

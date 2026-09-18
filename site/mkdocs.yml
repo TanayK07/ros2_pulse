@@ -37,6 +37,8 @@ nav:
       - Jetson AGX Orin: orin.md
       - Bench harness: bench-harness.md
       - Orin runbook: orin-runbook.md
+  - Blog:
+      - Watching a ROS 2 topic changes it: blog/2026-09-18-watching-a-ros2-topic-changes-it.md
   - Background:
       - Design: design.md
       - Alternatives: alternatives.md

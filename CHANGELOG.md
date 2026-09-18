@@ -24,6 +24,17 @@ All notable changes to this project are documented here. Format follows
   consumer: the probe, its output format, the spec grammar and `pulse-check` are unchanged.
   Test node mode `slow_listener <ms>` and `test/integration/test_recv_lag.py` prove the two
   logs carry the gap and the model derives the warn from them; 21 new pulse-top tests.
+- **Blog post, "Watching a ROS 2 topic changes it"
+  (`docs/blog/2026-09-18-watching-a-ros2-topic-changes-it.md`, on the docs site under Blog).**
+  The observer-effect bench written up for a systems-programming audience: what a subscriber
+  costs (`hz` 7 %, `echo` 31 % of a core per watched 100 KB topic), why `hz` on an
+  intra-process topic switches serialization on in the watched process (+52 % CPU, 10/10
+  trials), how `LD_PRELOAD` interposition of the `ros_trace_*` symbols counts in-process
+  instead, and what that costs (+1.9 % ± 0.7 % paired). Every number cites its file and line
+  in a trailing comment. Two figures under `docs/assets/blog/`, regenerated from the committed
+  CSV by `bench/plot_observer_effect.py`. `site/build.py` now rewrites links relative to the
+  page's own directory (pages under `blog/`), and folds `../` in link targets, so a results
+  page linking `../../bench/RESULTS.md` lands on the benchmarks page instead of GitHub.
 
 ## [0.5.0] - 2026-09-09
 
