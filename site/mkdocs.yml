@@ -32,6 +32,7 @@ theme:
 nav:
   - Overview: index.md
   - pulse-top: pulse-top.md
+  - Prometheus and Grafana: export.md
   - Measurements:
       - Benchmarks: benchmarks.md
       - Jetson AGX Orin: orin.md

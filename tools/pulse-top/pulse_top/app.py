@@ -9,10 +9,8 @@ which is exactly what the graph-joining monitors (ros2top, ornis, ...) cannot do
 from __future__ import annotations
 
 import argparse
-import glob
 import os
 import sys
-import tempfile
 
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -21,7 +19,7 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import DataTable, Footer, Static, TabbedContent, TabPane, Tree
 
 from .model import LAG_TOL_DEFAULT, LAG_WINDOWS_DEFAULT, StatsState, parse_jsonl_line, sparkline
-from .reader import MultiFollower
+from .reader import MultiFollower, default_log_path
 
 ACCENT = "#b48cf2"
 GOOD = "#7ee2a8"
@@ -347,16 +345,6 @@ class PulseTopApp(App):
         self._warns_only = not self._warns_only
         self.notify(f"warns only: {'on' if self._warns_only else 'off'}", timeout=1.5)
         self._refresh_table()
-
-
-def default_log_path() -> str | None:
-    """Glob for every per-process probe log, not the newest one: a live stack is
-    one file per node and the newest file is one node of it."""
-    for d in (os.environ.get("TMPDIR") or tempfile.gettempdir(), "/tmp"):
-        pattern = os.path.join(d, "topic_freq.*.log")
-        if glob.glob(pattern):
-            return pattern
-    return None
 
 
 def main() -> int:

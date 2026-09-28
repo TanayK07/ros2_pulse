@@ -70,7 +70,8 @@ If a sidecar exporter or a log shipper is reading instead of a person, `ROS_TOPI
 writes every window as one JSON object per line with the same gates and values. See
 [JSON Lines output](#json-lines-output-ros_topic_stats_formatjsonl). Dashboards that already
 read rclcpp's built-in topic statistics get the same numbers on `/statistics` from the
-[`pulse_bridge`](#publishing-on-statistics-pulse_bridge) sidecar.
+[`pulse_bridge`](#publishing-on-statistics-pulse_bridge) sidecar, and Prometheus, OTLP and
+Grafana get them from [`pulse-export`](#prometheus-otlp-and-grafana-pulse-export).
 
 ## How it works
 
@@ -233,6 +234,20 @@ The rate is taken at the subscription when the process has one (what the built-i
 measure) and at the publisher otherwise. Inter- and intra-process paths report the busier of
 the two, not the sum: one publish can hit both tracepoints. A text-format log is refused with
 one warning per file.
+
+### Prometheus, OTLP and Grafana (`pulse-export`)
+
+`pulse-export` ships with pulse-top (`pip3 install ros2-pulse-top`) and serves the probe's jsonl
+logs as Prometheus metrics on `:9464/metrics` (per-topic publish and callback rates, gaps,
+`recv_lag`, warns, node liveness, per-process window age), optionally pushing the same series
+over OTLP/HTTP (`--otlp http://collector:4318`). Standard library only, no ROS dependency, no
+graph presence. To see a probed robot on a Grafana dashboard:
+
+```bash
+docker compose -f examples/grafana/docker-compose.yml up --build   # then open http://localhost:3000
+```
+
+Metric names, labels and staleness rules: [docs/EXPORT.md](docs/EXPORT.md).
 
 ### Expected-rate alerting
 

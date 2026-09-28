@@ -10,6 +10,19 @@ All notable changes to this project are documented here. Format follows
   monitor a Discourse reader said they were switching from; section plus a positioning-table row.
 
 ### Added
+- **pulse-top 0.4.0: `pulse-export`, Prometheus / OTLP exporter and a Grafana example.** A
+  second entry point in `ros2-pulse-top` that tails the probe's jsonl logs with pulse-top's
+  follower and parser and serves `/metrics` in the Prometheus text format on port 9464 from a
+  stdlib HTTP server: per-topic publish and callback rate per path, largest gap, `recv_lag`
+  deficit, active warns, node up and last-seen age, per-process window period, age and
+  timestamp, and window / warn / skipped-line counters, labelled `pid` (from
+  `topic_freq.<pid>.log`), `topic`, `node`. `--otlp URL` pushes the same series as OTLP/HTTP
+  JSON through `urllib` (gauges, cumulative sums, UCUM units; checked against OpenTelemetry
+  Collector 0.128.0). Absent keys stay absent series, never 0; a process that stops flushing
+  loses its topic series after two periods and keeps a growing age. No new dependency.
+  `examples/grafana/` holds a docker compose (exporter, Prometheus, Grafana) and a provisioned
+  dashboard, `--demo` included; docs page `docs/EXPORT.md`. `default_log_path` moved from
+  `app.py` to `reader.py` so the exporter does not import the TUI. 19 new pulse-top tests.
 - **pulse-top 0.3.0: `recv_lag` warn (issue #50).** When a publisher's process and a
   subscriber's process are both probed, pulse-top pairs the topic's publish rate (busier path)
   with its callback rate (inter + intra) and warns once the callbacks sit more than `--lag-tol`

@@ -28,6 +28,21 @@ pulse-top '/var/log/topic_freq.*.log'   # a quoted glob; new files are picked up
 pulse-top --demo                        # self-generated demo graph with a scripted incident
 ```
 
+## pulse-export: Prometheus, OTLP, Grafana
+
+The same package installs `pulse-export`, which serves the same logs as Prometheus metrics
+(stdlib only, no extra install):
+
+```bash
+pulse-export                                  # :9464/metrics over every $TMPDIR/topic_freq.<pid>.log
+pulse-export --otlp http://localhost:4318     # also push OTLP/HTTP JSON
+pulse-export --demo                           # the demo graph below, as metrics
+```
+
+A ready Prometheus + Grafana stack is in
+[`examples/grafana/`](../../examples/grafana/); metric reference in
+[docs/EXPORT.md](../../docs/EXPORT.md).
+
 ## Keys
 
 | Key | Action |
