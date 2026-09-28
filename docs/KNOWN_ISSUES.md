@@ -1,6 +1,6 @@
 # Known issues
 
-Defects found in review and benchmarking, with the PR that fixed each. All fifteen are fixed
+Defects found in review and benchmarking, with the PR that fixed each. All sixteen are fixed
 and have regression tests; the numbers are referenced from code comments and tests
 (`KNOWN_ISSUES #n`). Current overhead figures are in [bench/RESULTS.md](../bench/RESULTS.md);
 planned work is in [ROADMAP.md](ROADMAP.md).
@@ -22,6 +22,7 @@ planned work is in [ROADMAP.md](ROADMAP.md).
 | 13 | Low | efficiency | Thread-local cache was single-entry; the "0.2 ns/op" figure was the all-hits best case | [#14](https://github.com/TanayK07/ros2_pulse/pull/14) |
 | 14 | Low | build | The probe exported every symbol, not just `ros_trace_*`; lint deps were declared but unused | [#15](https://github.com/TanayK07/ros2_pulse/pull/15) |
 | 15 | Medium | efficiency | TLS cache hash aliased on allocator strides (about 90 % misses under realistic farms, +2-4 % workload CPU) | [#19](https://github.com/TanayK07/ros2_pulse/pull/19) |
+| 16 | High | correctness | After a SIGSTOP of the probed process the flush timer replayed every missed tick, so ~0-length windows with a ~0 ms gap buried the stall | [#62](https://github.com/TanayK07/ros2_pulse/pull/62) |
 
 Sub-items referenced from code: 8a is the timer first-fire off-by-one, 8b is the nominal
 window denominator (both fixed in #9).
