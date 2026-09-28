@@ -44,6 +44,19 @@ void Timer::runThread() {
             m_func();
         }
         deadline += m_interval;
+        // Never replay missed ticks. If this thread was frozen (SIGSTOP of the whole process, a
+        // debugger, a VM pause, a flush blocked on I/O), the absolute deadline is now behind real
+        // time, and stepping it one interval per fire made the loop fire once per missed tick,
+        // back to back. Each of those flushes is a ~0-length window: the first one carries the
+        // stall, the rest report a near-0 gap and garbage Hz, and a reader that keeps the latest
+        // window (pulse-top, pulse-export) showed a ~0 ms gap for a 5 s publisher freeze.
+        // Re-phase instead whenever the next window would be shorter than half an interval. The
+        // single late fire above already closed one long window that holds the whole stall, and
+        // ordinary scheduling jitter (far below half an interval) keeps the drift-free cadence.
+        const auto now = std::chrono::steady_clock::now();
+        if (deadline - now < m_interval / 2) {
+            deadline = now + m_interval;
+        }
     }
 }
 

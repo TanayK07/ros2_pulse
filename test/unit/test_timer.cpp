@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -63,4 +64,47 @@ TEST(Timer, SteadyCadenceAfterFirstFire) {
     const int n = fires.load();
     EXPECT_GE(n, 3) << "cadence lost a tick (first-tick off-by-one)";
     EXPECT_LE(n, 4) << "timer fired more often than one-per-interval";
+}
+
+// A frozen flush thread (SIGSTOP then SIGCONT, a debugger pause, a VM stall, a flush blocked on
+// I/O) must NOT be followed by a back-to-back burst of catch-up fires. The old cadence advanced
+// the deadline by exactly one interval per fire, so after a stall of N intervals the timer fired
+// N times in a row within microseconds. Each of those flushes is a ~0-length window: the first
+// carries the stall's gap, the rest report a near-0 gap and nonsense Hz, and a reader that keeps
+// the latest window (pulse-top, pulse-export) sees a ~0 ms gap for a 5 s publisher freeze.
+// Here the first callback blocks for 4.5 intervals to put the deadline behind real time, the
+// same state a SIGSTOP leaves it in. Every later window must be at least half an interval long.
+TEST(Timer, NoCatchUpBurstAfterStall) {
+    constexpr auto kInterval = milliseconds(100);
+    constexpr int kMaxFires = 16;
+    std::atomic<int> n{0};
+    std::atomic<int64_t> fire_us[kMaxFires];
+    for (auto& f : fire_us) {
+        f.store(0);
+    }
+    const auto start = steady_clock::now();
+    Timer t(
+        [&] {
+            const int i = n.fetch_add(1, std::memory_order_relaxed);
+            if (i < kMaxFires) {
+                fire_us[i].store(duration_cast<microseconds>(steady_clock::now() - start).count());
+            }
+            if (i == 0) {
+                std::this_thread::sleep_for(milliseconds(450));  // the flush thread is frozen
+            }
+        },
+        kInterval);
+    t.start();
+    std::this_thread::sleep_for(milliseconds(1000));
+    t.stop();
+
+    const int fires = std::min(n.load(), kMaxFires);
+    ASSERT_GE(fires, 3) << "timer stopped firing after the stall";
+    for (int i = 1; i < fires; ++i) {
+        const int64_t spacing_us = fire_us[i].load() - fire_us[i - 1].load();
+        EXPECT_GE(spacing_us, 45000) << "catch-up burst: fire " << i << " landed " << spacing_us
+                                     << " us after fire " << (i - 1);
+    }
+    // A burst replays every missed tick: ~4 extra fires on top of the ~5 real-time ones.
+    EXPECT_LE(n.load(), 7) << "timer replayed missed ticks";
 }

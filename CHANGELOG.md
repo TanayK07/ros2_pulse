@@ -5,6 +5,19 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- **A publisher frozen by SIGSTOP read as a ~0 ms gap after it resumed.** The flush timer
+  advanced its deadline one interval per fire, so when the whole probed process was frozen (the
+  flush thread with it) it replayed every missed tick back to back on SIGCONT: one window
+  carrying the stall, then a burst of ~0-length windows with a near-0 `pub_max_dt_ms` /
+  `recv_max_dt_ms` and nonsense Hz (50,000 Hz in one run). pulse-top and pulse-export keep the
+  latest window, so a 5 s camera freeze showed as a 0.03 ms gap and the `topic_gap` warn was
+  buried. The timer now re-phases instead of replaying: after a stall there is exactly one long
+  window holding the full gap (5021 ms on the same repro), then normal cadence, and no window is
+  ever shorter than half a period. Same fix on the receive side (a frozen subscriber process).
+  The gap accounting itself was already right and is unchanged; the hot path is untouched.
+  Regression test `Timer.NoCatchUpBurstAfterStall`.
+
 ### Changed
 - docs/ALTERNATIVES.md compares against NVIDIA's `greenwave_monitor`, the packaged subscriber-based
   monitor a Discourse reader said they were switching from; section plus a positioning-table row.
