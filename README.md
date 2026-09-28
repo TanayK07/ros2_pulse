@@ -306,6 +306,14 @@ A rule may violate the rate bound and the gap bound independently, producing two
 This also covers control loops driven by `rclcpp::Rate` or a raw `sleep_until` rather than a
 timer (`ros2_control`, Nav2, MoveIt Servo): they publish, so their stalls show up here.
 
+A gap is reported in every window it is open in and in the window where the next message
+arrives, so a silent topic's gap grows window by window and a `max_gap_ms` rule fires while it
+stays silent (a `min_hz` rule fires on the 0 Hz as well). If the whole probed process freezes
+(SIGSTOP, a debugger, a VM pause) its flush thread freezes too, so nothing is written during the
+stall; the first window after it resumes is one long window (its `window_s` spans the stall) that
+carries the full gap, and the cadence restarts from there. Watch window age from outside
+(`pulse-top`, `pulse-export`) to see a process that is frozen right now.
+
 Evaluation happens only at flush time (the hot path never sees the spec) and each probed process
 only judges endpoints it hosts. The first window (attach ramp-up) and the final atexit window (a
 sub-period sliver whose rate is a one-sample estimate) are skipped, so a healthy start or stop
