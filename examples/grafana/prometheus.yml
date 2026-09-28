@@ -1,0 +1,12 @@
+global:
+  # A scrape sees each process's LATEST window only, so scrape at or under the probe's window
+  # period (ROS_TOPIC_STATISTICS_PUBLISH_PERIOD, 5 s by default; the demo flushes every 1 s)
+  # or short windows go unseen. ros2_pulse_warns_total counts every warn either way.
+  scrape_interval: 1s
+
+scrape_configs:
+  - job_name: ros2_pulse
+    static_configs:
+      # the compose service; for pulse-export running on the host instead, use
+      # host.docker.internal:9464 and add extra_hosts: ["host.docker.internal:host-gateway"]
+      - targets: ["pulse-export:9464"]

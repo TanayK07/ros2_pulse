@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import glob
 import os
+import tempfile
 
 
 class FileFollower:
@@ -98,3 +99,13 @@ class MultiFollower:
         for path in self.files:
             out.extend((path, line) for line in self._followers[path].poll())
         return out
+
+
+def default_log_path() -> str | None:
+    """Glob for every per-process probe log, not the newest one: a live stack is
+    one file per node and the newest file is one node of it."""
+    for d in (os.environ.get("TMPDIR") or tempfile.gettempdir(), "/tmp"):
+        pattern = os.path.join(d, "topic_freq.*.log")
+        if glob.glob(pattern):
+            return pattern
+    return None

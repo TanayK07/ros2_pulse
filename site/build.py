@@ -23,6 +23,7 @@ REPO_URL = "https://github.com/TanayK07/ros2_pulse"
 PAGES = {
     "README.md": "index.md",
     "tools/pulse-top/README.md": "pulse-top.md",
+    "docs/EXPORT.md": "export.md",
     "bench/RESULTS.md": "benchmarks.md",
     "bench/README.md": "bench-harness.md",
     "test/orin/RESULTS.md": "orin.md",

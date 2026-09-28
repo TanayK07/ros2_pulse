@@ -1,0 +1,52 @@
+# ros2_pulse on a Grafana dashboard: pulse-export + Prometheus + Grafana.
+#
+#   docker compose -f examples/grafana/docker-compose.yml up --build
+#   open http://localhost:3000   (dashboard "ros2_pulse", no login needed to view)
+#
+# pulse-export reads the probe's per-process logs from the host's /tmp (the probe's
+# default, $TMPDIR/topic_freq.<pid>.log); set PULSE_LOG_DIR if your TMPDIR differs.
+# No robot yet? Run the demo graph instead:
+#
+#   PULSE_EXPORT_ARGS=--demo docker compose -f examples/grafana/docker-compose.yml up --build
+#
+# Local demo settings: anonymous viewing is on and the admin password is the Grafana default.
+
+services:
+  pulse-export:
+    build:
+      context: ../../tools/pulse-top
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        COPY pyproject.toml README.md LICENSE /src/
+        COPY pulse_top /src/pulse_top
+        RUN pip install --no-cache-dir /src
+        ENTRYPOINT ["pulse-export"]
+    command: ${PULSE_EXPORT_ARGS:-/logs/topic_freq.*.log}
+    volumes:
+      - ${PULSE_LOG_DIR:-/tmp}:/logs:ro
+    ports:
+      - "9464:9464"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.0.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/ros2_pulse.json
+    volumes:
+      - ./provisioning:/etc/grafana/provisioning:ro
+      - ./dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped

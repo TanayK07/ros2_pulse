@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ros2-pulse-top"
-version = "0.3.0"
+version = "0.4.0"
 description = "Live terminal dashboard over a ros2_pulse probe log, no ROS dependency, no graph presence"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-keywords = ["ros2", "ros", "robotics", "observability", "tui", "textual"]
+keywords = ["ros2", "ros", "robotics", "observability", "tui", "textual", "prometheus", "opentelemetry", "grafana"]
 classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
@@ -27,6 +27,7 @@ Issues = "https://github.com/TanayK07/ros2_pulse/issues"
 
 [project.scripts]
 pulse-top = "pulse_top.app:main"
+pulse-export = "pulse_top.export:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-asyncio>=0.23"]
