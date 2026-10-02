@@ -154,3 +154,107 @@ class TestRecvLag:
 
 def test_window_title_is_the_product_name():
     assert PulseTopApp.TITLE == "pulse-top"
+
+
+def topbar(app) -> str:
+    return str(app.query_one("#topbar", Static).render())
+
+
+def notice(app) -> str:
+    n = app.query_one("#notice", Static)
+    return str(n.render()) if n.display else ""
+
+
+TEXT_BLOCK = ("# ts_ns={ts} window_s=1.000\n"
+              "TOPIC /chatter 9.601895\n"
+              "JITTER /chatter pub max_dt_ms=100.140\n"
+              "NODE /_ros2cli_{pid}\n"
+              "\n")
+
+
+class TestIssue58FilesFound:
+    # Issue #58: probe in .bashrc, default text format, many files. pulse-top said
+    # "0 file(s)" forever: text lines never parsed, and the top bar was only redrawn
+    # after a parsed window, so even the file count it had was never shown.
+    async def test_text_format_logs_render(self, tmp_path):
+        for pid in (101, 102):
+            (tmp_path / f"topic_freq.{pid}.log").write_text(
+                TEXT_BLOCK.format(ts=100_000_000_000 + pid, pid=pid))
+        (tmp_path / "topic_freq.103.log").write_text("")  # short-lived process, nothing yet
+        app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
+        async with app.run_test(size=(140, 30)) as pilot:
+            await settle(pilot)
+            assert "3 file(s)" in topbar(app)
+            assert "2 windows" in topbar(app)
+            table = app.query_one("#table", DataTable)
+            assert table.get_cell("/chatter", "PUB Hz").plain == "9.6"
+            assert notice(app) == ""
+
+    async def test_file_count_shows_before_any_window(self, tmp_path):
+        (tmp_path / "topic_freq.1.log").write_text("")
+        (tmp_path / "topic_freq.2.log").write_text("")
+        app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
+        async with app.run_test(size=(140, 30)) as pilot:
+            await settle(pilot)
+            assert "2 file(s)" in topbar(app)
+            assert "waiting for the first window" in notice(app)
+
+    async def test_files_created_after_start_are_counted(self, tmp_path):
+        app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
+        async with app.run_test(size=(140, 30)) as pilot:
+            await settle(pilot)
+            assert "0 file(s)" in topbar(app)
+            assert "no files match" in notice(app)
+            (tmp_path / "topic_freq.7.log").write_text(TEXT_BLOCK.format(ts=5, pid=7))
+            await settle(pilot)
+            assert "1 file(s)" in topbar(app)
+            assert "1 windows" in topbar(app)
+
+    async def test_unreadable_files_are_named_loudly(self, tmp_path):
+        (tmp_path / "topic_freq.1.log").write_text("[INFO] something else entirely\n")
+        app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
+        async with app.run_test(size=(140, 30)) as pilot:
+            await settle(pilot)
+            msg = notice(app)
+            assert "topic_freq.1.log" in msg
+            assert "not ros2_pulse probe output" in msg
+
+
+class TestIssue59Theme:
+    # Issue #59: outdoors the terminal is black on white, pulse-top forced black.
+    def test_resolve_theme_flag_env_default(self, monkeypatch):
+        from pulse_top.app import resolve_theme
+        monkeypatch.delenv("PULSE_TOP_THEME", raising=False)
+        assert resolve_theme(None) == "dark"
+        monkeypatch.setenv("PULSE_TOP_THEME", "light")
+        assert resolve_theme(None) == "light"
+        assert resolve_theme("terminal") == "terminal"  # the flag wins over the env
+        monkeypatch.setenv("PULSE_TOP_THEME", "bogus")
+        with pytest.raises(ValueError):
+            resolve_theme(None)
+
+    @pytest.mark.parametrize("name", ["dark", "light", "terminal"])
+    async def test_theme_applies(self, log, name):
+        from pulse_top.app import PALETTES
+        app = PulseTopApp(str(log), poll_s=0.05, theme=name)
+        async with app.run_test(size=(140, 30)) as pilot:
+            with open(log, "a") as f:
+                f.write(window(100.0, [("/a", 5.0)]))
+            await settle(pilot)
+            assert app._pal is PALETTES[name]
+            bg = app.screen.styles.background
+            if name == "light":
+                assert bg.brightness > 0.9
+            elif name == "dark":
+                assert bg.brightness < 0.1
+            else:  # terminal: the terminal's own default background, never painted over
+                assert bg.ansi == -1 or app.current_theme.background == "ansi_default"
+
+    def test_light_theme_colours_are_dark_enough_for_white(self):
+        # WCAG-ish: every text colour of the light palette must contrast with white.
+        from textual.color import Color
+
+        from pulse_top.app import PALETTES
+        pal = PALETTES["light"]
+        for c in (pal.accent, pal.good, pal.warn, pal.bad, pal.dim):
+            assert Color.parse(c).brightness < 0.55, c
