@@ -1,7 +1,8 @@
-"""pulse-export: the probe's jsonl windows as Prometheus metrics and OTLP/HTTP JSON.
+"""pulse-export: the probe's windows as Prometheus metrics and OTLP/HTTP JSON.
 
 A pure log consumer, like pulse-top: it tails the files the probe already writes
-(ROS_TOPIC_STATS_FORMAT=jsonl) with the same follower and parser, and serves
+(default text format or ROS_TOPIC_STATS_FORMAT=jsonl) with the same follower and
+parser, and serves
 /metrics in the Prometheus text exposition format from a stdlib HTTP server.
 Optionally it pushes the same series to an OTLP/HTTP endpoint as JSON. Stdlib only:
 no prometheus_client, no opentelemetry-sdk, nothing new to install on a robot.
@@ -31,7 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .model import LAG_TOL_DEFAULT, LAG_WINDOWS_DEFAULT, StatsState, Window, parse_jsonl_line
+from .model import LAG_TOL_DEFAULT, LAG_WINDOWS_DEFAULT, LogParser, StatsState, Window
 from .reader import MultiFollower, default_log_path
 
 DEFAULT_PORT = 9464
@@ -103,7 +104,7 @@ def _metrics() -> dict[str, Metric]:
         Metric("ros2_pulse_warns_total", "counter",
                "Probe warns read, per kind.", "1", ("pid", "kind")),
         Metric("ros2_pulse_lines_skipped_total", "counter",
-               "Log lines that were not probe jsonl windows (text format, truncated, foreign).",
+               "Log lines that were not probe output in either format (truncated, foreign).",
                "1"),
     ]
     return {m.name: m for m in ms}
@@ -133,20 +134,24 @@ class Exporter:
         self._procs: dict[str, _Proc] = {}
         self._node_seen: dict[str, float] = {}
         self._skipped = 0
-        self._text_warned: set[str] = set()
+        self._parsers: dict[str, LogParser] = {}
         # pulse-top's model, reused for the one derived signal (recv_lag), which
         # needs the publisher's and the subscriber's windows side by side.
         self._state = StatsState(history=1, lag_tol=lag_tol, lag_windows=lag_windows)
 
     def ingest(self, path: str, line: str) -> None:
-        window = parse_jsonl_line(line)
-        if window is None:
-            self._skipped += 1
-            if line.startswith("# ts_ns=") and path not in self._text_warned:
-                self._text_warned.add(path)
-                print(f"pulse-export: {path} is text format; run the probe with "
-                      "ROS_TOPIC_STATS_FORMAT=jsonl", file=sys.stderr)
-            return
+        """One log line from `path`. Text and jsonl are both read (issue #58); a text
+        window completes on its closing blank line, so the parser is per file."""
+        parser = self._parsers.get(path)
+        if parser is None:
+            parser = self._parsers[path] = LogParser()
+        before = parser.unrecognised
+        windows = parser.feed(line)
+        self._skipped += parser.unrecognised - before
+        for window in windows:
+            self._ingest_window(path, window)
+
+    def _ingest_window(self, path: str, window: Window) -> None:
         now = self._clock()
         proc = self._procs.get(path)
         if proc is None:
@@ -169,6 +174,7 @@ class Exporter:
         now = self._clock()
         for path in [p for p, pr in self._procs.items() if now - pr.read_at > FORGET_S]:
             del self._procs[path]
+            self._parsers.pop(path, None)
         for n in [n for n, t in self._node_seen.items() if now - t > FORGET_S]:
             del self._node_seen[n]
 
@@ -365,8 +371,8 @@ def _header(s: str) -> tuple[str, str]:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="pulse-export",
-        description="Serve a ros2_pulse jsonl log as Prometheus /metrics, optionally push OTLP/HTTP "
-                    "JSON (run the probe with ROS_TOPIC_STATS_FORMAT=jsonl).",
+        description="Serve ros2_pulse probe logs (text or jsonl) as Prometheus /metrics, "
+                    "optionally push OTLP/HTTP JSON.",
     )
     ap.add_argument("file", nargs="?",
                     help="probe log, or a quoted glob like '/tmp/topic_freq.*.log' "
@@ -398,8 +404,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         path = args.file or default_log_path()
         if path is None:
-            print("pulse-export: no probe log found. Start the probe with "
-                  "ROS_TOPIC_STATS_FORMAT=jsonl, pass a path, or try --demo.", file=sys.stderr)
+            print("pulse-export: no probe log ($TMPDIR/topic_freq.<pid>.log) found. Start the "
+                  "probe, pass a path, or try --demo.", file=sys.stderr)
             return 2
 
     follower = MultiFollower(path)

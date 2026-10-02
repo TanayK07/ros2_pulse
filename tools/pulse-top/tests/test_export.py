@@ -62,7 +62,7 @@ def two_process_exporter():
     ex.ingest(PUB_LOG, PUB_LINE)
     clock.t += 0.5
     ex.ingest(SUB_LOG, SUB_LINE)
-    ex.ingest(SUB_LOG, "# ts_ns=1 window_s=1.000")  # text format / foreign line: skipped
+    ex.ingest(SUB_LOG, "[INFO] not a probe line")  # foreign line: skipped
     clock.t += 0.25
     return ex, clock
 
@@ -114,7 +114,7 @@ ros2_pulse_windows_total{pid="5151"} 1
 # TYPE ros2_pulse_warns_total counter
 ros2_pulse_warns_total{pid="5151",kind="node_missing"} 1
 ros2_pulse_warns_total{pid="5151",kind="topic_rate"} 1
-# HELP ros2_pulse_lines_skipped_total Log lines that were not probe jsonl windows (text format, truncated, foreign).
+# HELP ros2_pulse_lines_skipped_total Log lines that were not probe output in either format (truncated, foreign).
 # TYPE ros2_pulse_lines_skipped_total counter
 ros2_pulse_lines_skipped_total 1
 """
@@ -291,3 +291,38 @@ class TestCli:
     def test_no_log_found_exits_2(self, tmp_path, monkeypatch):
         monkeypatch.setattr(export, "default_log_path", lambda: None)
         assert export.main(["--once"]) == 2
+
+
+class TestTextFormat:
+    # Issue #58: the probe's default format is text. pulse-export used to print a
+    # hint and export nothing; it now reads text windows like jsonl ones.
+    TEXT = ("# ts_ns=1782887153899445923 window_s=1.000\n"
+            "TOPIC /scan 20.000000\n"
+            "NODE /lidar\n"
+            "\n")
+
+    def test_text_log_is_exported(self, tmp_path):
+        log = tmp_path / "topic_freq.77.log"
+        log.write_text(self.TEXT)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            assert export.main(["--once", str(log)]) == 0
+        text = out.getvalue()
+        assert 'ros2_pulse_topic_publish_rate_hertz{pid="77",topic="/scan",path="inter"} 20' in text
+        assert 'ros2_pulse_node_up{pid="77",node="/lidar"} 1' in text
+        assert "ros2_pulse_lines_skipped_total 0" in text
+
+    def test_text_and_jsonl_files_side_by_side(self):
+        ex = Exporter(clock=Clock())
+        for line in self.TEXT.split("\n"):
+            ex.ingest(SUB_LOG, line)
+        ex.ingest(PUB_LOG, PUB_LINE)
+        text = render_prometheus(ex.collect())
+        assert 'ros2_pulse_windows_total{pid="5151"} 1' in text
+        assert 'ros2_pulse_windows_total{pid="4242"} 1' in text
+
+    def test_foreign_lines_are_still_counted(self):
+        ex = Exporter(clock=Clock())
+        ex.ingest(SUB_LOG, "not a probe line")
+        ex.ingest(SUB_LOG, "")  # a blank line is framing, not a skipped record
+        assert "ros2_pulse_lines_skipped_total 1" in render_prometheus(ex.collect())

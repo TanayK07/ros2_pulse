@@ -129,3 +129,12 @@ class TestMultiFollower:
         with open(f, "a") as fh:
             fh.write("b\n")
         assert mf.poll() == ["b"]
+
+
+class TestBlankLines:
+    def test_blank_line_is_delivered(self, tmp_path):
+        # Issue #58: a blank line closes a text-format window block. Dropping it would
+        # show every text window one period late, and the last one never.
+        p = tmp_path / "log"
+        write(p, "# ts_ns=1 window_s=1.000\nTOPIC /a 1.0\n\n", "w")
+        assert FileFollower(str(p)).poll() == ["# ts_ns=1 window_s=1.000", "TOPIC /a 1.0", ""]

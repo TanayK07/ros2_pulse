@@ -237,8 +237,8 @@ one warning per file.
 
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 
-`pulse-export` ships with pulse-top (`pip3 install ros2-pulse-top`) and serves the probe's jsonl
-logs as Prometheus metrics on `:9464/metrics` (per-topic publish and callback rates, gaps,
+`pulse-export` ships with pulse-top (`pip3 install ros2-pulse-top`) and serves the probe's logs
+(text or jsonl) as Prometheus metrics on `:9464/metrics` (per-topic publish and callback rates, gaps,
 `recv_lag`, warns, node liveness, per-process window age), optionally pushing the same series
 over OTLP/HTTP (`--otlp http://collector:4318`). Standard library only, no ROS dependency, no
 graph presence. To see a probed robot on a Grafana dashboard:

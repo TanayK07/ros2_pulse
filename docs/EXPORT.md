@@ -1,8 +1,8 @@
 # Prometheus, OTLP and Grafana (`pulse-export`)
 
 `pulse-export` puts a probed ROS 2 stack on a Grafana dashboard with no rebuild and no ROS
-dependency. Like `pulse-top` it is a pure log consumer: it tails the jsonl files the probe
-already writes, serves them as Prometheus metrics on `/metrics`, and can push the same series
+dependency. Like `pulse-top` it is a pure log consumer: it tails the log files the probe
+already writes (the default text format or jsonl), serves them as Prometheus metrics on `/metrics`, and can push the same series
 to an OpenTelemetry collector over OTLP/HTTP. Standard library only; it ships in the
 `ros2-pulse-top` package.
 
@@ -17,10 +17,9 @@ docker compose -f examples/grafana/docker-compose.yml up --build
 The compose file ([`examples/grafana/`](../examples/grafana/)) runs three containers:
 `pulse-export` reading the host's `/tmp/topic_freq.*.log` (the probe's default output, one file
 per probed process), Prometheus scraping it every second, and Grafana with the datasource and
-dashboard provisioned. Start the probe on the robot as usual:
+dashboard provisioned. Start the probe on the robot as usual (either output format works):
 
 ```bash
-export ROS_TOPIC_STATS_FORMAT=jsonl
 LD_PRELOAD=libros2_pulse.so ros2 launch my_robot bringup.launch.py
 ```
 
@@ -75,7 +74,7 @@ records carry no pid). A log with any other name, such as a shared
 | `ros2_pulse_process_last_window_timestamp_seconds` | gauge | `pid` | Probe timestamp of that window, Unix seconds. |
 | `ros2_pulse_windows_total` | counter | `pid` | Windows read. |
 | `ros2_pulse_warns_total` | counter | `pid`, `kind` | Probe warns read. Catches a warn that came and went between two scrapes. |
-| `ros2_pulse_lines_skipped_total` | counter | none | Lines that were not jsonl windows (text format, truncated, foreign). |
+| `ros2_pulse_lines_skipped_total` | counter | none | Lines that were not probe output in either format (truncated, foreign). |
 
 Useful queries: `max by (topic) (ros2_pulse_topic_publish_rate_hertz)` is the probe's own
 headline rate (one publish can fire both paths, so the busier one, not the sum);
