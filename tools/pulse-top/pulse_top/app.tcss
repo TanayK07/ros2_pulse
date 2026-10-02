@@ -1,12 +1,24 @@
+/* Colours come from the active Textual theme (issue #59): pulse-dark, pulse-light, or
+   ansi-dark for --theme terminal, which paints nothing over the terminal's own colours. */
 Screen {
-    background: #0e1116;
-    color: #d6dde6;
+    background: $background;
+    color: $foreground;
 }
 
 #topbar {
     height: 1;
     padding: 0 2;
-    background: #151a22;
+    background: $panel;
+    /* One line, cut at the end: a long $TMPDIR glob used to wrap and push the file
+       count off the visible line. */
+    text-wrap: nowrap;
+    text-overflow: ellipsis;
+}
+
+#notice {
+    height: auto;
+    padding: 0 2;
+    background: $panel;
 }
 
 TabbedContent {
@@ -14,16 +26,22 @@ TabbedContent {
 }
 
 Tabs {
-    background: #11151d;
+    background: $surface;
 }
 
 Tab {
-    color: #7c8797;
+    color: $text-muted;
 }
 
 Tab.-active {
-    color: #b48cf2;
+    color: $primary;
     text-style: bold;
+}
+
+/* Focused tab bar: the active tab sits on the block cursor, which is $primary. A
+   $primary label on it was invisible, so it takes the cursor's own foreground. */
+Tabs:focus Tab.-active {
+    color: $block-cursor-foreground;
 }
 
 #table-col {
@@ -32,39 +50,39 @@ Tab.-active {
 
 #table {
     height: 1fr;
-    background: #0e1116;
+    background: $background;
 }
 
 DataTable > .datatable--header {
-    background: #0e1116;
-    color: #7c8797;
+    background: $background;
+    color: $text-muted;
     text-style: bold;
 }
 
 DataTable > .datatable--cursor {
-    background: #b48cf2 20%;
+    background: $primary 20%;
 }
 
 #warns-strip {
     height: auto;
     max-height: 6;
     padding: 0 2;
-    border-top: solid #2a3140;
-    background: #11151d;
+    border-top: solid $border-blurred;
+    background: $surface;
 }
 
 #sidebar {
     width: 32;
     padding: 1 2;
-    border-left: solid #2a3140;
-    background: #11151d;
+    border-left: solid $border-blurred;
+    background: $surface;
 }
 
 #ns-tree, #nodes-list, #warns-list {
     padding: 1 2;
-    background: #0e1116;
+    background: $background;
 }
 
 Footer {
-    background: #151a22;
+    background: $panel;
 }

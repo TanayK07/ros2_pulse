@@ -6,6 +6,24 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- **pulse-top 0.4.1: pulse-top found no files on a default-format stack (issue #58).** With the
+  probe in `.bashrc` and no `ROS_TOPIC_STATS_FORMAT`, every log is in the default text format.
+  pulse-top parsed jsonl only, and it redrew the top bar only after a parsed window, so a
+  directory of healthy text logs read "0 file(s)" forever even though the glob had matched them
+  all. pulse-top and pulse-export now read the text format as well, sniffed per line like the C++
+  `log_reader`, and a text window maps to the same `Window` its jsonl twin parses to (a line the
+  probe did not print stays an absent field, never 0). The top bar is redrawn every tick, puts the
+  file count before the path, and a notice line says why the table is empty: no file matches yet,
+  N files found and waiting for the first window, or which files are not probe output. The
+  follower now keeps blank lines, which close a text window, so no window arrives one period late.
+  pulse-export's `lines_skipped_total` counts only lines that are in neither format.
+- **pulse-top 0.4.1: `--theme light|dark|terminal` and `PULSE_TOP_THEME` (issue #59).** The colours
+  were hard-coded for a dark background, unreadable on the white terminals used outdoors. `light`
+  is black on white with warn colours picked to read on white (amber is brown, not yellow);
+  `terminal` paints nothing and uses the terminal's own background and ANSI palette (Textual's
+  `ansi-dark` theme); `dark` stays the default. The stylesheet now takes every colour from the
+  Textual theme. The active tab's label was invisible while the tab bar had focus (purple on
+  purple) and is readable again. Textual floor raised to 8.2.7 for the ANSI theme.
 - **A publisher frozen by SIGSTOP read as a ~0 ms gap after it resumed.** The flush timer
   advanced its deadline one interval per fire, so when the whole probed process was frozen (the
   flush thread with it) it replayed every missed tick back to back on SIGCONT: one window

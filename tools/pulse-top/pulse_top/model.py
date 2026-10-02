@@ -1,4 +1,5 @@
-"""Parse the probe's jsonl windows and keep rolling per-topic state.
+"""Parse the probe's windows (jsonl or the default text format) and keep rolling
+per-topic state.
 
 Schema contract (probe CHANGELOG 0.3.0, README "JSON Lines output"): ts_ns is a
 decimal string (int64-safe), an ABSENT per-topic key means "not measured", never
@@ -128,6 +129,152 @@ def parse_jsonl_line(line: str) -> Window | None:
         return Window(ts_ns, window_s, topics, list(rec.get("nodes", [])), warns)
     except (KeyError, ValueError, TypeError):
         return None
+
+
+def _num(s: str) -> float | int:
+    """A spec bound as the probe prints it (%g): int when integral, as json.loads would
+    read the jsonl twin, so a warn detail reads identically from either format."""
+    try:
+        return int(s)
+    except ValueError:
+        return float(s)
+
+
+def _kv(fields: list[str]) -> dict[str, str]:
+    return dict(f.split("=", 1) for f in fields if "=" in f)
+
+
+# Line kinds of the text format (src/core/window_format.cpp, rate_spec.cpp renderWarnLine).
+_TEXT_KINDS = ("TOPIC", "PUB", "RECV", "JITTER", "NODE", "WARN")
+
+
+class _TextBlock:
+    """One text window under construction, keyed by topic in first-seen order."""
+
+    def __init__(self, ts_ns: int, window_s: float):
+        self.ts_ns = ts_ns
+        self.window_s = window_s
+        self.topics: dict[str, TopicWindow] = {}
+        self.nodes: list[str] = []
+        self.warns: list[Warn] = []
+
+    def topic(self, name: str) -> TopicWindow:
+        tw = self.topics.get(name)
+        if tw is None:
+            tw = self.topics[name] = TopicWindow(topic=name)
+        return tw
+
+    def add(self, parts: list[str]) -> None:
+        kind = parts[0]
+        # Values are parsed BEFORE the topic is touched: a damaged line must not leave
+        # an all-absent topic row behind.
+        if kind == "TOPIC" and len(parts) == 3:
+            hz = float(parts[2])
+            tw = self.topic(parts[1])
+            tw.pub_inter_hz = hz
+            if tw.pub_intra_hz is None:  # jsonl always carries the pub pair, intra 0.0 by default
+                tw.pub_intra_hz = 0.0
+        elif kind in ("PUB", "RECV") and len(parts) == 4:
+            kv = _kv(parts[2:])
+            inter, intra = float(kv["inter"]), float(kv["intra"])
+            tw = self.topic(parts[1])
+            if kind == "PUB":
+                tw.pub_inter_hz, tw.pub_intra_hz = inter, intra
+            else:
+                tw.recv_inter_hz, tw.recv_intra_hz = inter, intra
+                tw.recv_endpoint_seen = True
+        elif kind == "JITTER" and len(parts) == 4 and parts[2] in ("pub", "recv"):
+            ms = float(_kv(parts[3:])["max_dt_ms"])
+            setattr(self.topic(parts[1]), f"{parts[2]}_max_dt_ms", ms)
+        elif kind == "NODE" and len(parts) == 2:
+            self.nodes.append(parts[1])
+        elif kind == "WARN":
+            w = self._warn(parts)
+            if w is not None:
+                self.warns.append(Warn(kind=w["kind"], topic=w.get("topic"), node=w.get("node"),
+                                       detail=_warn_detail(w)))
+
+    @staticmethod
+    def _warn(parts: list[str]) -> dict | None:
+        if len(parts) == 4 and parts[1] == "NODE" and parts[3] == "missing":
+            return {"kind": "node_missing", "node": parts[2]}
+        if len(parts) != 5 or parts[1] != "TOPIC":
+            return None
+        kv = _kv(parts[3:])
+        if "hz" in kv and kv.get("expected", "").startswith("["):
+            lo, _, hi = kv["expected"].strip("[]").partition(",")
+            w = {"kind": "topic_rate", "topic": parts[2], "hz": float(kv["hz"]), "min_hz": _num(lo)}
+            if hi != "inf":  # jsonl omits an unbounded max
+                w["max_hz"] = _num(hi)
+            return w
+        if "max_dt_ms" in kv and "expected_max_gap_ms" in kv:
+            return {"kind": "topic_gap", "topic": parts[2], "max_dt_ms": float(kv["max_dt_ms"]),
+                    "max_gap_ms": _num(kv["expected_max_gap_ms"])}
+        return None
+
+    def window(self) -> Window:
+        return Window(self.ts_ns, self.window_s, list(self.topics.values()), self.nodes, self.warns)
+
+
+class LogParser:
+    """Streaming parser for ONE probe log, both encodings (issue #58).
+
+    The probe's default is text: a "# ts_ns=... window_s=..." header, TOPIC/PUB/RECV/
+    JITTER/NODE/WARN lines, and a blank line closing the block. jsonl is one record
+    per line. Sniffed per line, like the C++ log_reader, so a file the probe was
+    restarted into with the other format reads whole. Text maps onto the same Window
+    the jsonl twin of that window parses to: a line the probe did not print is an
+    absent field, never zero.
+
+    One instance per file: a text block spans lines, and a poll can end mid-block.
+    """
+
+    def __init__(self) -> None:
+        self._block: _TextBlock | None = None
+        self.windows = 0       # windows produced
+        self.unrecognised = 0  # non-blank lines in neither format (foreign file, corruption)
+
+    def feed(self, line: str) -> list[Window]:
+        out: list[Window] = []
+        s = line.strip()
+        if not s:
+            self._close(out)
+        elif s.startswith("{"):
+            self._close(out)  # a jsonl record ends any text block in progress
+            w = parse_jsonl_line(s)
+            if w is None:
+                self.unrecognised += 1
+            else:
+                out.append(w)
+        elif s.startswith("# ts_ns="):
+            self._close(out)
+            self._block = self._header(s)
+            if self._block is None:
+                self.unrecognised += 1
+        else:
+            parts = s.split()
+            if parts[0] not in _TEXT_KINDS:
+                self.unrecognised += 1
+            elif self._block is not None:  # else: orphan of a block we attached mid-way
+                try:
+                    self._block.add(parts)
+                except (KeyError, ValueError):
+                    pass  # one damaged line costs that line, not the window
+        self.windows += len(out)
+        return out
+
+    @staticmethod
+    def _header(s: str) -> _TextBlock | None:
+        kv = _kv(s[2:].split())
+        try:
+            return _TextBlock(int(kv["ts_ns"]), float(kv["window_s"]))
+        except (KeyError, ValueError):
+            return None
+
+    def _close(self, out: list[Window]) -> None:
+        if self._block is not None:
+            out.append(self._block.window())
+            self._block = None
 
 
 @dataclass

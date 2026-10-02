@@ -34,7 +34,10 @@ class FileFollower:
         self._skip_partial = False
 
     def poll(self) -> list[str]:
-        """Return complete new lines since the last poll (without newlines)."""
+        """Return complete new lines since the last poll (without newlines).
+
+        Blank lines are kept: in the text format a blank line closes a window block,
+        and without it a text window would surface one period late (issue #58)."""
         try:
             size = os.path.getsize(self.path)
         except OSError:
@@ -62,7 +65,7 @@ class FileFollower:
         if self._skip_partial and lines:
             lines = lines[1:]
             self._skip_partial = False
-        return [ln.decode("utf-8", errors="replace") for ln in lines if ln]
+        return [ln.decode("utf-8", errors="replace") for ln in lines]
 
 
 class MultiFollower:

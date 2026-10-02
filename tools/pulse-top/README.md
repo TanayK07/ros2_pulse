@@ -3,8 +3,8 @@
 ![pulse-top demo](../../docs/assets/pulse-top-demo.gif)
 
 Live terminal dashboard over a `ros2_pulse` probe log. A pure log **consumer**:
-no ROS dependency, no node, no subscriptions; it tails the jsonl file the probe
-already writes, so watching costs the robot nothing and works over plain ssh or on
+no ROS dependency, no node, no subscriptions; it tails the log files the probe
+already writes (the default text format or jsonl, both are read), so watching costs the robot nothing and works over plain ssh or on
 a dead log after the incident.
 
 That is the difference from graph-joining monitors (`ros2top`, `ornis`,
@@ -17,8 +17,7 @@ graph-side tool can see.
 ```bash
 pip3 install ros2-pulse-top             # from PyPI; or from a checkout: pip install ./tools/pulse-top
 
-# probe side: emit jsonl
-export ROS_TOPIC_STATS_FORMAT=jsonl
+# probe side: nothing extra, the default text format is read as is
 LD_PRELOAD=libros2_pulse.so ros2 launch my_robot bringup.launch.py
 
 # dashboard side (any shell, any machine with the file):
@@ -26,6 +25,28 @@ pulse-top                               # every $TMPDIR/topic_freq.<pid>.log (on
 pulse-top /path/to/shared.log           # one explicit file (e.g. a fleet-wide ROS_TOPIC_STATS_OUTPUT_FILE)
 pulse-top '/var/log/topic_freq.*.log'   # a quoted glob; new files are picked up as nodes start
 pulse-top --demo                        # self-generated demo graph with a scripted incident
+pulse-top --theme light                 # black on white, for a light terminal or daylight
+```
+
+Both probe formats are read, per line, so a mix of text and jsonl files (or one file the
+probe was restarted into with the other format) shows as one view. Until the first window
+lands, a line under the top bar says why the table is empty: no file matches the glob yet,
+N files found and waiting for the first window (one per `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD`,
+5 s by default), or which files match but are not probe output.
+
+### Colours
+
+`--theme` picks the colours, and `PULSE_TOP_THEME` sets the default so it can live in
+`.bashrc` next to the probe:
+
+| Theme | Use |
+|-------|-----|
+| `dark` | the default, dark background |
+| `light` | black on white, every warn colour chosen to read on white (outdoors, light terminals) |
+| `terminal` | paints nothing: your terminal's own background, foreground and ANSI palette |
+
+```bash
+export PULSE_TOP_THEME=light
 ```
 
 ## pulse-export: Prometheus, OTLP, Grafana
@@ -59,8 +80,8 @@ A ready Prometheus + Grafana stack is in
   sparkline. Absence renders as `—`; the probe's "not measured" is never shown as 0.
 - **Tree**: topic namespace hierarchy with live rates.
 - **Nodes**: liveness from `NODE` records; missing nodes flagged from structured warns.
-- **Warns**: the probe's structured `warns[]` (`topic_rate`, `topic_gap`,
-  `node_missing`), parsed as JSON rather than regex, plus one pulse-top derives
+- **Warns**: the probe's warns (`topic_rate`, `topic_gap`, `node_missing`), from the
+  structured jsonl `warns[]` or the text `WARN` lines, plus one pulse-top derives
   itself from two processes' windows: `recv_lag`, below.
 
 ## Development
