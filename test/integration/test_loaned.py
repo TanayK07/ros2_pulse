@@ -102,8 +102,11 @@ def test_loans_counted_with_data_sharing():
 
 @needs_fastdds
 def test_fallback_counts_zero_loans():
+    # No data-sharing XML is not enough on Jazzy+: Fast DDS loans any plain type by default
+    # there (can_loan_messages = is_plain()). ROS_DISABLE_LOANED_MESSAGES=1 makes rcl refuse the
+    # loan on every distro, so borrow_loaned_message() takes rclcpp's local-allocation fallback.
     with tempfile.TemporaryDirectory() as d:
-        talker, listener = _run(d, {})
+        talker, listener = _run(d, {"ROS_DISABLE_LOANED_MESSAGES": "1"})
         ph.assert_rate_within(talker, TOPIC, ph.KNOWN_RATE_HZ, field="topic", rel_tol=0.30,
                               note="(fallback publish through plain rcl_publish)")
         assert not _LOAN_RE.search(talker), f"LOAN line without a loan\n{talker}"

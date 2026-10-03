@@ -79,7 +79,11 @@ it can loan (line numbers from the `humble` branches, rclcpp 16.0.x):
   `RCL_RET_ERROR` when the rmw fails, and Fast DDS answers `RMW_RET_UNSUPPORTED` for a publisher
   or subscription that cannot loan (`rmw_fastrtps_shared_cpp/src/rmw_publish.cpp:130`,
   `rmw_take.cpp:492`). Fast DDS sets `can_loan_messages` only for data sharing on a plain
-  (bounded, self-contained) type (`rmw_fastrtps_cpp/src/publisher.cpp:313`).
+  (bounded, self-contained) type on Humble (`rmw_fastrtps_cpp/src/publisher.cpp:313`). From
+  Jazzy on the data-sharing condition is gone and any plain type can loan by default
+  (`can_loan_messages = is_plain()`, jazzy `publisher.cpp:307`), so a Float64 publisher loans
+  with no XML at all. `ROS_DISABLE_LOANED_MESSAGES=1` turns publisher loans off on every
+  distro (jazzy `rcl/src/rcl/publisher.c:478`).
 - `can_loan_messages()` is the rmw's own flag AND `ROS_DISABLE_LOANED_MESSAGES`: on Humble the
   publisher side is on unless that variable is `1` (`rcl/src/rcl/publisher.c:438`), the
   subscription side is off unless it is `0` (`rcl/src/rcl/subscription.c:734`).
