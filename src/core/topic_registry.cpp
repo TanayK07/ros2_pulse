@@ -303,6 +303,53 @@ void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) 
     }
 }
 
+auto TopicRegistry::lookupHandle(const void* handle,
+                                 const std::unordered_map<const void*, sTopicCounter*>& map)
+    -> sTopicCounter* {
+    sTlsSlot& slot = tlsSlotFor(handle);
+    if (slot.id == m_id && slot.key == handle && slot.ctr != kNotASubscription) {
+        return slot.ctr;
+    }
+    std::shared_lock<std::shared_mutex> lock(m_mu);
+    m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
+    auto it = map.find(handle);
+    if (it == map.end()) {
+        return nullptr;
+    }
+    slot = {m_id, handle, it->second};
+    return it->second;
+}
+
+void TopicRegistry::onLoanedPublish(const void* pub_handle, bool counted_by_tracepoint) {
+    if (pub_handle == nullptr) {
+        return;
+    }
+    sTopicCounter* c = lookupHandle(pub_handle, m_pub_to_counter);
+    if (c == nullptr) {
+        return;
+    }
+    c->pub_loaned.fetch_add(1, std::memory_order_relaxed);
+    if (!counted_by_tracepoint) {
+        // Humble: no tracepoint fired inside rcl_publish_loaned_message, so this IS the only
+        // signal for the publish. Count it in the total (and the gap accumulator) here, exactly
+        // as onPublish would have.
+        c->pub_inter.fetch_add(1, std::memory_order_relaxed);
+        if (m_gap_tracking.load(std::memory_order_relaxed)) {
+            noteArrival(c->pub_last_ns, c->pub_max_dt_ns);
+        }
+    }
+}
+
+void TopicRegistry::onLoanedTake(const void* sub_handle) {
+    if (sub_handle == nullptr) {
+        return;
+    }
+    sTopicCounter* c = lookupHandle(sub_handle, m_subhandle_to_counter);
+    if (c != nullptr) {
+        c->recv_loaned.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process) {
     if (callback == nullptr) {
         return;
@@ -378,12 +425,14 @@ auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
     std::unordered_set<const sTopicCounter*> active;
     for (auto& kv : m_by_topic) {
         sTopicCounter* c = kv.second.get();
-        // Exchange all three split buckets first (this also resets them), so filtered topics still
+        // Exchange all split buckets first (this also resets them), so filtered topics still
         // count toward node activity even though they are excluded from the stats output.
         uint64_t p = c->pub_inter.exchange(0, std::memory_order_relaxed);
         uint64_t px = c->pub_intra.exchange(0, std::memory_order_relaxed);
         uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
         uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
+        uint64_t pl = c->pub_loaned.exchange(0, std::memory_order_relaxed);
+        uint64_t rl = c->recv_loaned.exchange(0, std::memory_order_relaxed);
         // Gap accumulators drain here too, for the same reason the counts do: a filtered topic
         // is not REPORTED, but its per-window state must still be reset or it ratchets upward
         // for the process lifetime and the first window after any filter change would report a
@@ -398,7 +447,7 @@ auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
             has_recv_gap = takeGap(c->recv_last_ns, c->recv_max_dt_ns, now_ns, fold_open_gap,
                                    recv_gap_ms);
         }
-        if (p > 0 || px > 0 || ri > 0 || rx > 0) {
+        if (p > 0 || px > 0 || ri > 0 || rx > 0 || pl > 0 || rl > 0) {
             active.insert(c);  // this topic's endpoints saw traffic -> owning node(s) are live
         }
         if (shouldFilter(c->topic)) {
@@ -414,6 +463,10 @@ auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
         s.pub_intra_hz = static_cast<double>(px) / w;
         s.recv_inter_hz = static_cast<double>(ri) / w;
         s.recv_intra_hz = static_cast<double>(rx) / w;
+        s.pub_loaned_count = pl;
+        s.recv_loaned_count = rl;
+        s.pub_loaned_hz = static_cast<double>(pl) / w;
+        s.recv_loaned_hz = static_cast<double>(rl) / w;
         s.recv_endpoint_seen = c->recv_endpoint_seen;
         s.has_pub_max_dt = has_pub_gap;
         s.pub_max_dt_ms = pub_gap_ms;

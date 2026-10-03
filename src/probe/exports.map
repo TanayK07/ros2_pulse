@@ -1,10 +1,17 @@
 /* Dynamic-symbol contract of the LD_PRELOAD probe (KNOWN_ISSUES #14): the ros_trace_*
- * interposers and nothing else. -fvisibility=hidden handles our own code; this script also
- * localizes the vague-linkage std:: template instantiations that libstdc++ headers force to
- * default visibility. Pinned by test/integration/test_symbols.py. */
+ * interposers, plus the two rcl loaned-message wrappers (rclcpp#3153 follow-up: a loan is
+ * invisible at the tracepoint level). Named exactly, never rcl_*: interposing any other rcl
+ * function would be an unreviewed behaviour change in every probed process. ABI caveat: the
+ * rcl wrappers are not a tracing contract, their signatures are stable per distro (identical
+ * humble..rolling today) but not promised across distros, see docs/DESIGN.md.
+ * -fvisibility=hidden handles our own code; this script also localizes the vague-linkage std::
+ * template instantiations that libstdc++ headers force to default visibility. Pinned by
+ * test/integration/test_symbols.py. */
 {
   global:
     ros_trace_*;
+    rcl_publish_loaned_message;
+    rcl_take_loaned_message;
   local:
     *;
 };
