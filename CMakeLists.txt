@@ -82,7 +82,8 @@ else()
   )
   target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_NAME}_core ${CMAKE_DL_LIBS})
   # Preloaded into every process on the robot: export ONLY the ros_trace_* interposer contract
-  # (explicit visibility("default") in interposers.cpp), nothing else may leak into the host's
+  # plus the two rcl loaned-message wrappers (explicit visibility("default") in interposers.cpp,
+  # named in exports.map), nothing else may leak into the host's
   # dynamic symbol namespace (KNOWN_ISSUES #14; pinned by test/integration/test_symbols.py).
   # The core objects are linked in statically, so they get the same treatment.
   target_compile_options(${PROJECT_NAME} PRIVATE -fvisibility=hidden -fvisibility-inlines-hidden)
@@ -125,6 +126,15 @@ else()
       # since jazzy); rclcpp::rclcpp and ${std_msgs_TARGETS} exist on every supported distro.
       target_link_libraries(stats_probe_test_nodes rclcpp::rclcpp ${std_msgs_TARGETS})
       install(TARGETS stats_probe_test_nodes DESTINATION lib/${PROJECT_NAME})
+      # Loaned wrappers under RTLD_LOCAL (test_loaned.py): a host that does not link rcl
+      # dlopen()s a plugin that does, so librcl is invisible to dlsym(RTLD_NEXT).
+      find_package(rcl REQUIRED)
+      add_library(stats_probe_rtld_local_plugin MODULE test/integration/rtld_local_plugin.c)
+      target_link_libraries(stats_probe_rtld_local_plugin rcl::rcl)
+      add_executable(stats_probe_rtld_local_host test/integration/rtld_local_host.c)
+      target_link_libraries(stats_probe_rtld_local_host ${CMAKE_DL_LIBS})
+      install(TARGETS stats_probe_rtld_local_plugin stats_probe_rtld_local_host
+        DESTINATION lib/${PROJECT_NAME})
 
       find_package(ament_cmake_pytest REQUIRED)
       ament_add_pytest_test(integration_probe test/integration/test_probe_integration.py
@@ -149,9 +159,14 @@ else()
       # Output rotation: ROS_TOPIC_STATS_MAX_BYTES bounds the file (KNOWN_ISSUES #11).
       ament_add_pytest_test(integration_rotation test/integration/test_rotation.py
         TIMEOUT 120)
-      # Symbol surface: only the ros_trace_* interposers may be exported (KNOWN_ISSUES #14).
+      # Symbol surface: only the ros_trace_* interposers and the two named rcl loaned-message
+      # wrappers may be exported (KNOWN_ISSUES #14).
       ament_add_pytest_test(integration_symbols test/integration/test_symbols.py
         TIMEOUT 60)
+      # Loaned messages (rclcpp#3153 follow-up): Fast DDS data sharing -> LOAN lines on both
+      # sides and a publish total on Humble; same code without the profile -> zero loans.
+      ament_add_pytest_test(integration_loaned test/integration/test_loaned.py
+        TIMEOUT 120)
       # Publish-side intra counts via rclcpp_intra_publish (jazzy+; humble asserts absence).
       ament_add_pytest_test(integration_intra_publish test/integration/test_intra_publish.py
         TIMEOUT 120)

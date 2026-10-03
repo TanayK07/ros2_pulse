@@ -61,6 +61,7 @@ PUB   /points inter=0.000000 intra=30.000000   # publish-side incl. intra (Iron+
 RECV  /scan inter=20.000000 intra=0.000000 # receive-side, BOTH transports
 RECV  /points inter=0.000000 intra=30.000000   # <- intra-process, invisible to other tools on Humble
 JITTER /scan recv max_dt_ms=21.284             # largest inter-arrival gap (opt-in, see below)
+LOAN  /cloud pub hz=30.000000                  # middleware-loaned share of the publishes (see below)
 NODE  /perception
 NODE  /planner
 WARN  TOPIC /scan hz=1.200000 expected=[18,22]  # only with an expected-rate spec (see below)
@@ -88,6 +89,12 @@ probe works with no tracing session and adds no DDS traffic.
   with a stride-breaking hash. No global lock, no per-message string hashing. Counting costs
   about 0.3 ns/op on a fixed endpoint and 0.6 to 1.2 ns/op alternating across a working set on
   the reference box, two orders of magnitude under a single LTTng-UST tracepoint (about 158 ns).
+- Loaned messages are the one thing a tracepoint cannot tell apart from a copy, so the probe
+  also wraps two rcl functions by name, `rcl_publish_loaned_message` and
+  `rcl_take_loaned_message`. rclcpp calls them only when the middleware really loans, so each
+  successful call is counted as a loan and reported as an additive `LOAN <topic> pub|recv hz=`
+  line (a subset of the `TOPIC` / `RECV` total, absent when zero). See
+  [docs/DESIGN.md](docs/DESIGN.md#loaned-messages-wrapping-rcl-not-a-tracepoint).
 - A background timer snapshots and resets the counts every `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD`
   seconds and appends the rates to `ROS_TOPIC_STATS_OUTPUT_FILE`.
 
@@ -183,6 +190,9 @@ Schema rules, pinned by golden-byte unit tests:
   matching text line would, and `pub_max_dt_ms` / `recv_max_dt_ms` only when gap tracking
   measured that side (`ROS_TOPIC_STATS_JITTER`). A missing gap is unknown, not "perfectly
   smooth".
+- `pub_loaned_hz` / `recv_loaned_hz` appear only when the window saw a middleware loan
+  (`rcl_publish_loaned_message` / `rcl_take_loaned_message` succeeding). They are subsets of
+  `pub_inter_hz` and of the receive total, never added to them.
 - `topics`, `nodes` and `warns` are always present (empty arrays when empty), so `.warns[]`
   needs no null guards.
 - `warns` are structured (`kind` is `topic_rate`, `topic_gap` or `node_missing`, with the
@@ -388,6 +398,19 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
   so Python publishers are counted, but `callback_start` is rclcpp-only and rclpy was never
   instrumented ([ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)), so a Python
   subscriber's deliveries do not appear in `RECV` lines.
+- Loaned-message counts (`LOAN` lines, `pub_loaned_hz` / `recv_loaned_hz`) come from wrapping
+  `rcl_publish_loaned_message` and `rcl_take_loaned_message`, not from a tracepoint. Those
+  signatures are stable within a distro and identical from Humble to Rolling today, but rcl does
+  not promise them across distros the way tracetools promises its tracepoints, so a future
+  distro that changed them would need a probe update. The real function is resolved through
+  `RTLD_NEXT`, or through the already-loaded librcl when a plugin loaded it `RTLD_LOCAL`; if
+  neither works, the probe warns once on stderr and returns `RCL_RET_ERROR` for that call
+  rather than crash. A loan is counted when rcl reports success; how each reader then gets the
+  sample is the middleware's business (Fast DDS data sharing only covers readers on the same
+  host, a remote reader still gets it over the network). On Humble, rclcpp refuses a loaned
+  publish on an intra-process publisher, so loans and intra-process never mix. Before this, a
+  loaned publisher on Humble had no `TOPIC` line at all: Humble's `rcl_publish_loaned_message`
+  fires no tracepoint.
 - File output only; no live network export, by design.
 
 ## Compatibility

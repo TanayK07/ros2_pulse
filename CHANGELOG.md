@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Fixed
+- **A loaned publisher on Humble had no `TOPIC` line.** Humble's `rcl_publish_loaned_message`
+  fires no tracepoint, so a node publishing through `borrow_loaned_message()` with a
+  loan-capable middleware (Fast DDS with data sharing on) was invisible on the publish side. The
+  new loaned-message wrapper (see Added) counts it in the total as well.
 - **pulse-top 0.4.1: pulse-top found no files on a default-format stack (issue #58).** With the
   probe in `.bashrc` and no `ROS_TOPIC_STATS_FORMAT`, every log is in the default text format.
   pulse-top parsed jsonl only, and it redrew the top bar only after a parsed window, so a
@@ -41,6 +45,23 @@ All notable changes to this project are documented here. Format follows
   monitor a Discourse reader said they were switching from; section plus a positioning-table row.
 
 ### Added
+- **Loaned-message counts per topic (rclcpp#3153 follow-up).** A loaned message cannot be told
+  apart from a copy at the tracepoint level (Jazzy+ fires the plain `rcl_publish` tracepoint for
+  a loaned publish, only Rolling traces the loaned take, Humble traces neither), so the probe
+  now also interposes `rcl_publish_loaned_message` and `rcl_take_loaned_message` by name. rclcpp
+  calls them only when the middleware can loan, so a successful call is a real loan. New
+  additive `LOAN <topic> pub|recv hz=` text lines and `pub_loaned_hz` / `recv_loaned_hz` jsonl
+  keys, absent when zero (loan-free logs are byte-identical). They are subsets: `TOPIC` /
+  `pub_inter_hz` stays the total publish rate on every distro, without double counting the
+  Jazzy+ tracepoint, which the probe detects at run time on the first loan. `pulse-check`'s
+  reader, pulse-top and pulse-export read the new fields; pulse-export adds
+  `ros2_pulse_topic_loaned_rate_hertz{side=pub|recv}`. The two rcl symbols join the export map
+  by exact name; unlike tracepoints their signatures are stable per distro, not promised across
+  distros (README Limitations, docs/DESIGN.md). The real functions are found through
+  `RTLD_NEXT`, or through the already-loaded librcl when a plugin loaded it `RTLD_LOCAL`, so the
+  wrappers never turn a working loaned call into an error. Verified end to end on Humble with
+  Fast DDS data sharing (`test/integration/test_loaned.py`), and the same code without the
+  profile counts zero loans.
 - **pulse-top 0.4.0: `pulse-export`, Prometheus / OTLP exporter and a Grafana example.** A
   second entry point in `ros2-pulse-top` that tails the probe's jsonl logs with pulse-top's
   follower and parser and serves `/metrics` in the Prometheus text format on port 9464 from a

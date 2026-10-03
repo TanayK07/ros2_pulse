@@ -65,6 +65,7 @@ records carry no pid). A log with any other name, such as a shared
 | `ros2_pulse_topic_publish_rate_hertz` | gauge | `pid`, `topic`, `path` | Publish rate, `path` is `inter` or `intra` process. |
 | `ros2_pulse_topic_receive_rate_hertz` | gauge | `pid`, `topic`, `path` | Subscription callback rate. |
 | `ros2_pulse_topic_max_gap_seconds` | gauge | `pid`, `topic`, `side` | Largest inter-arrival gap, `side` is `pub` or `recv`. Only with `ROS_TOPIC_STATS_JITTER`. |
+| `ros2_pulse_topic_loaned_rate_hertz` | gauge | `pid`, `topic`, `side` | Middleware-loaned share of the publish (`pub`) or receive (`recv`) rate, a subset of the total. Absent when the window saw no loan. |
 | `ros2_pulse_topic_recv_lag_deficit_ratio` | gauge | `pid`, `topic` | While a `recv_lag` warn is active: `(pub - recv) / pub`. `pid` is the subscriber's. |
 | `ros2_pulse_warn_active` | gauge | `pid`, `kind`, `topic`, `node` | `1` per warn in the latest window: `topic_rate`, `topic_gap`, `node_missing`, `recv_lag`. |
 | `ros2_pulse_node_up` | gauge | `pid`, `node` | `1` if listed in the latest window, `0` if the probe reports it missing. |

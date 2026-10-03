@@ -79,6 +79,10 @@ def _metrics() -> dict[str, Metric]:
         Metric("ros2_pulse_topic_max_gap_seconds", "gauge",
                "Largest inter-arrival gap in the latest window (only with ROS_TOPIC_STATS_JITTER).",
                "s", ("pid", "topic", "side")),
+        Metric("ros2_pulse_topic_loaned_rate_hertz", "gauge",
+               "Middleware-loaned share of the publish or receive rate in the latest window "
+               "(a subset of the total; absent when no loan happened).",
+               "Hz", ("pid", "topic", "side")),
         Metric("ros2_pulse_topic_recv_lag_deficit_ratio", "gauge",
                "Active recv_lag: (pub - recv) / pub while callbacks sit under the publish rate.",
                "1", ("pid", "topic")),
@@ -181,6 +185,7 @@ class Exporter:
         m = _metrics()
         pub, recv = m["ros2_pulse_topic_publish_rate_hertz"], m["ros2_pulse_topic_receive_rate_hertz"]
         gap, warn = m["ros2_pulse_topic_max_gap_seconds"], m["ros2_pulse_warn_active"]
+        loaned = m["ros2_pulse_topic_loaned_rate_hertz"]
         node_up = m["ros2_pulse_node_up"]
         live: dict[str, _Proc] = {}
         for path, pr in self._procs.items():
@@ -205,6 +210,10 @@ class Exporter:
                     v = getattr(t, attr)
                     if v is not None:
                         gap.add(v / 1000.0, pid, t.topic, side)
+                for attr, side in (("pub_loaned_hz", "pub"), ("recv_loaned_hz", "recv")):
+                    v = getattr(t, attr)
+                    if v is not None:
+                        loaned.add(v, pid, t.topic, side)
             for x in w.warns:
                 warn.add(1, pid, x.kind, x.topic, x.node)
             for n in w.nodes:

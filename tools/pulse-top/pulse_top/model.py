@@ -38,6 +38,10 @@ class TopicWindow:
     recv_endpoint_seen: bool = False
     pub_max_dt_ms: float | None = None
     recv_max_dt_ms: float | None = None
+    # Loaned-message subsets of the publish / receive totals (rclcpp#3153 follow-up).
+    # Absent (None) when the window saw no loan, never 0.0.
+    pub_loaned_hz: float | None = None
+    recv_loaned_hz: float | None = None
 
 
 @dataclass
@@ -114,6 +118,8 @@ def parse_jsonl_line(line: str) -> Window | None:
                 recv_endpoint_seen=bool(t.get("recv_endpoint_seen", False)),
                 pub_max_dt_ms=t.get("pub_max_dt_ms"),
                 recv_max_dt_ms=t.get("recv_max_dt_ms"),
+                pub_loaned_hz=t.get("pub_loaned_hz"),
+                recv_loaned_hz=t.get("recv_loaned_hz"),
             )
             for t in rec.get("topics", [])
         ]
@@ -145,7 +151,7 @@ def _kv(fields: list[str]) -> dict[str, str]:
 
 
 # Line kinds of the text format (src/core/window_format.cpp, rate_spec.cpp renderWarnLine).
-_TEXT_KINDS = ("TOPIC", "PUB", "RECV", "JITTER", "NODE", "WARN")
+_TEXT_KINDS = ("TOPIC", "PUB", "RECV", "JITTER", "LOAN", "NODE", "WARN")
 
 
 class _TextBlock:
@@ -186,6 +192,9 @@ class _TextBlock:
         elif kind == "JITTER" and len(parts) == 4 and parts[2] in ("pub", "recv"):
             ms = float(_kv(parts[3:])["max_dt_ms"])
             setattr(self.topic(parts[1]), f"{parts[2]}_max_dt_ms", ms)
+        elif kind == "LOAN" and len(parts) == 4 and parts[2] in ("pub", "recv"):
+            hz = float(_kv(parts[3:])["hz"])
+            setattr(self.topic(parts[1]), f"{parts[2]}_loaned_hz", hz)
         elif kind == "NODE" and len(parts) == 2:
             self.nodes.append(parts[1])
         elif kind == "WARN":
@@ -220,7 +229,7 @@ class LogParser:
     """Streaming parser for ONE probe log, both encodings (issue #58).
 
     The probe's default is text: a "# ts_ns=... window_s=..." header, TOPIC/PUB/RECV/
-    JITTER/NODE/WARN lines, and a blank line closing the block. jsonl is one record
+    JITTER/LOAN/NODE/WARN lines, and a blank line closing the block. jsonl is one record
     per line. Sniffed per line, like the C++ log_reader, so a file the probe was
     restarted into with the other format reads whole. Text maps onto the same Window
     the jsonl twin of that window parses to: a line the probe did not print is an
@@ -311,8 +320,9 @@ class TopicState:
         return 0.0
 
 
-_PUB_FIELDS = ("pub_inter_hz", "pub_intra_hz", "pub_max_dt_ms")
-_RECV_FIELDS = ("recv_inter_hz", "recv_intra_hz", "recv_max_dt_ms", "recv_endpoint_seen")
+_PUB_FIELDS = ("pub_inter_hz", "pub_intra_hz", "pub_max_dt_ms", "pub_loaned_hz")
+_RECV_FIELDS = ("recv_inter_hz", "recv_intra_hz", "recv_max_dt_ms", "recv_endpoint_seen",
+                "recv_loaned_hz")
 
 
 def _merge_sides(into: TopicWindow, tw: TopicWindow) -> None:
