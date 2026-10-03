@@ -39,8 +39,35 @@ Hooked functions:
 - Graph (rare): `rcl_node_init`, `rcl_publisher_init`, `rcl_subscription_init`,
   `rclcpp_subscription_init`, `rclcpp_subscription_callback_added`, build the handle→topic maps.
 - Publish (inter-process): `rcl_publish` → increment the publisher's topic counter.
-- Receive (all transports): `callback_start` → resolve callback→topic, increment inter/intra by the
-  `is_intra_process` flag.
+- Receive, rclcpp (all transports): `callback_start` → resolve callback→topic, increment
+  inter/intra by the `is_intra_process` flag.
+- Receive, every other rcl client (rclpy, rclc, ...): `rmw_take(rmw_sub, msg, source_ts, taken)`
+  → if `taken`, map rmw handle → rcl handle → topic (from `rcl_subscription_init`) and increment
+  inter. A subscription that `rclcpp_subscription_init` named is skipped here, because
+  `callback_start` already counts it.
+
+### Why rmw_take and not rcl_take
+
+`rcl_take`'s tracepoint carries only the message pointer, and `rcl_take()` fires it before checking
+whether anything was taken, so it can neither be attributed to a topic nor trusted as a receive.
+Correlating it with `rmw_take` through a thread-local would work (rcl calls
+`rmw_take_with_info()`, which fires `rmw_take`, then fires `rcl_take` on the same thread), but it
+adds a second interposer per message and still gets every fact from `rmw_take`. So the probe counts
+at `rmw_take` directly. The cost: the hook depends on the rmw emitting it. On Humble,
+rmw_cyclonedds_cpp and rmw_fastrtps_cpp emit it for typed takes only (serialized and loaned takes
+emit nothing); rmw_connextdds emits it only from Jazzy.
+
+### Receive dedupe: one source per subscription
+
+An rclcpp inter-process delivery fires both `rmw_take` and `callback_start(intra=false)`. The probe
+keeps `callback_start` as the rclcpp source, because it also sees the serialized and loaned
+deliveries that emit no `rmw_take` on Humble, and the intra-process ones that never touch rmw. It
+also avoids a subtle overcount: with intra-process on and an external subscriber, rclcpp's
+subscription takes the DDS copy of its own publish and drops it, so `rmw_take` fires for a message
+whose callback ran via intra-process. Ownership is decided per subscription, not per topic, so an
+rclcpp and an rclpy subscription on one topic in one process each count their own deliveries.
+Takes on rmw handles that no `rcl_subscription_init` named (the rmw's internal discovery reader)
+and takes with `taken=false` are ignored.
 
 ## Core (`core/`, no ROS dependency)
 
@@ -50,7 +77,9 @@ Hooked functions:
 - **Hot path**: a thread-local `{registry-id, key, counter*}` cache serves the common repeated-
   endpoint case with a single relaxed atomic increment; a miss takes a `shared_lock` (concurrent),
   and only the first sighting of a callback takes the `unique_lock` to resolve + cache. No global
-  mutex, no per-message string hashing.
+  mutex, no per-message string hashing. The take path shares the cache; its entries are tagged
+  with the registry id plus a subscription-graph epoch, bumped by every subscription init, so a
+  recycled rmw handle or a late rclcpp ownership mark is never served a stale verdict.
 - `Timer`: background thread; every window: snapshot + reset counters, compute Hz, append to file.
 
 ## Key nuances (learned the hard way)

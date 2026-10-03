@@ -28,7 +28,9 @@ struct sTopicCounter {
     bool recv_endpoint_seen{false};
     std::atomic<uint64_t> pub_inter{0};   // inter-process publishes (rcl_publish)
     std::atomic<uint64_t> pub_intra{0};   // intra-process publishes (rclcpp_intra_publish, iron+)
-    std::atomic<uint64_t> recv_inter{0};  // inter-process receives (callback_start, intra=false)
+    // inter-process receives: callback_start(intra=false) for rclcpp subscriptions, a successful
+    // rmw_take for every other rcl client (rclpy, rclc, ...), never both for one subscription
+    std::atomic<uint64_t> recv_inter{0};
     std::atomic<uint64_t> recv_intra{0};  // intra-process receives (callback_start, intra=true)
 
     // --- gap tracking (ROADMAP R5), only written when the registry has it enabled ---
@@ -101,7 +103,13 @@ public:
 
     // --- graph init (low frequency) ---
     void onPublisherInit(const void* pub_handle, const void* node_handle, const char* topic);
-    void onSubscriptionInit(const void* sub_handle, const void* node_handle, const char* topic);
+    /// @p rmw_sub_handle links the rcl subscription to the rmw handle rmw_take reports, which is
+    /// how a take-layer receive is attributed to a topic. nullptr keeps the subscription
+    /// invisible to onTake (the callback path is unaffected).
+    void onSubscriptionInit(const void* sub_handle, const void* node_handle, const char* topic,
+                            const void* rmw_sub_handle = nullptr);
+    /// Also marks @p sub_handle as rclcpp-owned: its receives are counted at callback_start
+    /// (which sees intra-process, serialized and loaned deliveries too), so onTake skips it.
     void onRclcppSubscriptionInit(const void* subscription, const void* sub_handle);
     void onCallbackAdded(const void* callback, const void* subscription);
     void onNodeInit(const void* node_handle, const char* node_name, const char* node_namespace);
@@ -109,7 +117,12 @@ public:
     // --- hot path ---
     void onPublish(const void* pub_handle);       // inter-process publish (rcl_publish)
     void onIntraPublish(const void* pub_handle);  // intra-process publish (iron+ tracepoint)
-    void onCallbackStart(const void* callback, bool is_intra_process);  // any-transport receive
+    void onCallbackStart(const void* callback, bool is_intra_process);  // rclcpp receive
+    /// Take-layer receive (rmw_take tracepoint): counts a successful take (@p taken) into
+    /// recv_inter for every subscription NOT owned by rclcpp. This is what makes rclpy and any
+    /// other rcl-based client visible; rclcpp subscriptions stay on callback_start so a message
+    /// is never counted twice. Failed takes (taken=false) return before any lookup.
+    void onTake(const void* rmw_sub_handle, bool taken);
 
     /// Enable per-endpoint inter-arrival gap tracking (ROADMAP R5). Off by default: it costs one
     /// clock read per message (~21 ns, vs ~0.3 ns for the counting path alone), so it is opt-in
@@ -179,6 +192,14 @@ private:
     auto resolveCallback(const void* callback) -> sTopicCounter*;
     auto counterForTopic(const std::string& topic) -> sTopicCounter*;
 
+    // Caller must hold the lock (shared suffices). rmw handle -> counter for the take path:
+    // nullptr when the handle is unknown, kTakeOwnedByRclcpp's sentinel for an rclcpp-owned
+    // subscription, otherwise the topic counter.
+    auto resolveTake(const void* rmw_sub_handle) const -> sTopicCounter*;
+    // Thread-local cache tag for take-path entries: registry id plus the subscription-graph
+    // epoch, so any (re)init of a subscription invalidates every thread's cached take verdicts.
+    auto takeTag() const -> uint64_t;
+
     // Shared hot path for both publish transports: TLS-cache hit or shared-lock lookup on
     // m_pub_to_counter, then bump the inter or intra publish bucket.
     void publishCount(const void* pub_handle, bool is_intra_process);
@@ -208,6 +229,14 @@ private:
     std::unordered_map<const void*, const void*> m_sub_to_subhandle;          // rclcpp sub → rcl sub_handle
     std::unordered_map<const void*, const void*> m_cb_to_sub;                 // callback → rclcpp sub
     std::unordered_map<const void*, sTopicCounter*> m_cb_to_counter;          // resolved cache
+
+    // take-layer receive resolution (rmw_take carries only the rmw handle)
+    std::unordered_map<const void*, const void*> m_rmwsub_to_subhandle;  // rmw sub -> rcl sub
+    std::unordered_map<const void*, bool> m_subhandle_rclcpp;            // rcl sub -> rclcpp-owned
+    // Bumped (under the write lock) by every subscription init / ownership change; part of the
+    // take-path TLS tag, so a recycled rmw handle or a late ownership mark is never served a
+    // stale cached verdict. Read relaxed once per take.
+    std::atomic<uint32_t> m_sub_epoch{0};
 
     // Count of hot-path escalations to the exclusive lock (see writeLockResolutions()).
     std::atomic<uint64_t> m_write_lock_resolutions{0};

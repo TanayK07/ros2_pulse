@@ -98,13 +98,14 @@ tool meets all five. Rundown:
   `/diagnostics` matter more than the observer cost. `pulse_bridge` narrows the integration gap by
   publishing pulse windows on `/statistics`.
 
-### rclpy (Python nodes): a real limitation
+### rclpy (Python nodes)
 - Publish side **works** for Python nodes: `rcl_publish` fires in the C `rcl` layer under rclpy.
-- Receive side is **invisible**: `callback_start` is emitted by rclcpp only, and rclpy was never
-  instrumented at the client-library level
-  ([ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)). A Python subscriber's
-  delivery rate does not appear in `RECV` lines. Document this wherever receive-side claims are
-  made.
+- Receive side **works through the rmw**: rclpy was never instrumented at the client-library level
+  ([ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)), and `callback_start` is
+  rclcpp-only, so the probe counts a Python subscriber's successful takes at the `rmw_take`
+  tracepoint instead (rmw handle mapped to the topic through `rcl_subscription_init`). Caveats: it
+  needs an rmw that emits `rmw_take` (Cyclone DDS and Fast DDS on every distro, Connext from
+  Jazzy), and on Humble serialized and loaned takes emit nothing.
 
 ### eBPF / uprobe (bpftrace on the tracetools functions)
 - **What.** Attach uprobes to `ros_trace_rcl_publish` / `ros_trace_callback_start` and aggregate in

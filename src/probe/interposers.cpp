@@ -13,6 +13,14 @@
 // Hooking the tracetools layer (instead of rmw_*) is what lets us see INTRA-process traffic:
 // callback_start() fires for every subscription callback regardless of transport, carrying an
 // is_intra_process flag.
+//
+// callback_start is rclcpp-only. Every other rcl client (rclpy, rclc, ...) is counted one layer
+// down, at rmw_take: rcl_take() calls rmw_take_with_info(), and the rmw implementation emits
+// rmw_take(rmw_subscription_handle, message, source_timestamp, taken). rcl_take's own tracepoint
+// carries only the message pointer and fires even when nothing was taken, so it can be neither
+// attributed to a topic nor trusted as a receive. rcl_subscription_init links the rmw handle to
+// the topic, rclcpp_subscription_init marks a subscription as rclcpp's (counted at
+// callback_start instead), so one delivery is never counted twice.
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -445,7 +453,7 @@ auto realFn(const char* name) -> Fn {
 }  // namespace
 
 // The library is compiled with -fvisibility=hidden (KNOWN_ISSUES #14) so nothing leaks into
-// the dynamic symbol table of every preloaded process; the seven interposers below are the
+// the dynamic symbol table of every preloaded process; the nine interposers below are the
 // ONLY contract and are re-exported explicitly. test/integration/test_symbols.py pins this.
 #define ROS2_PULSE_EXPORT __attribute__((visibility("default")))
 
@@ -474,7 +482,8 @@ ROS2_PULSE_EXPORT void ros_trace_rcl_publisher_init(const void* pub_handle, cons
 ROS2_PULSE_EXPORT void ros_trace_rcl_subscription_init(const void* sub_handle, const void* node_handle,
                                      const void* rmw_sub, const char* topic, size_t depth) {
     ProbeRuntime::instance().ensureStarted();
-    ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, node_handle, topic);
+    ProbeRuntime::instance().registry().onSubscriptionInit(sub_handle, node_handle, topic,
+                                                           rmw_sub);
     static auto fn = realFn<void (*)(const void*, const void*, const void*, const char*, size_t)>(
         "ros_trace_rcl_subscription_init");
     if (fn) fn(sub_handle, node_handle, rmw_sub, topic, depth);
@@ -510,6 +519,18 @@ ROS2_PULSE_EXPORT void ros_trace_rclcpp_intra_publish(const void* publisher_hand
     static auto fn =
         realFn<void (*)(const void*, const void*)>("ros_trace_rclcpp_intra_publish");
     if (fn) fn(publisher_handle, message);
+}
+
+// Take-layer receive for every rcl client. Emitted by rmw_cyclonedds_cpp and rmw_fastrtps_*_cpp
+// on humble (typed takes; serialized and loaned takes emit nothing there), and by rmw_connextdds
+// and rmw_zenoh_cpp on newer distros. Fires on every take ATTEMPT; the registry returns on
+// taken=false before any lookup, and ignores rclcpp-owned subscriptions (see the file header).
+ROS2_PULSE_EXPORT void ros_trace_rmw_take(const void* rmw_subscription_handle, const void* message,
+                                          int64_t source_timestamp, const bool taken) {
+    ProbeRuntime::instance().registry().onTake(rmw_subscription_handle, taken);
+    static auto fn =
+        realFn<void (*)(const void*, const void*, int64_t, bool)>("ros_trace_rmw_take");
+    if (fn) fn(rmw_subscription_handle, message, source_timestamp, taken);
 }
 
 ROS2_PULSE_EXPORT void ros_trace_callback_start(const void* callback, bool is_intra_process) {
