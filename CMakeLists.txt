@@ -146,6 +146,10 @@ else()
       # and pulse-top's model derives the warn from the two files; a healthy pair never warns.
       ament_add_pytest_test(integration_recv_lag test/integration/test_recv_lag.py
         TIMEOUT 90)
+      # Take-layer receive (rmw_take): rclpy receives counted exactly, rclcpp not doubled, a
+      # publisher-less rclpy subscription reports nothing.
+      ament_add_pytest_test(integration_rclpy_receive test/integration/test_rclpy_receive.py
+        TIMEOUT 120)
       # Output rotation: ROS_TOPIC_STATS_MAX_BYTES bounds the file (KNOWN_ISSUES #11).
       ament_add_pytest_test(integration_rotation test/integration/test_rotation.py
         TIMEOUT 120)

@@ -23,6 +23,16 @@ std::atomic<uint64_t> g_next_registry_id{1};
 sTopicCounter g_not_a_subscription;
 sTopicCounter* const kNotASubscription = &g_not_a_subscription;
 
+// Take-path sentinel: the rmw handle belongs to an rclcpp subscription, whose receives are
+// counted at callback_start, so the take is deliberately ignored (no double count). Same
+// identity-only contract as kNotASubscription, never dereferenced.
+sTopicCounter g_take_owned_by_rclcpp;
+sTopicCounter* const kTakeOwnedByRclcpp = &g_take_owned_by_rclcpp;
+// Take-path sentinel: an rmw handle no rcl_subscription_init ever named (the rmw's internal
+// discovery reader). Cached so repeat takes skip the lock; never dereferenced.
+sTopicCounter g_take_unknown_handle;
+sTopicCounter* const kTakeUnknownHandle = &g_take_unknown_handle;
+
 // Direct-mapped thread-local hot-path cache, shared by onPublish and onCallbackStart (publisher
 // handles and callback objects are distinct live allocations, so the key domains cannot
 // collide). A single-entry cache thrashed on the REALISTIC pattern, one thread alternating
@@ -179,7 +189,7 @@ void TopicRegistry::onPublisherInit(const void* pub_handle, const void* node_han
 }
 
 void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_handle,
-                                       const char* topic) {
+                                       const char* topic, const void* rmw_sub_handle) {
     if (sub_handle == nullptr || topic == nullptr) {
         return;
     }
@@ -187,6 +197,14 @@ void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_
     auto* counter = counterForTopic(topic);
     m_subhandle_to_counter[sub_handle] = counter;
     linkNodeCounter(node_handle, counter);
+    // A fresh rcl subscription: ownership is unknown until rclcpp_subscription_init (rclcpp
+    // fires it right after rcl init, in the Subscription ctor, before any executor can take).
+    // Resetting here also covers a recycled rcl handle that used to be rclcpp's.
+    m_subhandle_rclcpp[sub_handle] = false;
+    if (rmw_sub_handle != nullptr) {
+        m_rmwsub_to_subhandle[rmw_sub_handle] = sub_handle;
+    }
+    m_sub_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TopicRegistry::onRclcppSubscriptionInit(const void* subscription, const void* sub_handle) {
@@ -195,6 +213,8 @@ void TopicRegistry::onRclcppSubscriptionInit(const void* subscription, const voi
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
     m_sub_to_subhandle[subscription] = sub_handle;
+    m_subhandle_rclcpp[sub_handle] = true;
+    m_sub_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TopicRegistry::onCallbackAdded(const void* callback, const void* subscription) {
@@ -357,6 +377,73 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     } else {
         ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
     }
+    if (m_gap_tracking.load(std::memory_order_relaxed)) {
+        noteArrival(ctr->recv_last_ns, ctr->recv_max_dt_ns);
+    }
+}
+
+auto TopicRegistry::takeTag() const -> uint64_t {
+    // m_id >= 1 occupies the high word, so a take tag never equals a plain m_id tag (and the key
+    // domains are disjoint anyway: rmw handles are distinct live allocations from rcl publisher
+    // handles and rclcpp callback objects).
+    return (m_id << 32) | m_sub_epoch.load(std::memory_order_relaxed);
+}
+
+auto TopicRegistry::resolveTake(const void* rmw_sub_handle) const -> sTopicCounter* {
+    auto r = m_rmwsub_to_subhandle.find(rmw_sub_handle);
+    if (r == m_rmwsub_to_subhandle.end()) {
+        return nullptr;  // never initialized through rcl, nothing to attribute it to
+    }
+    auto own = m_subhandle_rclcpp.find(r->second);
+    if (own != m_subhandle_rclcpp.end() && own->second) {
+        return kTakeOwnedByRclcpp;
+    }
+    auto c = m_subhandle_to_counter.find(r->second);
+    return c == m_subhandle_to_counter.end() ? nullptr : c->second;
+}
+
+void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
+    // rmw_take fires for every take ATTEMPT (both Humble DDS rmws emit it before the caller
+    // looks at the result); only a taken message is a receive. Cheapest possible reject.
+    if (!taken || rmw_sub_handle == nullptr) {
+        return;
+    }
+    // Tag read BEFORE the lookup: an init racing with this take bumps the epoch, so whatever we
+    // cache below carries the old tag and is re-resolved on the next take (conservative).
+    const uint64_t tag = takeTag();
+    sTlsSlot& slot = tlsSlotFor(rmw_sub_handle);
+    sTopicCounter* ctr = nullptr;
+    if (slot.id == tag && slot.key == rmw_sub_handle) {
+        ctr = slot.ctr;
+    } else {
+        bool prove_endpoint = false;
+        {
+            std::shared_lock<std::shared_mutex> lock(m_mu);
+            m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
+            ctr = resolveTake(rmw_sub_handle);
+            prove_endpoint = ctr != nullptr && ctr != kTakeOwnedByRclcpp &&
+                             !ctr->recv_endpoint_seen;
+        }
+        if (ctr == nullptr) {
+            // Unknown handle: the rmw's own internal readers (ros_discovery_info) take through
+            // the same tracepoint but never pass rcl_subscription_init. Cache the miss so that
+            // steady discovery traffic stays off the lock too; the epoch in the tag re-resolves
+            // it if this address is later initialized as a real subscription.
+            ctr = kTakeUnknownHandle;
+        }
+        if (prove_endpoint) {
+            // First delivered take for this topic: mark it a proven receive endpoint so a later
+            // stall reads RECV 0.0 (KNOWN_ISSUES #12). recv_endpoint_seen is a plain bool written
+            // only under the exclusive lock; once per topic, so this escalation is cold.
+            std::unique_lock<std::shared_mutex> lock(m_mu);
+            ctr->recv_endpoint_seen = true;
+        }
+        slot = {tag, rmw_sub_handle, ctr};
+    }
+    if (ctr == kTakeOwnedByRclcpp || ctr == kTakeUnknownHandle) {
+        return;  // rclcpp subscription (callback_start counts it) or rmw-internal reader
+    }
+    ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
     if (m_gap_tracking.load(std::memory_order_relaxed)) {
         noteArrival(ctr->recv_last_ns, ctr->recv_max_dt_ns);
     }

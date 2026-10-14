@@ -384,10 +384,12 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
   reads as quiet. Re-initialising a node name does not duplicate its entry.
 - Requires tracing instrumentation compiled into the ROS build (the default on Humble and Isaac
   debs; checkable at runtime with `ros_trace_compile_status()`).
-- Python (rclpy) nodes are counted on the publish side only. `rcl_publish` fires in the C layer,
-  so Python publishers are counted, but `callback_start` is rclcpp-only and rclpy was never
-  instrumented ([ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)), so a Python
-  subscriber's deliveries do not appear in `RECV` lines.
+- Python (rclpy) and other non-rclcpp nodes are counted on both sides, through the C layers:
+  `rcl_publish` for publishes and the rmw's `rmw_take` tracepoint for receives (rclpy itself was
+  never instrumented, [ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)). The
+  receive side depends on the rmw emitting `rmw_take`: Cyclone DDS and Fast DDS do on every distro,
+  Connext only from Jazzy. On Humble, serialized and loaned takes (for example rosbag2 recording)
+  emit no tracepoint, so they are not counted for non-rclcpp subscribers.
 - File output only; no live network export, by design.
 
 ## Compatibility

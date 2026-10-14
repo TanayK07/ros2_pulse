@@ -5,6 +5,18 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- **Receive rates for rclpy and every other non-rclcpp rcl client.** The probe now also hooks the
+  `rmw_take` tracepoint, which carries the rmw subscription handle and a `taken` flag, and counts
+  a successful take into the topic's `RECV inter` rate. The handle maps to the topic through
+  `rcl_subscription_init`, which was already hooked. `rcl_take` is not used: its tracepoint carries
+  only the message pointer and fires even when nothing was taken. rclcpp subscriptions stay on
+  `callback_start`, decided per subscription through `rclcpp_subscription_init`, so an rclcpp
+  delivery is never counted twice, and the intra-process plus external subscriber case (rclcpp
+  takes and drops its own DDS copy) does not inflate the rate. Takes on rmw-internal readers and
+  empty takes are ignored. Needs an rmw that emits `rmw_take`: Cyclone DDS and Fast DDS on every
+  distro, Connext from Jazzy. On Humble, serialized and loaned takes emit nothing.
+
 ### Fixed
 - **pulse-top 0.4.1: pulse-top found no files on a default-format stack (issue #58).** With the
   probe in `.bashrc` and no `ROS_TOPIC_STATS_FORMAT`, every log is in the default text format.
