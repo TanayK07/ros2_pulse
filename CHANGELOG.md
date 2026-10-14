@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-14
+
+Receive rates for rclpy nodes, loaned-message counts, and the tracetools version in the banner. pulse-top 0.5.0 reads the loan fields.
+
 ### Added
 - **Receive rates for rclpy and every other non-rclcpp rcl client.** The probe now also hooks the
   `rmw_take` tracepoint, which carries the rmw subscription handle and a `taken` flag, and counts
@@ -22,47 +26,6 @@ All notable changes to this project are documented here. Format follows
   tracetools, the interposer never sees it). A major other than the ones CI runs (4.x Humble,
   8.x Jazzy to Lyrical, 9.x Rolling) prints a one-line warning; counting still proceeds, since
   upstream deprecates tracepoint arguments rather than removing them.
-
-### Fixed
-- **A loaned publisher on Humble had no `TOPIC` line.** Humble's `rcl_publish_loaned_message`
-  fires no tracepoint, so a node publishing through `borrow_loaned_message()` with a
-  loan-capable middleware (Fast DDS with data sharing on) was invisible on the publish side. The
-  new loaned-message wrapper (see Added) counts it in the total as well.
-- **pulse-top 0.4.1: pulse-top found no files on a default-format stack (issue #58).** With the
-  probe in `.bashrc` and no `ROS_TOPIC_STATS_FORMAT`, every log is in the default text format.
-  pulse-top parsed jsonl only, and it redrew the top bar only after a parsed window, so a
-  directory of healthy text logs read "0 file(s)" forever even though the glob had matched them
-  all. pulse-top and pulse-export now read the text format as well, sniffed per line like the C++
-  `log_reader`, and a text window maps to the same `Window` its jsonl twin parses to (a line the
-  probe did not print stays an absent field, never 0). The top bar is redrawn every tick, puts the
-  file count before the path, and a notice line says why the table is empty: no file matches yet,
-  N files found and waiting for the first window, or which files are not probe output. The
-  follower now keeps blank lines, which close a text window, so no window arrives one period late.
-  pulse-export's `lines_skipped_total` counts only lines that are in neither format.
-- **pulse-top 0.4.1: `--theme light|dark|terminal` and `PULSE_TOP_THEME` (issue #59).** The colours
-  were hard-coded for a dark background, unreadable on the white terminals used outdoors. `light`
-  is black on white with warn colours picked to read on white (amber is brown, not yellow);
-  `terminal` paints nothing and uses the terminal's own background and ANSI palette (Textual's
-  `ansi-dark` theme); `dark` stays the default. The stylesheet now takes every colour from the
-  Textual theme. The active tab's label was invisible while the tab bar had focus (purple on
-  purple) and is readable again. Textual floor raised to 8.2.7 for the ANSI theme.
-- **A publisher frozen by SIGSTOP read as a ~0 ms gap after it resumed.** The flush timer
-  advanced its deadline one interval per fire, so when the whole probed process was frozen (the
-  flush thread with it) it replayed every missed tick back to back on SIGCONT: one window
-  carrying the stall, then a burst of ~0-length windows with a near-0 `pub_max_dt_ms` /
-  `recv_max_dt_ms` and nonsense Hz (50,000 Hz in one run). pulse-top and pulse-export keep the
-  latest window, so a 5 s camera freeze showed as a 0.03 ms gap and the `topic_gap` warn was
-  buried. The timer now re-phases instead of replaying: after a stall there is exactly one long
-  window holding the full gap (5021 ms on the same repro), then normal cadence, and no window is
-  ever shorter than half a period. Same fix on the receive side (a frozen subscriber process).
-  The gap accounting itself was already right and is unchanged; the hot path is untouched.
-  Regression test `Timer.NoCatchUpBurstAfterStall`.
-
-### Changed
-- docs/ALTERNATIVES.md compares against NVIDIA's `greenwave_monitor`, the packaged subscriber-based
-  monitor a Discourse reader said they were switching from; section plus a positioning-table row.
-
-### Added
 - **Loaned-message counts per topic (rclcpp#3153 follow-up).** A loaned message cannot be told
   apart from a copy at the tracepoint level (Jazzy+ fires the plain `rcl_publish` tracepoint for
   a loaned publish, only Rolling traces the loaned take, Humble traces neither), so the probe
@@ -118,6 +81,45 @@ All notable changes to this project are documented here. Format follows
   CSV by `bench/plot_observer_effect.py`. `site/build.py` now rewrites links relative to the
   page's own directory (pages under `blog/`), and folds `../` in link targets, so a results
   page linking `../../bench/RESULTS.md` lands on the benchmarks page instead of GitHub.
+
+### Fixed
+- **A loaned publisher on Humble had no `TOPIC` line.** Humble's `rcl_publish_loaned_message`
+  fires no tracepoint, so a node publishing through `borrow_loaned_message()` with a
+  loan-capable middleware (Fast DDS with data sharing on) was invisible on the publish side. The
+  new loaned-message wrapper (see Added) counts it in the total as well.
+- **pulse-top 0.4.1: pulse-top found no files on a default-format stack (issue #58).** With the
+  probe in `.bashrc` and no `ROS_TOPIC_STATS_FORMAT`, every log is in the default text format.
+  pulse-top parsed jsonl only, and it redrew the top bar only after a parsed window, so a
+  directory of healthy text logs read "0 file(s)" forever even though the glob had matched them
+  all. pulse-top and pulse-export now read the text format as well, sniffed per line like the C++
+  `log_reader`, and a text window maps to the same `Window` its jsonl twin parses to (a line the
+  probe did not print stays an absent field, never 0). The top bar is redrawn every tick, puts the
+  file count before the path, and a notice line says why the table is empty: no file matches yet,
+  N files found and waiting for the first window, or which files are not probe output. The
+  follower now keeps blank lines, which close a text window, so no window arrives one period late.
+  pulse-export's `lines_skipped_total` counts only lines that are in neither format.
+- **pulse-top 0.4.1: `--theme light|dark|terminal` and `PULSE_TOP_THEME` (issue #59).** The colours
+  were hard-coded for a dark background, unreadable on the white terminals used outdoors. `light`
+  is black on white with warn colours picked to read on white (amber is brown, not yellow);
+  `terminal` paints nothing and uses the terminal's own background and ANSI palette (Textual's
+  `ansi-dark` theme); `dark` stays the default. The stylesheet now takes every colour from the
+  Textual theme. The active tab's label was invisible while the tab bar had focus (purple on
+  purple) and is readable again. Textual floor raised to 8.2.7 for the ANSI theme.
+- **A publisher frozen by SIGSTOP read as a ~0 ms gap after it resumed.** The flush timer
+  advanced its deadline one interval per fire, so when the whole probed process was frozen (the
+  flush thread with it) it replayed every missed tick back to back on SIGCONT: one window
+  carrying the stall, then a burst of ~0-length windows with a near-0 `pub_max_dt_ms` /
+  `recv_max_dt_ms` and nonsense Hz (50,000 Hz in one run). pulse-top and pulse-export keep the
+  latest window, so a 5 s camera freeze showed as a 0.03 ms gap and the `topic_gap` warn was
+  buried. The timer now re-phases instead of replaying: after a stall there is exactly one long
+  window holding the full gap (5021 ms on the same repro), then normal cadence, and no window is
+  ever shorter than half a period. Same fix on the receive side (a frozen subscriber process).
+  The gap accounting itself was already right and is unchanged; the hot path is untouched.
+  Regression test `Timer.NoCatchUpBurstAfterStall`.
+
+### Changed
+- docs/ALTERNATIVES.md compares against NVIDIA's `greenwave_monitor`, the packaged subscriber-based
+  monitor a Discourse reader said they were switching from; section plus a positioning-table row.
 
 ## [0.5.0] - 2026-09-09
 
