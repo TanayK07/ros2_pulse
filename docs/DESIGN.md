@@ -48,7 +48,6 @@ Hooked functions:
 - Loaned messages: `rcl_publish_loaned_message` and `rcl_take_loaned_message`, real rcl
   functions rather than tracepoints, see below.
 
-
 ### Why rmw_take and not rcl_take
 
 `rcl_take`'s tracepoint carries only the message pointer, and `rcl_take()` fires it before checking
