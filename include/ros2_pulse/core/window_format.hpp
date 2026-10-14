@@ -20,7 +20,9 @@ namespace ros2_pulse::core {
 /// @code
 /// # ts_ns=<ts_ns> window_s=<window_s to 3dp>
 /// TOPIC <topic> <pub_inter_hz to 6dp>          // when TopicRegistry::shouldEmitTopic(stat, emit_idle)
+/// LOAN <topic> pub hz=<pub_loaned_hz to 6dp>  // when pub_loaned_count>0 (subset of TOPIC)
 /// RECV <topic> inter=<recv_inter_hz to 6dp> intra=<recv_intra_hz to 6dp>  // when any recv count>0
+/// LOAN <topic> recv hz=<recv_loaned_hz to 6dp> // when recv_loaned_count>0 (subset of RECV)
 /// NODE <node>
 /// WARN ...                                     // one line per entry of @p warnings, verbatim
 /// <blank line>
@@ -48,7 +50,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 /// {"ts_ns":"<int64>","window_s":W.WWW,
 ///  "topics":[{"topic":"/x","pub_inter_hz":N,"pub_intra_hz":N,
 ///             "recv_inter_hz":N,"recv_intra_hz":N,"recv_endpoint_seen":true,
-///             "pub_max_dt_ms":N,"recv_max_dt_ms":N}, ...],
+///             "pub_max_dt_ms":N,"recv_max_dt_ms":N,"pub_loaned_hz":N,"recv_loaned_hz":N}, ...],
 ///  "nodes":["/a", ...],
 ///  "warns":[{"kind":"topic_rate","topic":"/x","hz":N,"min_hz":N,"max_hz":N},
 ///           {"kind":"topic_gap","topic":"/x","max_dt_ms":N,"max_gap_ms":N},

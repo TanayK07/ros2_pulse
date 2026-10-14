@@ -76,6 +76,16 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += sprintfStr("%.3f", s.pub_max_dt_ms);
             out += '\n';
         }
+        // Loaned subset of the publish total (rclcpp#3153 follow-up), a NEW additive line kind
+        // for the same '$'-anchor reason as JITTER, absent when no loan happened this window so
+        // every loan-free log stays byte-identical.
+        if (s.pub_loaned_count > 0) {
+            out += "LOAN ";
+            out += s.topic;
+            out += " pub hz=";
+            out += sprintfStr("%.6f", s.pub_loaned_hz);
+            out += '\n';
+        }
         // Additive receive-side line incl. intra-process, independent of the publish counter so
         // a same-process pub+sub is not double-counted. Proven receive endpoints emit an
         // explicit zero line when idle, stall visibility (KNOWN_ISSUES #12).
@@ -93,6 +103,13 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
             out += s.topic;
             out += " recv max_dt_ms=";
             out += sprintfStr("%.3f", s.recv_max_dt_ms);
+            out += '\n';
+        }
+        if (s.recv_loaned_count > 0) {
+            out += "LOAN ";
+            out += s.topic;
+            out += " recv hz=";
+            out += sprintfStr("%.6f", s.recv_loaned_hz);
             out += '\n';
         }
     }
@@ -179,7 +196,8 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
         const bool pub_side =
             TopicRegistry::shouldEmitTopic(s, emit_idle) || s.pub_intra_count > 0;
         const bool recv_side = TopicRegistry::shouldEmitRecv(s);
-        if (!pub_side && !recv_side && !s.has_pub_max_dt && !s.has_recv_max_dt) {
+        const bool loaned = s.pub_loaned_count > 0 || s.recv_loaned_count > 0;
+        if (!pub_side && !recv_side && !s.has_pub_max_dt && !s.has_recv_max_dt && !loaned) {
             continue;
         }
         if (!first) {
@@ -220,6 +238,16 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
         if (s.has_recv_max_dt) {
             out += ",\"recv_max_dt_ms\":";
             out += sprintfStr("%.3f", s.recv_max_dt_ms);
+        }
+        // Loaned subsets (rclcpp#3153 follow-up): absent when zero, like the text LOAN lines.
+        // A subset of pub_inter_hz / the recv total, never added to them.
+        if (s.pub_loaned_count > 0) {
+            out += ",\"pub_loaned_hz\":";
+            out += sprintfStr("%.6f", s.pub_loaned_hz);
+        }
+        if (s.recv_loaned_count > 0) {
+            out += ",\"recv_loaned_hz\":";
+            out += sprintfStr("%.6f", s.recv_loaned_hz);
         }
         out += '}';
     }

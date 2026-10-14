@@ -79,6 +79,8 @@ ros2_pulse_topic_receive_rate_hertz{pid="5151",topic="/scan",path="intra"} 0
 # HELP ros2_pulse_topic_max_gap_seconds Largest inter-arrival gap in the latest window (only with ROS_TOPIC_STATS_JITTER).
 # TYPE ros2_pulse_topic_max_gap_seconds gauge
 ros2_pulse_topic_max_gap_seconds{pid="4242",topic="/scan",side="pub"} 0.8124
+# HELP ros2_pulse_topic_loaned_rate_hertz Middleware-loaned share of the publish or receive rate in the latest window (a subset of the total; absent when no loan happened).
+# TYPE ros2_pulse_topic_loaned_rate_hertz gauge
 # HELP ros2_pulse_topic_recv_lag_deficit_ratio Active recv_lag: (pub - recv) / pub while callbacks sit under the publish rate.
 # TYPE ros2_pulse_topic_recv_lag_deficit_ratio gauge
 # HELP ros2_pulse_warn_active 1 for each warn in the process's latest window (topic_rate, topic_gap, node_missing, recv_lag).

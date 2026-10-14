@@ -275,6 +275,10 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
             } else if (key == "recv_max_dt_ms") {
                 if (!parseJsonNumber(c, tmp.recv_max_dt_ms)) return false;
                 tmp.has_recv_max_dt = true;
+            } else if (key == "pub_loaned_hz") {
+                if (!parseJsonNumber(c, tmp.pub_loaned_hz)) return false;
+            } else if (key == "recv_loaned_hz") {
+                if (!parseJsonNumber(c, tmp.recv_loaned_hz)) return false;
             } else if (!skipJsonValue(c)) {
                 return false;
             }
@@ -471,6 +475,10 @@ auto parseLog(const std::string& text) -> std::vector<sLogWindow> {
             auto& s = statFor(*cur, name);
             s.recv_max_dt_ms = a;
             s.has_recv_max_dt = true;
+        } else if (std::sscanf(line.c_str(), "LOAN %511s pub hz=%lf", name, &a) == 2) {
+            statFor(*cur, name).pub_loaned_hz = a;
+        } else if (std::sscanf(line.c_str(), "LOAN %511s recv hz=%lf", name, &a) == 2) {
+            statFor(*cur, name).recv_loaned_hz = a;
         } else if (std::sscanf(line.c_str(), "NODE %511s", name) == 1) {
             cur->nodes.emplace_back(name);
         }

@@ -10,6 +10,12 @@
 //                FIXED-SIZE (self-contained) type, so CycloneDDS+iceoryx is allowed to carry
 //                it over shared memory; String would silently fall back to loopback UDP and
 //                the RMW-matrix SHM leg (test/rmw/) would prove nothing.
+//   loan_talker / loan_listener : /chatter_loan, std_msgs/UInt64 at 50 Hz. The talker publishes
+//                through borrow_loaned_message() + publish(std::move(loan)); the listener uses a
+//                const-ref callback (the only loan-safe kind). Whether the rmw really loans
+//                depends on the environment: Fast DDS with data sharing on (XML profile) does,
+//                anything else falls back to rclcpp's local allocation and plain rcl_publish.
+//                                                                -> loaned counting
 //   intra      : single process, intra-process comms ON, self pub+sub on /intra_topic at 50 Hz
 //                                                                -> intra-process receive
 //   exit_storm : detached threads hammer the ros_trace_* interposers while main() returns
@@ -126,6 +132,35 @@ private:
     size_t m_got = 0;
 };
 
+class LoanTalker : public rclcpp::Node {
+public:
+    explicit LoanTalker(const rclcpp::NodeOptions& o) : Node("poc_loan_talker", o) {
+        m_pub = create_publisher<std_msgs::msg::UInt64>("chatter_loan", qos());
+        m_timer = create_wall_timer(20ms, [this]() {
+            auto loan = m_pub->borrow_loaned_message();
+            loan.get().data = m_n++;
+            m_pub->publish(std::move(loan));
+        });
+    }
+
+private:
+    rclcpp::Publisher<std_msgs::msg::UInt64>::SharedPtr m_pub;
+    rclcpp::TimerBase::SharedPtr m_timer;
+    uint64_t m_n = 0;
+};
+
+class LoanListener : public rclcpp::Node {
+public:
+    explicit LoanListener(const rclcpp::NodeOptions& o) : Node("poc_loan_listener", o) {
+        m_sub = create_subscription<std_msgs::msg::UInt64>(
+            "chatter_loan", qos(), [this](const std_msgs::msg::UInt64&) { ++m_got; });
+    }
+
+private:
+    rclcpp::Subscription<std_msgs::msg::UInt64>::SharedPtr m_sub;
+    size_t m_got = 0;
+};
+
 class Listener : public rclcpp::Node {
 public:
     explicit Listener(const rclcpp::NodeOptions& o) : Node("poc_listener", o) {
@@ -232,6 +267,10 @@ int main(int argc, char** argv) {
         node = std::make_shared<FixedTalker>(plain);
     } else if (mode == "listener_fixed") {
         node = std::make_shared<FixedListener>(plain);
+    } else if (mode == "loan_talker") {
+        node = std::make_shared<LoanTalker>(plain);
+    } else if (mode == "loan_listener") {
+        node = std::make_shared<LoanListener>(plain);
     } else if (mode == "intra") {
         node = std::make_shared<IntraNode>(ipc);
     } else if (mode == "exit_storm") {
