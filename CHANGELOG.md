@@ -16,6 +16,12 @@ All notable changes to this project are documented here. Format follows
   takes and drops its own DDS copy) does not inflate the rate. Takes on rmw-internal readers and
   empty takes are ignored. Needs an rmw that emits `rmw_take`: Cyclone DDS and Fast DDS on every
   distro, Connext from Jazzy. On Humble, serialized and loaned takes emit nothing.
+- **tracetools version in the startup banner, and a warning on an untested one.** The banner now
+  ends with `tracetools=<version>`, read from the tracetools package.xml next to the
+  libtracetools.so serving the hooks (the `rcl_init` tracepoint's version field is added inside
+  tracetools, the interposer never sees it). A major other than the ones CI runs (4.x Humble,
+  8.x Jazzy to Lyrical, 9.x Rolling) prints a one-line warning; counting still proceeds, since
+  upstream deprecates tracepoint arguments rather than removing them.
 
 ### Fixed
 - **A loaned publisher on Humble had no `TOPIC` line.** Humble's `rcl_publish_loaned_message`
