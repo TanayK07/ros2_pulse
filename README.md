@@ -393,7 +393,9 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
   drops out. A live but idle node (a pure timer or service node with no topic traffic) therefore
   reads as quiet. Re-initialising a node name does not duplicate its entry.
 - Requires tracing instrumentation compiled into the ROS build (the default on Humble and Isaac
-  debs; checkable at runtime with `ros_trace_compile_status()`).
+  debs; checkable at runtime with `ros_trace_compile_status()`). The startup banner names the
+  tracetools version it found and warns if it is not one CI runs (4.x, 8.x, 9.x): tracepoints
+  are only promised stable within a distro.
 - Python (rclpy) and other non-rclcpp nodes are counted on both sides, through the C layers:
   `rcl_publish` for publishes and the rmw's `rmw_take` tracepoint for receives (rclpy itself was
   never instrumented, [ros2_tracing#15](https://github.com/ros2/ros2_tracing/issues/15)). The

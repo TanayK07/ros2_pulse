@@ -16,6 +16,7 @@
 # captured. probe_harness.run_single() discards stderr, so we launch the node ourselves.
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -61,6 +62,17 @@ def test_banner_present_by_default():
     attached?' feedback, and 0.2.0 deliberately extended it with the spec=... field."""
     err = _run_capture()
     assert BANNER in err, f"default run lost the active banner\n--- stderr ---\n{err}"
+
+
+def test_banner_reports_tracetools_version():
+    """The banner names the tracetools serving the hooks (from its package.xml), and a CI
+    distro is never warned about as untested (4.x Humble, 8.x Jazzy..Lyrical, 9.x Rolling)."""
+    err = _run_capture()
+    m = re.search(r"tracetools=(\S+)\)", err)
+    assert m, f"banner has no tracetools= field\n--- stderr ---\n{err}"
+    assert re.match(r"\d+\.\d+", m.group(1)), (
+        f"tracetools version not detected: {m.group(1)}\n--- stderr ---\n{err}")
+    assert "is not a version this probe is tested on" not in err, err
 
 
 def test_quiet_suppresses_banner():

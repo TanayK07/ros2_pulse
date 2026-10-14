@@ -46,20 +46,25 @@
 #include "ros2_pulse/core/rate_spec.hpp"
 #include "ros2_pulse/core/timer.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
+#include "ros2_pulse/core/tracetools_version.hpp"
 #include "ros2_pulse/core/window_format.hpp"
 
 namespace {
 
 using ros2_pulse::core::defaultOutputPath;
 using ros2_pulse::core::eStatsFormat;
+using ros2_pulse::core::isTestedTracetoolsMajor;
 using ros2_pulse::core::evaluateRateSpecWarnings;
 using ros2_pulse::core::formatWindow;
 using ros2_pulse::core::formatWindowJsonl;
 using ros2_pulse::core::parseMaxBytes;
+using ros2_pulse::core::parsePackageVersion;
 using ros2_pulse::core::parsePeriodSeconds;
 using ros2_pulse::core::parseRateSpec;
 using ros2_pulse::core::parseStatsFormat;
 using ros2_pulse::core::readSpecFile;
+using ros2_pulse::core::tracetoolsPackageXmlPath;
+using ros2_pulse::core::versionMajor;
 using ros2_pulse::core::renderWarnLine;
 using ros2_pulse::core::sRateSpec;
 using ros2_pulse::core::sRateWarning;
@@ -133,6 +138,37 @@ auto loadRateSpec() -> std::optional<sRateSpec> {
     return spec;
 }
 
+// Version of the tracetools serving this process's hooks, from the package.xml next to the
+// libtracetools.so that defines the real ros_trace_rcl_node_init ("unknown" if any step fails).
+// Upstream keeps tracepoints stable within a distro and only deprecates across distros, so a
+// major CI never ran warns once on stderr; counting still proceeds. Runs once, in ensureStarted.
+auto detectTracetoolsVersion() -> std::string {
+    void* sym = dlsym(RTLD_NEXT, "ros_trace_rcl_node_init");
+    Dl_info info{};
+    if (sym == nullptr || dladdr(sym, &info) == 0 || info.dli_fname == nullptr) {
+        return "unknown";
+    }
+    const std::string xml_path = tracetoolsPackageXmlPath(info.dli_fname);
+    std::string xml;
+    std::string err;
+    if (xml_path.empty() || !readSpecFile(xml_path.c_str(), xml, err)) {
+        return "unknown";
+    }
+    auto version = parsePackageVersion(xml);
+    if (!version.has_value()) {
+        return "unknown";
+    }
+    const auto major = versionMajor(*version);
+    if (major.has_value() && !isTestedTracetoolsMajor(*major)) {
+        std::fprintf(stderr,
+                     "[ros2_pulse] tracetools %s is not a version this probe is tested on "
+                     "(4.x Humble, 8.x Jazzy to Lyrical, 9.x Rolling); counts may be wrong "
+                     "if its tracepoints changed\n",
+                     version->c_str());
+    }
+    return *version;
+}
+
 /// Process-wide probe runtime: the registry, the flush timer and output config.
 class ProbeRuntime {
 public:
@@ -168,6 +204,7 @@ public:
             // zero-rule no-op, a UTF-8 BOM failed a valid spec invisibly). A QUIET that also
             // swallowed diagnostics would reintroduce that class as a supported flag.
             // Pinned by test/integration/test_quiet.py.
+            const std::string tracetools = detectTracetoolsVersion();
             if (!m_quiet) {
                 char spec_desc[64];
                 if (m_spec.has_value()) {
@@ -177,10 +214,10 @@ public:
                     std::snprintf(spec_desc, sizeof(spec_desc), "none");
                 }
                 std::fprintf(stderr, "[ros2_pulse] active, interposing tracetools layer "
-                                     "(out=%s, format=%s, period=%.1fs, spec=%s, jitter=%s)\n",
+                                     "(out=%s, format=%s, period=%.1fs, spec=%s, jitter=%s, tracetools=%s)\n",
                              m_out_path.c_str(),
                              m_format == eStatsFormat::kJsonl ? "jsonl" : "text", m_period_s,
-                             spec_desc, m_registry.gapTracking() ? "on" : "off");
+                             spec_desc, m_registry.gapTracking() ? "on" : "off", tracetools.c_str());
             }
             // Counting effectively begins here (first tracepoint), stamp the window start
             // before the flush thread exists so the first window's denominator is measured
