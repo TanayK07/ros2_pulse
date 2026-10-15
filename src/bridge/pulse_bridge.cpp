@@ -20,6 +20,9 @@
 //   poll_period_s  double    how often the logs are read                        (default: 1.0)
 //   source_name    string    measurement_source_name override; empty means the window's single
 //                            node name, or "ros2_pulse" when that is ambiguous   (default: "")
+//   metrics_source string    "topic": metrics_source is the topic, message_period only;
+//                            "metric": rclcpp's layout, metrics_source is "message_period" /
+//                            "message_age" and the topic is not carried     (default: topic)
 //
 // Text-format logs are refused per file with one warning: their windows span several lines and
 // the bridge reads line by line. Set ROS_TOPIC_STATS_FORMAT=jsonl on the probed process.
@@ -46,6 +49,7 @@
 
 namespace {
 
+using ros2_pulse::core::eMetricsSource;
 using ros2_pulse::core::eRateUnit;
 using ros2_pulse::core::LineFollower;
 using ros2_pulse::core::mapWindow;
@@ -95,11 +99,18 @@ auto toMessage(const sMetricSample& s) -> MetricsMessage {
     m.unit = s.unit;
     m.window_start = toTime(s.window_start_ns);
     m.window_stop = toTime(s.window_stop_ns);
+    // libstatistics_collector's order: AVERAGE, MINIMUM, MAXIMUM, STDDEV, SAMPLE_COUNT.
     if (s.has_average) {
         m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_AVERAGE, s.average));
     }
+    if (s.has_minimum) {
+        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_MINIMUM, s.minimum));
+    }
     if (s.has_maximum) {
         m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_MAXIMUM, s.maximum));
+    }
+    if (s.has_stddev) {
+        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_STDDEV, s.stddev));
     }
     m.statistics.push_back(
         point(StatisticDataType::STATISTICS_DATA_TYPE_SAMPLE_COUNT, s.sample_count));
@@ -121,11 +132,18 @@ public:
         const auto unit = declare_parameter<std::string>("unit", "ms");
         double period = declare_parameter<double>("poll_period_s", 1.0);
         m_opts.source_name = declare_parameter<std::string>("source_name", "");
+        const auto source = declare_parameter<std::string>("metrics_source", "topic");
 
         if (unit == "Hz") {
             m_opts.unit = eRateUnit::Rate_hz;
         } else if (unit != "ms") {
             RCLCPP_WARN(get_logger(), "unit '%s' is neither ms nor Hz, using ms", unit.c_str());
+        }
+        if (source == "metric") {
+            m_opts.metrics_source = eMetricsSource::Metric;
+        } else if (source != "topic") {
+            RCLCPP_WARN(get_logger(), "metrics_source '%s' is neither topic nor metric, using topic",
+                        source.c_str());
         }
         if (period <= 0.0) {
             RCLCPP_WARN(get_logger(), "poll_period_s %.3f is not positive, using 1.0", period);

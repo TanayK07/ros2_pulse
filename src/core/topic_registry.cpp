@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <mutex>  // for std::unique_lock with shared_mutex
 #include <new>    // placement-new (forkChildReset)
 
@@ -28,6 +29,20 @@ sEndpointCounter* const kNotASubscription = &g_not_a_subscription;
 // identity-only contract as kNotASubscription, never dereferenced.
 sEndpointCounter g_take_owned_by_rclcpp;
 sEndpointCounter* const kTakeOwnedByRclcpp = &g_take_owned_by_rclcpp;
+// A take-path verdict for an rclcpp subscription that DOES have an endpoint is that endpoint
+// with its low bit set: the take still must not count the receive (callback_start does), but it
+// is the only place the message age can be measured, so the endpoint has to be reachable from
+// the same thread-local slot. Endpoints are heap objects aligned well past 2, so bit 0 is free.
+static_assert(alignof(sEndpointCounter) >= 2, "take-path ownership tag needs a free low bit");
+inline auto tagRclcppOwned(sEndpointCounter* c) -> sEndpointCounter* {
+    return reinterpret_cast<sEndpointCounter*>(reinterpret_cast<uintptr_t>(c) | uintptr_t{1});
+}
+inline auto isRclcppOwnedTag(const sEndpointCounter* c) -> bool {
+    return (reinterpret_cast<uintptr_t>(c) & uintptr_t{1}) != 0;
+}
+inline auto untagCounter(sEndpointCounter* c) -> sEndpointCounter* {
+    return reinterpret_cast<sEndpointCounter*>(reinterpret_cast<uintptr_t>(c) & ~uintptr_t{1});
+}
 // Take-path sentinel: an rmw handle no rcl_subscription_init ever named (the rmw's internal
 // discovery reader). Cached so repeat takes skip the lock; never dereferenced.
 sEndpointCounter g_take_unknown_handle;
@@ -64,6 +79,71 @@ inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
     return t_tls_cache[((p >> 4) ^ (p >> 10)) & kTlsSlotMask];
 }
 
+// Lock-free max, the portable form of C++26 std::atomic::fetch_max.
+inline void atomicMax(std::atomic<uint64_t>& m, uint64_t v) {
+    uint64_t cur = m.load(std::memory_order_relaxed);
+    while (v > cur && !m.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+    }
+}
+
+// Feed one duration sample into a window accumulator: three relaxed adds and a min CAS that,
+// like the max, only loops when a new minimum lands (rare in steady state).
+inline void addDuration(sDurationAcc& a, uint64_t v_ns) {
+    uint64_t us = v_ns / 1000;
+    if (us > sDurationAcc::kMaxSampleUs) {
+        us = sDurationAcc::kMaxSampleUs;
+    }
+    a.n.fetch_add(1, std::memory_order_relaxed);
+    a.sum_us.fetch_add(us, std::memory_order_relaxed);
+    a.sumsq_us2.fetch_add(us * us, std::memory_order_relaxed);
+    uint64_t cur = a.min_ns.load(std::memory_order_relaxed);
+    while (v_ns < cur && !a.min_ns.compare_exchange_weak(cur, v_ns, std::memory_order_relaxed)) {
+    }
+}
+
+// Drain a duration accumulator for the window just ending. False when it saw no sample: no
+// distribution exists, which must not be reported as a minimum or a deviation of zero. The four
+// fields are exchanged one by one, so a sample racing the drain can split across two windows,
+// the same smear the counts accept; the variance is clamped at zero against exactly that.
+inline auto takeDuration(sDurationAcc& a, sDurationStats& out) -> bool {
+    const uint64_t n = a.n.exchange(0, std::memory_order_relaxed);
+    const uint64_t sum = a.sum_us.exchange(0, std::memory_order_relaxed);
+    const uint64_t sumsq = a.sumsq_us2.exchange(0, std::memory_order_relaxed);
+    const uint64_t mn = a.min_ns.exchange(UINT64_MAX, std::memory_order_relaxed);
+    if (n == 0 || mn == UINT64_MAX) {
+        return false;
+    }
+    const long double mean_us = static_cast<long double>(sum) / static_cast<long double>(n);
+    long double var_us2 =
+        static_cast<long double>(sumsq) / static_cast<long double>(n) - mean_us * mean_us;
+    if (var_us2 < 0.0L) {
+        var_us2 = 0.0L;
+    }
+    out.count = n;
+    out.mean_ms = static_cast<double>(mean_us / 1000.0L);
+    out.min_ms = static_cast<double>(mn) / 1e6;
+    out.stddev_ms = static_cast<double>(std::sqrt(var_us2) / 1000.0L);
+    return true;
+}
+
+// Message age at rmw_take: local wall clock minus the DDS source timestamp. Both are
+// CLOCK_REALTIME-based nanoseconds since the epoch, on two machines when the publisher is remote,
+// so clock skew lands in the value exactly as it did in rclcpp's header-stamp age. A source
+// timestamp AHEAD of the local clock (skew the other way) has no unsigned representation and is
+// dropped rather than wrapped into a 584-year age.
+inline void noteAge(sTopicCounter& c, int64_t source_ns) {
+    const auto now = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    if (now <= source_ns) {
+        return;
+    }
+    const auto age = static_cast<uint64_t>(now - source_ns);
+    addDuration(c.recv_age, age);
+    atomicMax(c.recv_age_max_ns, age);
+}
+
 // ROADMAP R5: record one arrival at @p now into a gap accumulator.
 //
 // `exchange`, not load+store: it guarantees exactly ONE caller consumes each predecessor
@@ -76,17 +156,20 @@ inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
 // measured under 8-way contention on one endpoint, 0.6-9.7% of samples are dropped and the
 // reported max is over-stated by at most 5%, never garbage, never negative, and erring high is
 // the safe direction for a stall detector. Single-threaded delivery is exact.
+//
+// @p dist, when given (receive side), also gets the interval for the window's MINIMUM / STDDEV.
 inline void noteArrivalAt(uint64_t now, std::atomic<uint64_t>& last_ns,
-                          std::atomic<uint64_t>& max_dt_ns) {
+                          std::atomic<uint64_t>& max_dt_ns, sDurationAcc* dist = nullptr) {
     const uint64_t prev = last_ns.exchange(now, std::memory_order_relaxed);
     if (prev == 0 || now <= prev) {
         return;  // first arrival ever, or a reordered pair, no usable interval
     }
     const uint64_t dt = now - prev;
-    // std::atomic::fetch_max is C++26; this is the portable form. It costs nothing in steady
-    // state because new maxima follow the harmonic number, ~14 CAS per 500 messages.
-    uint64_t cur = max_dt_ns.load(std::memory_order_relaxed);
-    while (dt > cur && !max_dt_ns.compare_exchange_weak(cur, dt, std::memory_order_relaxed)) {
+    // Costs nothing in steady state: new maxima follow the harmonic number, ~14 CAS per 500
+    // messages.
+    atomicMax(max_dt_ns, dt);
+    if (dist != nullptr) {
+        addDuration(*dist, dt);
     }
 }
 
@@ -104,7 +187,7 @@ inline void noteArrival(sEndpointCounter* ep) {
     if (ep->side == eEndpointSide::kPub) {
         noteArrivalAt(now, t->pub_last_ns, t->pub_max_dt_ns);
     } else {
-        noteArrivalAt(now, t->recv_last_ns, t->recv_max_dt_ns);
+        noteArrivalAt(now, t->recv_last_ns, t->recv_max_dt_ns, &t->recv_dt);
     }
 }
 
@@ -613,15 +696,18 @@ auto TopicRegistry::resolveTake(const void* rmw_sub_handle) const -> sEndpointCo
     if (r == m_rmwsub_to_subhandle.end()) {
         return nullptr;  // never initialized through rcl, nothing to attribute it to
     }
+    auto c = m_subhandle_to_counter.find(r->second);
+    sEndpointCounter* ctr = c == m_subhandle_to_counter.end() ? nullptr : c->second;
     auto own = m_subhandle_rclcpp.find(r->second);
     if (own != m_subhandle_rclcpp.end() && own->second) {
-        return kTakeOwnedByRclcpp;
+        // Not counted here, but the endpoint stays reachable (tagged) for the message age.
+        return ctr == nullptr ? kTakeOwnedByRclcpp : tagRclcppOwned(ctr);
     }
-    auto c = m_subhandle_to_counter.find(r->second);
-    return c == m_subhandle_to_counter.end() ? nullptr : c->second;
+    return ctr;
 }
 
-void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
+void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken,
+                           int64_t source_timestamp_ns) {
     // rmw_take fires for every take ATTEMPT (both Humble DDS rmws emit it before the caller
     // looks at the result); only a taken message is a receive. Cheapest possible reject.
     if (!taken || rmw_sub_handle == nullptr) {
@@ -640,7 +726,8 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
             std::shared_lock<std::shared_mutex> lock(m_mu);
             m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
             ctr = resolveTake(rmw_sub_handle);
-            prove_endpoint = ctr != nullptr && ctr != kTakeOwnedByRclcpp && !ctr->seen;
+            prove_endpoint = ctr != nullptr && ctr != kTakeOwnedByRclcpp &&
+                             !isRclcppOwnedTag(ctr) && !ctr->seen;
         }
         if (ctr == nullptr) {
             // Unknown handle: the rmw's own internal readers (ros_discovery_info) take through
@@ -659,9 +746,25 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
         slot = {tag, rmw_sub_handle, ctr};
     }
     if (ctr == kTakeOwnedByRclcpp || ctr == kTakeUnknownHandle) {
-        return;  // rclcpp subscription (callback_start counts it) or rmw-internal reader
+        return;  // rclcpp subscription without an endpoint, or rmw-internal reader
     }
-    countArrival(ctr, /*is_intra_process=*/false, m_gap_tracking.load(std::memory_order_relaxed));
+    const bool gap = m_gap_tracking.load(std::memory_order_relaxed);
+    if (isRclcppOwnedTag(ctr)) {
+        // rclcpp subscription: callback_start counts the receive (and its interval), the take
+        // only contributes the age. Gap tracking off keeps this a cache hit and a return.
+        if (gap && source_timestamp_ns > 0) {
+            if (sTopicCounter* t = untagCounter(ctr)->topic.load(std::memory_order_relaxed)) {
+                noteAge(*t, source_timestamp_ns);
+            }
+        }
+        return;
+    }
+    countArrival(ctr, /*is_intra_process=*/false, gap);
+    if (gap && source_timestamp_ns > 0) {
+        if (sTopicCounter* t = ctr->topic.load(std::memory_order_relaxed)) {
+            noteAge(*t, source_timestamp_ns);
+        }
+    }
 }
 
 auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
@@ -749,6 +852,14 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
             has_recv_gap = takeGap(t->recv_last_ns, t->recv_max_dt_ns, now_ns, fold_open_gap,
                                    recv_gap_ms);
         }
+        // Distributions drain unconditionally (cheap, and a stale one must never leak into the
+        // first window after gap tracking or a filter changes).
+        sDurationStats recv_dt;
+        sDurationStats recv_age;
+        const bool has_recv_dt = takeDuration(t->recv_dt, recv_dt);
+        const bool has_recv_age = takeDuration(t->recv_age, recv_age);
+        const uint64_t age_max = t->recv_age_max_ns.exchange(0, std::memory_order_relaxed);
+        recv_age.max_ms = static_cast<double>(age_max) / 1e6;
         if (filtered) {
             continue;  // counts and gaps reset above, but the topic itself is never reported
         }
@@ -763,6 +874,10 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
         s.pub_max_dt_ms = pub_gap_ms;
         s.has_recv_max_dt = has_recv_gap;
         s.recv_max_dt_ms = recv_gap_ms;
+        s.has_recv_dt = has_recv_dt;
+        s.recv_dt = recv_dt;
+        s.has_recv_age = has_recv_age;
+        s.recv_age = recv_age;
         out.topics.push_back(std::move(s));
     }
     // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose OWN
@@ -842,6 +957,10 @@ void TopicRegistry::forkChildReset() {
     for (auto& kv : m_by_topic) {
         kv.second->pub_max_dt_ns.store(0, std::memory_order_relaxed);
         kv.second->recv_max_dt_ns.store(0, std::memory_order_relaxed);
+        sDurationStats discard;
+        takeDuration(kv.second->recv_dt, discard);
+        takeDuration(kv.second->recv_age, discard);
+        kv.second->recv_age_max_ns.store(0, std::memory_order_relaxed);
     }
     for (auto& ep : m_endpoints) {
         ep->max_dt_ns.store(0, std::memory_order_relaxed);

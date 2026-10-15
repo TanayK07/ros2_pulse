@@ -22,6 +22,21 @@ struct sTopicCounter;
 /// Which side of a topic an endpoint sits on: a publisher handle or a subscription handle.
 enum class eEndpointSide : uint8_t { kPub, kRecv };
 
+/// @brief Lock-free running moments of one per-message duration stream (inter-arrival period
+/// or message age), drained once per window. Only fed while gap tracking is on.
+///
+/// Sums are in whole MICROSECONDS so the sum of squares fits a uint64 for any realistic window
+/// (each sample is clamped to kMaxSampleUs, ~36 min); both sums use the same quantized value, so
+/// the variance they give is the variance of the samples plus at most 1/12 us^2. The minimum is
+/// kept in nanoseconds, exact. UINT64_MAX in min_ns means "no sample yet".
+struct sDurationAcc {
+    static constexpr uint64_t kMaxSampleUs = 1ULL << 31;
+    std::atomic<uint64_t> n{0};
+    std::atomic<uint64_t> sum_us{0};
+    std::atomic<uint64_t> sumsq_us2{0};
+    std::atomic<uint64_t> min_ns{UINT64_MAX};
+};
+
 /// @brief One publisher or subscription handle's running message counts (the hot-path target).
 ///
 /// Every rcl publisher handle and every rcl subscription handle gets its own counter, so two
@@ -91,6 +106,24 @@ struct sTopicCounter {
     std::atomic<uint64_t> recv_last_ns{0};
     std::atomic<uint64_t> pub_max_dt_ns{0};   // reset per window by snapshot()
     std::atomic<uint64_t> recv_max_dt_ns{0};  // reset per window by snapshot()
+
+    // --- receive-side distributions for the /statistics bridge (gap tracking on only) ---
+    // rclcpp's removed topic statistics published MINIMUM / STDDEV of the received message
+    // period and the message age. Receive side only, which is where rclcpp measured them.
+    sDurationAcc recv_dt;   // every interval that also feeds recv_max_dt_ns
+    // Message age at rmw_take: local CLOCK_REALTIME minus the DDS source timestamp, i.e. the
+    // publish-to-take latency. Inter-process takes only (intra-process never reaches rmw_take).
+    sDurationAcc recv_age;
+    std::atomic<uint64_t> recv_age_max_ns{0};
+};
+
+/// @brief Snapshot of one sDurationAcc window, in milliseconds.
+struct sDurationStats {
+    uint64_t count{0};
+    double mean_ms{0.0};
+    double min_ms{0.0};
+    double max_ms{0.0};
+    double stddev_ms{0.0};  // population standard deviation, like libstatistics_collector
 };
 
 /// @brief Aggregated, windowed view of one topic (returned by snapshot()).
@@ -120,6 +153,15 @@ struct sTopicStat {
     double recv_max_dt_ms{0.0};
     bool has_pub_max_dt{false};
     bool has_recv_max_dt{false};
+    // Receive-side inter-arrival distribution: the observed intervals this window (the open gap
+    // folded into recv_max_dt_ms is not one). recv_dt.max_ms is unused, recv_max_dt_ms is the
+    // maximum. Valid only when has_recv_dt is set (gap tracking on and at least one interval).
+    sDurationStats recv_dt;
+    bool has_recv_dt{false};
+    // Receive-side message age (publish-to-take latency), valid only when has_recv_age is set:
+    // gap tracking on, at least one inter-process take whose rmw reported a source timestamp.
+    sDurationStats recv_age;
+    bool has_recv_age{false};
 };
 
 /// @brief Windowed view of ONE publisher or subscription handle (returned by snapshotWindow()).
@@ -218,7 +260,11 @@ public:
     /// recv_inter for every subscription NOT owned by rclcpp. This is what makes rclpy and any
     /// other rcl-based client visible; rclcpp subscriptions stay on callback_start so a message
     /// is never counted twice. Failed takes (taken=false) return before any lookup.
-    void onTake(const void* rmw_sub_handle, bool taken);
+    ///
+    /// With gap tracking on, a positive @p source_timestamp_ns (the DDS source timestamp the
+    /// tracepoint carries, ns since the epoch) also feeds the topic's message-age accumulator,
+    /// for rclcpp subscriptions too: the take is the only place the probe sees that timestamp.
+    void onTake(const void* rmw_sub_handle, bool taken, int64_t source_timestamp_ns = 0);
 
     /// A successful rcl_publish_loaned_message (RCL_RET_OK) on @p pub_handle, the rcl publisher
     /// handle rcl_publisher_init carried. Counts the loaned subset, and ALSO the publish total
