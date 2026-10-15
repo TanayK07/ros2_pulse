@@ -339,6 +339,35 @@ measure) and at the publisher otherwise. Inter- and intra-process paths report t
 the two, not the sum: one publish can hit both tracepoints. A text-format log is refused with
 one warning per file.
 
+#### graph-monitor (`rosgraph_monitor_msgs/TopicStatistics`)
+
+With `graph_monitor:=true` the bridge also publishes one
+[`rosgraph_monitor_msgs/TopicStatistics`](https://github.com/ros-tooling/graph-monitor) per
+window on `/topic_statistics` (`graph_monitor_topic`), the input
+[graph-monitor](https://github.com/ros-tooling/graph-monitor) checks topic deadlines against
+([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).
+
+```bash
+ros2 run ros2_pulse pulse_bridge --ros-args -p graph_monitor:=true
+```
+
+| `TopicStatistic` field | Filled with |
+|---|---|
+| `statistic_type` | `PUBLISHED_PERIOD` if the topic was published in the window, `RECEIVED_PERIOD` if it was received, both if both. `TAKE_AGE` is not sent yet. |
+| `node_name`, `topic_name` | The process's single active node (`/ns/name`) and the topic. |
+| `window_count` | Messages in the window (rate x window length). |
+| `mean` | 1 / rate, busier of the inter- and intra-process paths. |
+| `max` | Largest inter-arrival gap on that side when jitter tracking is on, else 0. |
+| `min` | Always 0: the probe does not track the smallest gap. |
+
+The probe counts per topic per process, not per endpoint, so a process with several active
+nodes (a component container) is skipped with one warning per log rather than credited to the
+wrong node. A side with zero traffic is left out, so graph-monitor's stale timeout flags it.
+`timestamp` is the window's end: keep `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` plus the bridge's
+`poll_period_s` under graph-monitor's `topic_statistics.stale_timeout_ms` (3 s by default), or
+raise the timeout. `rosgraph_monitor_msgs` is released for Humble through Rolling; a source build
+without it still builds the bridge, and the parameter then only warns.
+
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 
 `pulse-export` ships with pulse-top (`pip3 install ros2-pulse-top`) and serves the probe's logs

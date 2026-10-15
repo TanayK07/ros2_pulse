@@ -110,6 +110,17 @@ else()
   add_executable(pulse_bridge src/bridge/pulse_bridge.cpp)
   target_link_libraries(pulse_bridge PRIVATE
     ${PROJECT_NAME}_core rclcpp::rclcpp ${statistics_msgs_TARGETS})
+  # Optional graph-monitor output (rosgraph_monitor_msgs/TopicStatistics, ros-tooling/graph-monitor
+  # #14). Declared in package.xml, so release builds have it; a source build without the package
+  # still gets the /statistics bridge, and the graph_monitor parameter only warns.
+  find_package(rosgraph_monitor_msgs QUIET)
+  if(rosgraph_monitor_msgs_FOUND)
+    target_link_libraries(pulse_bridge PRIVATE ${rosgraph_monitor_msgs_TARGETS})
+    target_compile_definitions(pulse_bridge PRIVATE ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS)
+    message(STATUS "pulse_bridge: rosgraph_monitor_msgs found, graph-monitor output built")
+  else()
+    message(STATUS "pulse_bridge: rosgraph_monitor_msgs not found, graph-monitor output left out")
+  endif()
   install(TARGETS pulse_bridge RUNTIME DESTINATION lib/${PROJECT_NAME})
 
   if(BUILD_TESTING)
@@ -196,7 +207,8 @@ else()
       ament_add_pytest_test(integration_format test/integration/test_format.py
         TIMEOUT 120)
       # pulse_bridge: a hand-written jsonl log comes back on /statistics in the built-in
-      # topic-statistics shape, appended windows are followed, text logs are refused.
+      # topic-statistics shape, appended windows are followed, text logs are refused, and
+      # graph_monitor:=true adds rosgraph_monitor_msgs/TopicStatistics (skipped when absent).
       ament_add_pytest_test(integration_bridge test/integration/test_bridge.py
         TIMEOUT 120)
     endif()

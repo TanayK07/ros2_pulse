@@ -2,7 +2,10 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License").
 #
-# pulse_bridge integration: a jsonl probe log is republished on /statistics as
+# The graph-monitor cases (rosgraph_monitor_msgs/TopicStatistics on /topic_statistics) skip when
+# rosgraph_monitor_msgs is not installed; the flag-never-breaks-/statistics case runs either way.
+#
+# pulse_bridge integration:a jsonl probe log is republished on /statistics as
 # statistics_msgs/MetricsMessage in the shape rclcpp's built-in topic statistics use (unit "ms",
 # AVERAGE = message period, SAMPLE_COUNT, MAXIMUM / MINIMUM / STDDEV of the intervals, and
 # message_age in the metrics_source:=metric layout), lines appended AFTER the bridge
@@ -266,3 +269,109 @@ def test_text_format_log_is_refused_with_a_warning_not_a_crash(ros):
             col.destroy_node()
             err = stop(proc)
         assert "jsonl" in err, f"expected a jsonl hint on stderr, got: {err!r}"
+
+
+# --- graph-monitor output (ros-tooling/graph-monitor#14) -------------------------------------
+# One process, one node, publishing /scan (pub-side gap measured) and receiving /scan.
+GM_WIN = ('{"ts_ns":"1782887153899445923","window_s":5.000,"topics":[{"topic":"/scan",'
+          '"pub_inter_hz":20.000000,"pub_intra_hz":0.000000,"recv_inter_hz":10.000000,'
+          '"recv_intra_hz":0.000000,"recv_endpoint_seen":true,"pub_max_dt_ms":60.000}],'
+          '"nodes":["/perception"],"warns":[]}\n')
+# Same traffic, two nodes in the process: not attributable to one endpoint.
+GM_WIN_TWO_NODES = GM_WIN.replace('["/perception"]', '["/perception","/planner"]')
+
+try:
+    from rosgraph_monitor_msgs.msg import TopicStatistic, TopicStatistics
+    HAVE_GM = True
+except ImportError:
+    HAVE_GM = False
+
+
+class GmCollector(Node):
+    def __init__(self, topic):
+        super().__init__("pulse_bridge_test_gm_collector")
+        self.msgs = []
+        self.create_subscription(TopicStatistics, topic, self.msgs.append, 10)
+
+    wait_for = Collector.wait_for
+
+
+@pytest.mark.skipif(not HAVE_GM, reason="rosgraph_monitor_msgs not installed")
+def test_graph_monitor_topic_statistics(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(GM_WIN)
+        proc = start_bridge(path, ("-p", "graph_monitor:=true"))
+        col = GmCollector("/topic_statistics")
+        try:
+            assert col.wait_for(1, 10.0), "no TopicStatistics on /topic_statistics within 10 s"
+            m = col.msgs[0]
+            assert (m.timestamp.sec, m.timestamp.nanosec) == (1782887153, 899445923)
+            by_type = {s.statistic_type: s for s in m.statistics}
+            assert len(m.statistics) == 2
+            pub = by_type[TopicStatistic.PUBLISHED_PERIOD]
+            assert (pub.node_name, pub.topic_name) == ("/perception", "/scan")
+            assert pub.window_count == 100
+            assert (pub.mean.sec, pub.mean.nanosec) == (0, 50_000_000)
+            assert (pub.max.sec, pub.max.nanosec) == (0, 60_000_000)
+            assert (pub.min.sec, pub.min.nanosec) == (0, 0)  # not tracked by the probe
+            recv = by_type[TopicStatistic.RECEIVED_PERIOD]
+            assert recv.window_count == 50
+            assert (recv.mean.sec, recv.mean.nanosec) == (0, 100_000_000)
+            assert (recv.max.sec, recv.max.nanosec) == (0, 0)  # no recv gap in this window
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+@pytest.mark.skipif(not HAVE_GM, reason="rosgraph_monitor_msgs not installed")
+def test_graph_monitor_skips_multi_node_process_with_one_warning(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(GM_WIN_TWO_NODES * 2)
+        proc = start_bridge(path, ("-p", "graph_monitor:=true"))
+        gm = GmCollector("/topic_statistics")
+        col = Collector("/statistics")
+        try:
+            # /statistics still flows; graph-monitor gets nothing it would misattribute.
+            assert col.wait_for(2, 10.0)
+            assert not gm.wait_for(1, 1.0)
+        finally:
+            gm.destroy_node()
+            col.destroy_node()
+            err = stop(proc)
+        assert err.count("active nodes in this process") == 1, err
+
+
+def test_graph_monitor_is_off_by_default(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(GM_WIN)
+        proc = start_bridge(path)
+        col = Collector("/statistics")
+        try:
+            assert col.wait_for(1, 10.0)
+            assert col.count_publishers("/topic_statistics") == 0
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+def test_graph_monitor_flag_never_breaks_statistics(ros):
+    # Runs in both builds. Without rosgraph_monitor_msgs the parameter warns instead of failing.
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(GM_WIN)
+        proc = start_bridge(path, ("-p", "graph_monitor:=true"))
+        col = Collector("/statistics")
+        try:
+            assert col.wait_for(1, 10.0), "/statistics must flow with graph_monitor set"
+        finally:
+            col.destroy_node()
+            err = stop(proc)
+        if not HAVE_GM:
+            assert "built without rosgraph_monitor_msgs" in err, err

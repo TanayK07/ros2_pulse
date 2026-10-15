@@ -77,6 +77,16 @@ All notable changes to this project are documented here. Format follows
   only when measured. The text format is unchanged. `recv_age_stddev_ms` (and the age `STDDEV`
   point) is dropped for a window whose ages spread over more than ~71 min rather than reported
   wrapped; a constant cross-host clock skew does not affect it.
+- **pulse_bridge: `rosgraph_monitor_msgs/TopicStatistics` for graph-monitor
+  ([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).** With
+  `graph_monitor:=true` the bridge also publishes each window on `/topic_statistics`
+  (`graph_monitor_topic`): `PUBLISHED_PERIOD` / `RECEIVED_PERIOD` per (node, topic), with
+  `window_count`, `mean` = 1 / rate and `max` = largest gap when jitter tracking is on. `min` stays
+  0 (not tracked) and `TAKE_AGE` is not sent. Windows from a process with several active nodes
+  are skipped with one warning, since the probe counts per process, not per endpoint. Off by
+  default; `rosgraph_monitor_msgs` is a new `<depend>` found `QUIET`, so a source build without
+  it still builds the bridge. Mapping in the pure core (`topic_statistic_mapper`), 10 new unit
+  tests, 4 new bridge integration tests.
 
 ## [0.6.0] - 2026-10-14
 
