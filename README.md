@@ -36,8 +36,11 @@ nodes are alive? The existing tools each fall short of answering it.
 - Built-in topic statistics are
   [bypassed by intra-process comms](https://github.com/ros2/rclcpp/issues/2911) on Humble-class
   binaries, so composable nodes carrying point clouds lose all introspection. This is fixed on
-  `rolling` and newer by [rclcpp#3130](https://github.com/ros2/rclcpp/pull/3130) (merged April
-  2026); there is no public Humble backport as of this writing.
+  `rolling` by [rclcpp#3130](https://github.com/ros2/rclcpp/pull/3130) (merged April 2026),
+  but [rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203) (merged October 2026) then removed
+  the built-in statistics publisher from `rolling` altogether, so the next distro will not ship
+  it. [`pulse_bridge`](#publishing-on-statistics-pulse_bridge) publishes the same
+  `/statistics` messages without it.
 - `ros2_tracing` / LTTng is built for offline analysis: a session daemon plus post-processing
   of a CTF trace just to get a rate. On Humble it also needs ROS rebuilt with the lttng-ust
   backend (Jazzy and newer trace out of the box).
@@ -70,8 +73,9 @@ WARN  TOPIC /scan hz=1.200000 expected=[18,22]  # only with an expected-rate spe
 If a sidecar exporter or a log shipper is reading instead of a person, `ROS_TOPIC_STATS_FORMAT=jsonl`
 writes every window as one JSON object per line with the same gates and values. See
 [JSON Lines output](#json-lines-output-ros_topic_stats_formatjsonl). Dashboards that already
-read rclcpp's built-in topic statistics get the same numbers on `/statistics` from the
-[`pulse_bridge`](#publishing-on-statistics-pulse_bridge) sidecar, and Prometheus, OTLP and
+read rclcpp's built-in topic statistics (removed in `rolling` by
+[rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203)) get the same numbers on `/statistics`
+from the [`pulse_bridge`](#publishing-on-statistics-pulse_bridge) sidecar, and Prometheus, OTLP and
 Grafana get them from [`pulse-export`](#prometheus-otlp-and-grafana-pulse-export).
 
 ## How it works
@@ -215,6 +219,11 @@ shape (`unit` `ms`, `AVERAGE` = message period, `SAMPLE_COUNT` = messages in the
 `MAXIMUM` = largest inter-arrival gap when jitter tracking is on). Intra-process topics
 included, which is what the built-in statistics cannot report on Humble
 ([rclcpp#2911](https://github.com/ros2/rclcpp/issues/2911)).
+
+The built-in publisher is gone from `rolling` as of
+[rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203), so the next distro will not have it.
+Existing `/statistics` consumers keep working by running `pulse_bridge` instead: same message
+type, same topic, no change to the nodes being measured.
 
 ```bash
 # Probed processes write jsonl (the bridge reads line by line; text windows span lines).

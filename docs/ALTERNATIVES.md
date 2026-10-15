@@ -33,11 +33,18 @@ tool meets all five. Rundown:
   publish-side rate, no liveness), and gives period/age not a plain Hz.
 - **Upstream status.** #2911 was fixed by
   [PR #3130](https://github.com/ros2/rclcpp/pull/3130) (merged to `rolling`, Apr 2026), a
-  type-erased stats handler wired into `SubscriptionIntraProcess`. **On `rolling`/newer the
-  intra-process gap is closed.** No public Humble backport as of this writing, so ros2_pulse's
+  type-erased stats handler wired into `SubscriptionIntraProcess`. **On `rolling` the
+  intra-process gap was closed** before the publisher itself was removed (below). No public Humble backport as of this writing, so ros2_pulse's
   intra claim holds for stock Humble but should be scoped to that. Even post-fix, built-in stats
   remain opt-in, DDS-published, and receive-only, ros2_pulse still differs on zero-config +
   publish-side + zero-network + file output.
+- **Removed in `rolling`.** [ros2/rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203)
+  (merged Oct 2026) removed the built-in statistics publisher and left an interface for
+  third-party packages to implement instead; the matching docs page was removed in
+  [ros2/ros2_documentation#7245](https://github.com/ros2/ros2_documentation/pull/7245). The next
+  distro will not ship it. `pulse_bridge` is a drop-in for existing `/statistics`
+  consumers: same `statistics_msgs/MetricsMessage` on the same topic, with no source change to
+  the measured nodes.
 
 ### `ros2_tracing` / LTTng + tracetools
 - **What.** The canonical instrumentation path. Hooks the same `ros_trace_*` tracepoints, records a
@@ -142,7 +149,7 @@ tool meets all five. Rundown:
 | `ros2 topic hz` | ❌ | yes (subscriber) | none | ✅ | ✅ (stdout, 1 topic) | ❌ |
 | greenwave_monitor | ❌ | yes (subscriber) | none | ✅ | ✅ (/diagnostics, dashboard) | ❌ |
 | Built-in topic stats (Humble) | ❌ (#2911) | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
-| Built-in topic stats (rolling, #3130) | ✅ | yes (/statistics) | none | opt-in | period/age not Hz | ❌ |
+| Built-in topic stats (rolling) | removed (#3203) | | | | | |
 | ros2_tracing / LTTng | ✅ | none (CTF disk) | sessiond | ❌ Humble / ✅ Jazzy+ | ❌ (offline) | ✅ (offline) |
 | CARET (Tier IV) | ✅ | none (CTF disk) | sessiond | ❌ (forked rclcpp, source build) | ❌ (offline) | possible |
 | `diagnostic_updater` | ❌ | yes (/diagnostics) | none | ❌ (per-node source changes) | vs bounds | ❌ |
