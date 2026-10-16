@@ -89,6 +89,11 @@ probe works with no tracing session and adds no DDS traffic.
 
 - Intra-process visibility comes from `callback_start(callback, is_intra_process)`, which fires
   for every subscription callback regardless of transport.
+- Every publisher handle and every subscription handle has its own counter, attributed to the
+  node that created it (`rcl_publisher_init` / `rcl_subscription_init` carry the node handle,
+  `rcl_node_init` names it). The per-topic `TOPIC` / `RECV` rates are summed from those at flush
+  time, and the per-endpoint split is written too (see
+  [Per-node, per-endpoint breakdown](#per-node-per-endpoint-breakdown)).
 - The hot path is a per-endpoint relaxed atomic increment behind a 256-slot thread-local cache
   with a stride-breaking hash. No global lock, no per-message string hashing. Counting costs
   about 0.3 ns/op on a fixed endpoint and 0.6 to 1.2 ns/op alternating across a working set on
@@ -172,6 +177,7 @@ set fleet-wide.
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a declared but silent topic (no traffic in the window). By default such topics are omitted so a large graph is not padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected: `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a stalled upstream stays visible) and omits never-active topics. |
 | `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting; they never crash the host. |
 | `ROS_TOPIC_STATS_QUIET` | `0` | When `1`, suppress the `[ros2_pulse] active` stderr banner, for deployments that parse the wrapped process's stderr. Only the informational banner is silenced. Error diagnostics (unreadable, malformed or zero-rule spec, unwritable output file) still print, because each of those disables something you configured, and silently disabled alerting is the 0.2.0 bug class this flag must not bring back. |
+| `ROS_TOPIC_STATS_ENDPOINTS` | `0` | When `1`, text windows also get one `EP` line per publisher / subscription (the [per-endpoint breakdown](#per-node-per-endpoint-breakdown)). jsonl always carries it as the `endpoints` key; text keeps it opt-in so the default text output stays byte-identical. |
 | `ROS_TOPIC_STATS_FORMAT` | `text` | Output encoding: `text` (the block format above, byte-identical to previous releases) or `jsonl` (one JSON object per window per line, see below). Any other value warns once on stderr and falls back to `text`; it never crashes the host. `pulse-check` reads both. |
 
 ### JSON Lines output (`ROS_TOPIC_STATS_FORMAT=jsonl`)
@@ -198,7 +204,8 @@ Schema rules, pinned by golden-byte unit tests:
   (`rcl_publish_loaned_message` / `rcl_take_loaned_message` succeeding). They are subsets of
   `pub_inter_hz` and of the receive total, never added to them.
 - `topics`, `nodes` and `warns` are always present (empty arrays when empty), so `.warns[]`
-  needs no null guards.
+  needs no null guards. Probe 0.7 adds `endpoints` (also always present in probe output, see
+  [below](#per-node-per-endpoint-breakdown)); a record without it comes from an older probe.
 - `warns` are structured (`kind` is `topic_rate`, `topic_gap` or `node_missing`, with the
   numbers as JSON numbers) rather than preformatted strings. An unbounded `max_hz` omits the
   key, since JSON has no `Infinity`. The text `WARN` line is a rendering of the same data.
@@ -210,6 +217,40 @@ Schema rules, pinned by golden-byte unit tests:
 `pulse-check` sniffs the format per line (a `{` first byte can only be a jsonl record), so
 watchdog and CI gating work unchanged on jsonl logs. A file of non-probe JSON still exits 2
 (`no probe windows`) rather than passing.
+
+### Per-node, per-endpoint breakdown
+
+The probe counts per publisher handle and per subscription handle, and attributes each one to
+the fully qualified name of the node that created it. The `TOPIC` / `RECV` rates are the per-topic
+sums of these, as before. The split itself is written as an additive `endpoints` array in jsonl
+(always) and as `EP` lines in text (with `ROS_TOPIC_STATS_ENDPOINTS=1`):
+
+```
+EP /scan pub id=3 node=/lidar inter=20.000000 intra=0.000000 max_dt_ms=52.500
+EP /scan recv id=7 node=/local_costmap/local_costmap inter=20.000000 intra=0.000000
+EP /scan recv id=8 node=/local_costmap/local_costmap inter=20.000000 intra=0.000000
+```
+
+```json
+"endpoints":[{"topic":"/scan","side":"pub","id":3,"node":"/lidar","inter_hz":20.000000,"intra_hz":0.000000,"max_dt_ms":52.500}, ...]
+```
+
+- `side` is `pub` or `recv`. `inter` / `intra` mean the same as on the `PUB` / `RECV` lines, for
+  this one handle. Receives are counted where the topic rates count them: `callback_start` for
+  rclcpp (both transports), a successful `rmw_take` for rclpy and other rcl clients.
+- `id` is unique within the process for the endpoint's lifetime. Two subscriptions of one node on
+  one topic (two costmap layers on `/scan`) are two entries with two ids, never one summed rate.
+- `node` is absent when the probe never saw that node's `rcl_node_init`.
+- `max_dt_ms` is this handle's own largest inter-arrival gap (with `ROS_TOPIC_STATS_JITTER=1`),
+  so a second subscription that stopped receiving shows its own stall. The per-topic `JITTER`
+  line keeps measuring the gap between any two messages on the topic in the process.
+  `loaned_hz` is this handle's loaned subset. Both are absent when not measured.
+- An entry is written under the same gates as the topic lines: traffic this window, a proven
+  subscription at an explicit 0.0, a tracked gap, or `ROS_PULSE_EMIT_IDLE=1`. `/rosout`,
+  `/parameter_events` and `/diagnostics` are filtered as before.
+- Node liveness (`NODE` lines) now looks only at a node's own endpoints. In a component
+  container, one node's log line on `/rosout` no longer keeps every other node in the process
+  alive.
 
 ### Publishing on `/statistics` (`pulse_bridge`)
 
@@ -397,8 +438,8 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
   probe also hooks `rclcpp_intra_publish` and emits an additive `PUB` line with publish-side
   intra rates.
 - Node liveness is traffic-derived. There is no node-teardown tracepoint on stock Humble, so a
-  node appears in the `NODE` lines only while a topic it publishes or subscribes to has carried
-  traffic within the last few windows; a node silent for several windows is treated as quiet and
+  node appears in the `NODE` lines only while one of its own publishers or subscriptions has
+  carried traffic within the last few windows; a node silent for several windows is treated as quiet and
   drops out. A live but idle node (a pure timer or service node with no topic traffic) therefore
   reads as quiet. Re-initialising a node name does not duplicate its entry.
 - Requires tracing instrumentation compiled into the ROS build (the default on Humble and Isaac
@@ -424,6 +465,10 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
   publish on an intra-process publisher, so loans and intra-process never mix. Before this, a
   loaned publisher on Humble had no `TOPIC` line at all: Humble's `rcl_publish_loaned_message`
   fires no tracepoint.
+- There is no destroy tracepoint for publishers, subscriptions or nodes. When a destroyed
+  handle's address is reused for a new one, the probe re-homes that endpoint (new topic, node and
+  `id`); counts the old endpoint took in the same window are reported under the new one. A
+  destroyed endpoint whose address is never reused stays known and simply goes silent.
 - File output only; no live network export, by design.
 
 ## Compatibility

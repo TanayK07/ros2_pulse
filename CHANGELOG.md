@@ -5,6 +5,34 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- **The probe counts per publisher and per subscription, attributed to the owning node.**
+  Counters used to be keyed by topic per process, so every endpoint of a topic in one process
+  shared one counter. Two subscriptions on one topic (a component container, or one node
+  subscribing twice) interleaved one inter-arrival stream, two subscriptions of one node summed
+  into one rate, and every node's `/rosout` and `/parameter_events` endpoints shared one counter,
+  so one node's log line kept every node of the process in the `NODE` list (found in the #68 and
+  #70 reviews). Each rcl publisher handle and rcl subscription handle now has its own counter,
+  attributed to the node whose handle its init carried (including the `/rosout` publisher rcl
+  creates before `rcl_node_init`'s tracepoint fires). The hot path is still one relaxed add, on
+  the handle's own counter; the per-topic `TOPIC` / `PUB` / `RECV` / `LOAN` rates are summed at
+  flush time and are unchanged, and the per-topic `JITTER` gap keeps measuring the gap between
+  any two messages of the topic. With gap tracking on, each arrival also updates its handle's
+  own gap from the same clock read (one more atomic exchange). Node liveness now looks only at a
+  node's own endpoints. A publisher or subscription address reused after a destroy (there is no
+  destroy tracepoint) re-homes its endpoint, which also stops a recycled publisher handle from
+  counting into its previous topic.
+
+### Added
+- **Per-endpoint breakdown in the output, additive.** jsonl records gain an `endpoints` array
+  (always present in probe output): one entry per publisher / subscription with `topic`,
+  `side` (`pub` / `recv`), a process-unique `id`, `node` (absent when unknown), `inter_hz`,
+  `intra_hz`, and `max_dt_ms` / `loaned_hz` when measured. Text windows get the same as `EP`
+  lines with the new `ROS_TOPIC_STATS_ENDPOINTS=1`; without it the text output is unchanged.
+  Same emit gates as the topic lines; filtered topics stay filtered. `pulse-check`'s reader
+  (and so `pulse_bridge`) parses both into `sLogWindow::endpoints`; pulse-top parses them into
+  `Window.endpoints` and treats `EP` as a known line kind.
+
 ## [0.6.0] - 2026-10-14
 
 Receive rates for rclpy nodes, loaned-message counts, and the tracetools version in the banner. pulse-top 0.5.0 reads the loan fields.

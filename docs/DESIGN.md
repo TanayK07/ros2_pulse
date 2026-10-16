@@ -37,10 +37,11 @@ per call would cost a symbol-table lookup per message).
 
 Hooked functions:
 - Graph (rare): `rcl_node_init`, `rcl_publisher_init`, `rcl_subscription_init`,
-  `rclcpp_subscription_init`, `rclcpp_subscription_callback_added`, build the handle→topic maps.
-- Publish (inter-process): `rcl_publish` → increment the publisher's topic counter.
-- Receive, rclcpp (all transports): `callback_start` → resolve callback→topic, increment
-  inter/intra by the `is_intra_process` flag.
+  `rclcpp_subscription_init`, `rclcpp_subscription_callback_added`, build the handle→endpoint
+  maps and attribute each endpoint to its node.
+- Publish (inter-process): `rcl_publish` → increment the publisher handle's own counter.
+- Receive, rclcpp (all transports): `callback_start` → resolve callback→subscription endpoint,
+  increment inter/intra by the `is_intra_process` flag.
 - Receive, every other rcl client (rclpy, rclc, ...): `rmw_take(rmw_sub, msg, source_ts, taken)`
   → if `taken`, map rmw handle → rcl handle → topic (from `rcl_subscription_init`) and increment
   inter. A subscription that `rclcpp_subscription_init` named is skipped here, because
@@ -191,9 +192,31 @@ that changes either signature needs a probe release.
 
 ## Core (`core/`, no ROS dependency)
 
-- `TopicRegistry`: owns per-topic `sTopicCounter{atomic pub_inter, recv_inter, recv_intra}` (publish
-  vs receive kept in separate buckets so a same-process pub+sub of one topic never collide); pointer-
-  keyed maps for publisher_handle→counter and the callback→…→topic chain.
+- `TopicRegistry`: owns one `sEndpointCounter{atomic inter, intra, loaned, gap}` per publisher
+  handle and per rcl subscription handle, plus one `sTopicCounter` per topic that lists its
+  endpoints and holds the merged-stream gap accumulators. Pointer-keyed maps for
+  publisher_handle→endpoint and the callback→…→subscription endpoint chain. Publish and receive
+  endpoints are separate objects, so a same-process pub+sub of one topic never collide.
+- **Per endpoint, summed at flush.** Counting per topic made every endpoint of a topic in one
+  process share one counter: two subscriptions of one topic interleaved one inter-arrival
+  stream, two subscriptions of one node doubled a rate, and every node's `/rosout` publisher
+  shared one counter, so one node's log line kept every node in a container alive (PR #68 and
+  #70 reviews). The hot path still does one relaxed add, on the handle's own counter; the
+  per-topic `sTopicStat` is the sum of the endpoints' drained counts, built in `snapshotWindow()`
+  under the write lock that already serializes the drain. The per-endpoint `sEndpointStat` list
+  comes out of the same drain, so the two views of a window always agree.
+- **Node attribution.** Each endpoint remembers the node handle its init carried and is listed
+  under that node. rcl creates a node's `/rosout` publisher inside `rcl_node_init`, before that
+  function's tracepoint fires, so the endpoint init routinely arrives first; `onNodeInit` claims
+  every endpoint indexed under its handle, which also fixes up a recycled node address whose
+  previous owner was provisionally assumed.
+- **Recycled handles.** There is no destroy tracepoint. A publisher or subscription address that
+  comes back in a new init re-homes its existing endpoint object in place (new topic, node, id;
+  gap state reset) instead of allocating a second one, so thread-local cache slots and resolved
+  callbacks that still point at it follow the new identity. Memory is bounded by distinct
+  addresses, not churn. The endpoint's `topic` pointer is atomic for this reason; topic records
+  are never freed, so a hot-path reader racing a re-home updates at worst the old topic's merged
+  gap once.
 - **Hot path**: a thread-local `{registry-id, key, counter*}` cache serves the common repeated-
   endpoint case with a single relaxed atomic increment; a miss takes a `shared_lock` (concurrent),
   and only the first sighting of a callback takes the `unique_lock` to resolve + cache. No global

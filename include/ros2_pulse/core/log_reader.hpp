@@ -20,6 +20,9 @@ struct sLogWindow {
     double window_s{0.0};
     std::vector<sTopicStat> stats;
     std::vector<std::string> nodes;
+    // Per-endpoint split (jsonl "endpoints", text EP lines), rates only like stats. Empty when
+    // the log carries none (an older probe, or text without ROS_TOPIC_STATS_ENDPOINTS=1).
+    std::vector<sEndpointStat> endpoints;
 };
 
 /// @brief Parse a probe log (any number of windows) back into structured form.
@@ -27,7 +30,7 @@ struct sLogWindow {
 /// Consumes BOTH on-disk formats, sniffed per line so mixed files work:
 ///  - text: the exact grammar formatWindow() emits, `# ts_ns=... window_s=...` headers,
 ///    TOPIC / PUB / RECV / JITTER / NODE lines, merged into one sTopicStat per topic per
-///    window;
+///    window, and EP lines into sLogWindow::endpoints;
 ///  - jsonl (ROADMAP R6): a '{' first byte is one self-contained formatWindowJsonl() record,
 ///    no text line can start with '{' (it is not a valid ROS name character), so the sniff
 ///    cannot misfire. pulse-check therefore gates jsonl logs identically: picking the

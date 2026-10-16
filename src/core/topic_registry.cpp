@@ -5,10 +5,10 @@
 
 #include "ros2_pulse/core/topic_registry.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>  // for std::unique_lock with shared_mutex
 #include <new>    // placement-new (forkChildReset)
-#include <unordered_set>
 
 namespace ros2_pulse::core {
 
@@ -20,18 +20,18 @@ std::atomic<uint64_t> g_next_registry_id{1};
 // nullptr, so repeat sightings are served from the shared-lock / thread-local fast paths rather than
 // re-taking the exclusive lock on every call. It is a unique, valid address that is never
 // dereferenced: every read site compares it by identity and skips (see onCallbackStart).
-sTopicCounter g_not_a_subscription;
-sTopicCounter* const kNotASubscription = &g_not_a_subscription;
+sEndpointCounter g_not_a_subscription;
+sEndpointCounter* const kNotASubscription = &g_not_a_subscription;
 
 // Take-path sentinel: the rmw handle belongs to an rclcpp subscription, whose receives are
 // counted at callback_start, so the take is deliberately ignored (no double count). Same
 // identity-only contract as kNotASubscription, never dereferenced.
-sTopicCounter g_take_owned_by_rclcpp;
-sTopicCounter* const kTakeOwnedByRclcpp = &g_take_owned_by_rclcpp;
+sEndpointCounter g_take_owned_by_rclcpp;
+sEndpointCounter* const kTakeOwnedByRclcpp = &g_take_owned_by_rclcpp;
 // Take-path sentinel: an rmw handle no rcl_subscription_init ever named (the rmw's internal
 // discovery reader). Cached so repeat takes skip the lock; never dereferenced.
-sTopicCounter g_take_unknown_handle;
-sTopicCounter* const kTakeUnknownHandle = &g_take_unknown_handle;
+sEndpointCounter g_take_unknown_handle;
+sEndpointCounter* const kTakeUnknownHandle = &g_take_unknown_handle;
 
 // Direct-mapped thread-local hot-path cache, shared by onPublish and onCallbackStart (publisher
 // handles and callback objects are distinct live allocations, so the key domains cannot
@@ -50,7 +50,7 @@ sTopicCounter* const kTakeUnknownHandle = &g_take_unknown_handle;
 struct sTlsSlot {
     uint64_t id{0};
     const void* key{nullptr};
-    sTopicCounter* ctr{nullptr};
+    sEndpointCounter* ctr{nullptr};
 };
 constexpr uintptr_t kTlsSlotMask = 255;
 thread_local sTlsSlot t_tls_cache[kTlsSlotMask + 1];
@@ -62,7 +62,7 @@ inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
     return t_tls_cache[((p >> 4) ^ (p >> 10)) & kTlsSlotMask];
 }
 
-// ROADMAP R5: record one arrival into a side's gap accumulator.
+// ROADMAP R5: record one arrival at @p now into a gap accumulator.
 //
 // `exchange`, not load+store: it guarantees exactly ONE caller consumes each predecessor
 // timestamp, so two threads delivering to the same endpoint can never derive two dt's from the
@@ -74,9 +74,8 @@ inline auto tlsSlotFor(const void* key) -> sTlsSlot& {
 // measured under 8-way contention on one endpoint, 0.6-9.7% of samples are dropped and the
 // reported max is over-stated by at most 5%, never garbage, never negative, and erring high is
 // the safe direction for a stall detector. Single-threaded delivery is exact.
-inline void noteArrival(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_dt_ns) {
-    const auto now = static_cast<uint64_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
+inline void noteArrivalAt(uint64_t now, std::atomic<uint64_t>& last_ns,
+                          std::atomic<uint64_t>& max_dt_ns) {
     const uint64_t prev = last_ns.exchange(now, std::memory_order_relaxed);
     if (prev == 0 || now <= prev) {
         return;  // first arrival ever, or a reordered pair, no usable interval
@@ -89,8 +88,34 @@ inline void noteArrival(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& m
     }
 }
 
-// Drain one side's gap accumulator for the window just ending. Returns false when the endpoint
-// has never seen an arrival: no interval exists, which is NOT the same as a gap of zero, so the
+// One arrival on @p ep, gap tracking on: the handle's own accumulator and its topic's merged
+// per-side accumulator share ONE clock read, so per-endpoint gaps cost an extra exchange, not
+// an extra ~21 ns clock read.
+inline void noteArrival(sEndpointCounter* ep) {
+    const auto now = static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    noteArrivalAt(now, ep->last_ns, ep->max_dt_ns);
+    sTopicCounter* t = ep->topic.load(std::memory_order_relaxed);
+    if (t == nullptr) {
+        return;
+    }
+    if (ep->side == eEndpointSide::kPub) {
+        noteArrivalAt(now, t->pub_last_ns, t->pub_max_dt_ns);
+    } else {
+        noteArrivalAt(now, t->recv_last_ns, t->recv_max_dt_ns);
+    }
+}
+
+// The hot-path count itself: one relaxed add on the handle's own bucket, plus the opt-in gap.
+inline void countArrival(sEndpointCounter* ep, bool is_intra_process, bool gap) {
+    (is_intra_process ? ep->intra : ep->inter).fetch_add(1, std::memory_order_relaxed);
+    if (gap) {
+        noteArrival(ep);
+    }
+}
+
+// Drain one gap accumulator for the window just ending. Returns false when the endpoint has
+// never seen an arrival: no interval exists, which is NOT the same as a gap of zero, so the
 // caller must not report a field. Resets max_dt; deliberately leaves last_ns intact.
 inline auto takeGap(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_dt_ns,
                     uint64_t now_ns, bool fold_open_gap, double& out_ms) -> bool {
@@ -110,11 +135,16 @@ inline auto takeGap(std::atomic<uint64_t>& last_ns, std::atomic<uint64_t>& max_d
         // the open gap is not being folded). Reporting 0.000 would read as "perfectly regular",
         // which is the best possible value, inferred from a single data point. The only real
         // sample this discards is two arrivals inside one clock tick (~21 ns), which can never
-        // be a maximum and is already dropped by noteArrival's now > prev guard.
+        // be a maximum and is already dropped by noteArrivalAt's now > prev guard.
         return false;
     }
     out_ms = static_cast<double>(dt) / 1e6;
     return true;
+}
+
+template <typename T>
+void eraseValue(std::vector<T*>& v, const T* value) {
+    v.erase(std::remove(v.begin(), v.end(), value), v.end());
 }
 
 }  // namespace
@@ -148,6 +178,19 @@ auto TopicRegistry::shouldEmitRecv(const sTopicStat& stat) -> bool {
     return stat.recv_inter_count > 0 || stat.recv_intra_count > 0 || stat.recv_endpoint_seen;
 }
 
+auto TopicRegistry::shouldEmitEndpoint(const sEndpointStat& stat, bool emit_idle) -> bool {
+    // The topic-level gates, applied per handle: traffic always; a proven receive endpoint at
+    // 0.0 (KNOWN_ISSUES #12); a tracked gap, so a publisher that stopped stays visible exactly as
+    // its JITTER line does; and the declared-but-silent rest only on the issue #7 opt-in.
+    if (stat.inter_count > 0 || stat.intra_count > 0 || stat.loaned_count > 0) {
+        return true;
+    }
+    if (stat.side == eEndpointSide::kRecv && stat.endpoint_seen) {
+        return true;
+    }
+    return stat.has_max_dt || emit_idle;
+}
+
 auto TopicRegistry::counterForTopic(const std::string& topic) -> sTopicCounter* {
     auto it = m_by_topic.find(topic);
     if (it != m_by_topic.end()) {
@@ -160,21 +203,75 @@ auto TopicRegistry::counterForTopic(const std::string& topic) -> sTopicCounter* 
     return raw;
 }
 
-void TopicRegistry::linkNodeCounter(const void* node_handle, sTopicCounter* counter) {
-    if (node_handle == nullptr || counter == nullptr) {
-        return;
+void TopicRegistry::unlinkEndpointNode(sEndpointCounter* ep) {
+    if (ep->node != nullptr) {
+        eraseValue(ep->node->endpoints, ep);
+        ep->node = nullptr;
     }
-    auto it = m_nodehandle_to_node.find(node_handle);
-    if (it == m_nodehandle_to_node.end()) {
-        return;
+    if (ep->node_handle != nullptr) {
+        auto it = m_eps_by_nodehandle.find(ep->node_handle);
+        if (it != m_eps_by_nodehandle.end()) {
+            eraseValue(it->second, ep);
+            if (it->second.empty()) {
+                m_eps_by_nodehandle.erase(it);
+            }
+        }
+        ep->node_handle = nullptr;
     }
-    auto& counters = it->second->counters;
-    for (auto* c : counters) {
-        if (c == counter) {
-            return;  // already listed for this node
+}
+
+auto TopicRegistry::bindEndpoint(std::unordered_map<const void*, sEndpointCounter*>& map,
+                                 const void* handle, const char* topic, const void* node_handle,
+                                 eEndpointSide side) -> sEndpointCounter* {
+    sTopicCounter* t = counterForTopic(topic);
+    sEndpointCounter* ep = nullptr;
+    auto it = map.find(handle);
+    if (it == map.end()) {
+        auto owned = std::make_unique<sEndpointCounter>();
+        owned->side = side;
+        ep = owned.get();
+        m_endpoints.push_back(std::move(owned));
+        map.emplace(handle, ep);
+    } else {
+        // A recycled handle: the previous publisher / subscription at this address was destroyed
+        // (no tracepoint says so) and a new one was initialized in its place. Re-home the SAME
+        // endpoint object instead of allocating a second one: every thread-local cache slot and
+        // resolved callback that still points at it now counts into the new identity, where a
+        // fresh object would leave them feeding the dead one (or, before the per-endpoint split,
+        // the wrong topic). Gap state restarts: an interval spanning two endpoints is not one.
+        // Counts still pending from the previous life are reported under the new identity in
+        // the next window; the hot path cannot tell them apart without a lock.
+        ep = it->second;
+        if (sTopicCounter* old = ep->topic.load(std::memory_order_relaxed)) {
+            eraseValue(old->endpoints, ep);
+        }
+        unlinkEndpointNode(ep);
+        ep->seen = false;
+        ep->last_ns.store(0, std::memory_order_relaxed);
+        ep->max_dt_ns.store(0, std::memory_order_relaxed);
+    }
+    ep->id = m_next_endpoint_id++;
+    ep->topic.store(t, std::memory_order_relaxed);
+    t->endpoints.push_back(ep);
+    if (node_handle != nullptr) {
+        ep->node_handle = node_handle;
+        m_eps_by_nodehandle[node_handle].push_back(ep);
+        auto n = m_nodehandle_to_node.find(node_handle);
+        if (n != m_nodehandle_to_node.end()) {
+            // Provisional when the node address was recycled: the new node's rcl_node_init
+            // fires later and re-attributes this endpoint (see onNodeInit).
+            ep->node = n->second;
+            n->second->endpoints.push_back(ep);
         }
     }
-    counters.push_back(counter);
+    return ep;
+}
+
+void TopicRegistry::markSeen(sEndpointCounter* ep) {
+    ep->seen = true;
+    if (sTopicCounter* t = ep->topic.load(std::memory_order_relaxed)) {
+        t->recv_endpoint_seen = true;
+    }
 }
 
 void TopicRegistry::onPublisherInit(const void* pub_handle, const void* node_handle,
@@ -183,9 +280,7 @@ void TopicRegistry::onPublisherInit(const void* pub_handle, const void* node_han
         return;
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    auto* counter = counterForTopic(topic);
-    m_pub_to_counter[pub_handle] = counter;
-    linkNodeCounter(node_handle, counter);
+    bindEndpoint(m_pub_to_counter, pub_handle, topic, node_handle, eEndpointSide::kPub);
 }
 
 void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_handle,
@@ -194,9 +289,7 @@ void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_
         return;
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    auto* counter = counterForTopic(topic);
-    m_subhandle_to_counter[sub_handle] = counter;
-    linkNodeCounter(node_handle, counter);
+    bindEndpoint(m_subhandle_to_counter, sub_handle, topic, node_handle, eEndpointSide::kRecv);
     // A fresh rcl subscription: ownership is unknown until rclcpp_subscription_init (rclcpp
     // fires it right after rcl init, in the Subscription ctor, before any executor can take).
     // Resetting here also covers a recycled rcl handle that used to be rclcpp's.
@@ -221,7 +314,7 @@ void TopicRegistry::onCallbackAdded(const void* callback, const void* subscripti
     if (callback == nullptr || subscription == nullptr) {
         return;
     }
-    // Record the link only. Resolution to a topic is deferred to onCallbackStart, because for
+    // Record the link only. Resolution to an endpoint is deferred to onCallbackStart, because for
     // intra-process subscriptions this fires before the intra waitable's full chain is populated.
     std::unique_lock<std::shared_mutex> lock(m_mu);
     m_cb_to_sub[callback] = subscription;
@@ -251,13 +344,31 @@ void TopicRegistry::onNodeInit(const void* node_handle, const char* node_name,
     }
     if (node_handle != nullptr) {
         m_nodehandle_to_node[node_handle] = node;
+        // Claim every endpoint initialized with this handle: the ones rcl_node_init created
+        // before its own tracepoint (/rosout), and, on a recycled node address, the ones that
+        // bindEndpoint provisionally gave to the destroyed node that held it before. Endpoints of
+        // that destroyed node move too; they are dead (rcl finalizes them before the node) and
+        // carry no traffic, so they cannot keep this node alive.
+        auto eps = m_eps_by_nodehandle.find(node_handle);
+        if (eps != m_eps_by_nodehandle.end()) {
+            for (auto* ep : eps->second) {
+                if (ep->node == node) {
+                    continue;
+                }
+                if (ep->node != nullptr) {
+                    eraseValue(ep->node->endpoints, ep);
+                }
+                ep->node = node;
+                node->endpoints.push_back(ep);
+            }
+        }
     }
 }
 
-auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
+auto TopicRegistry::resolveCallback(const void* callback) -> sEndpointCounter* {
     auto cached = m_cb_to_counter.find(callback);
     if (cached != m_cb_to_counter.end()) {
-        return cached->second;  // a resolved counter, or the kNotASubscription sentinel
+        return cached->second;  // a resolved endpoint, or the kNotASubscription sentinel
     }
     auto s = m_cb_to_sub.find(callback);
     if (s == m_cb_to_sub.end()) {
@@ -277,10 +388,10 @@ auto TopicRegistry::resolveCallback(const void* callback) -> sTopicCounter* {
         return nullptr;  // ditto: retry on a later delivery once subscription_init lands
     }
     m_cb_to_counter[callback] = c->second;  // cache once fully resolved
-    // First delivered message for this subscription: the topic is now a PROVEN receive
-    // endpoint, so idle windows keep emitting an explicit RECV 0.0 line for it
-    // (KNOWN_ISSUES #12). Written under the exclusive lock resolution already holds.
-    c->second->recv_endpoint_seen = true;
+    // First delivered message for this subscription: it is now a PROVEN receive endpoint, so
+    // idle windows keep emitting an explicit RECV 0.0 line for it (KNOWN_ISSUES #12). Written
+    // under the exclusive lock resolution already holds.
+    markSeen(c->second);
     return c->second;
 }
 
@@ -303,29 +414,21 @@ void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) 
     const bool gap = m_gap_tracking.load(std::memory_order_relaxed);
     sTlsSlot& slot = tlsSlotFor(pub_handle);
     if (slot.id == m_id && slot.key == pub_handle) {
-        auto& bucket = is_intra_process ? slot.ctr->pub_intra : slot.ctr->pub_inter;
-        bucket.fetch_add(1, std::memory_order_relaxed);
-        if (gap) {
-            noteArrival(slot.ctr->pub_last_ns, slot.ctr->pub_max_dt_ns);
-        }
+        countArrival(slot.ctr, is_intra_process, gap);
         return;
     }
     std::shared_lock<std::shared_mutex> lock(m_mu);
     m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
     auto it = m_pub_to_counter.find(pub_handle);
     if (it != m_pub_to_counter.end()) {
-        auto& bucket = is_intra_process ? it->second->pub_intra : it->second->pub_inter;
-        bucket.fetch_add(1, std::memory_order_relaxed);
-        if (gap) {
-            noteArrival(it->second->pub_last_ns, it->second->pub_max_dt_ns);
-        }
+        countArrival(it->second, is_intra_process, gap);
         slot = {m_id, pub_handle, it->second};
     }
 }
 
 auto TopicRegistry::lookupHandle(const void* handle,
-                                 const std::unordered_map<const void*, sTopicCounter*>& map)
-    -> sTopicCounter* {
+                                 const std::unordered_map<const void*, sEndpointCounter*>& map)
+    -> sEndpointCounter* {
     sTlsSlot& slot = tlsSlotFor(handle);
     if (slot.id == m_id && slot.key == handle && slot.ctr != kNotASubscription) {
         return slot.ctr;
@@ -344,19 +447,16 @@ void TopicRegistry::onLoanedPublish(const void* pub_handle, bool counted_by_trac
     if (pub_handle == nullptr) {
         return;
     }
-    sTopicCounter* c = lookupHandle(pub_handle, m_pub_to_counter);
+    sEndpointCounter* c = lookupHandle(pub_handle, m_pub_to_counter);
     if (c == nullptr) {
         return;
     }
-    c->pub_loaned.fetch_add(1, std::memory_order_relaxed);
+    c->loaned.fetch_add(1, std::memory_order_relaxed);
     if (!counted_by_tracepoint) {
         // Humble: no tracepoint fired inside rcl_publish_loaned_message, so this IS the only
         // signal for the publish. Count it in the total (and the gap accumulator) here, exactly
         // as onPublish would have.
-        c->pub_inter.fetch_add(1, std::memory_order_relaxed);
-        if (m_gap_tracking.load(std::memory_order_relaxed)) {
-            noteArrival(c->pub_last_ns, c->pub_max_dt_ns);
-        }
+        countArrival(c, /*is_intra_process=*/false, m_gap_tracking.load(std::memory_order_relaxed));
     }
 }
 
@@ -364,9 +464,9 @@ void TopicRegistry::onLoanedTake(const void* sub_handle) {
     if (sub_handle == nullptr) {
         return;
     }
-    sTopicCounter* c = lookupHandle(sub_handle, m_subhandle_to_counter);
+    sEndpointCounter* c = lookupHandle(sub_handle, m_subhandle_to_counter);
     if (c != nullptr) {
-        c->recv_loaned.fetch_add(1, std::memory_order_relaxed);
+        c->loaned.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -376,25 +476,19 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     }
     sTlsSlot& slot = tlsSlotFor(callback);
     if (slot.id == m_id && slot.key == callback) {
-        // slot.ctr is either a resolved counter or the kNotASubscription sentinel. The sentinel
+        // slot.ctr is either a resolved endpoint or the kNotASubscription sentinel. The sentinel
         // means "known timer/service callback", skip it without touching the lock or a counter.
         if (slot.ctr != kNotASubscription) {
-            if (is_intra_process) {
-                slot.ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
-            } else {
-                slot.ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (m_gap_tracking.load(std::memory_order_relaxed)) {
-                noteArrival(slot.ctr->recv_last_ns, slot.ctr->recv_max_dt_ns);
-            }
+            countArrival(slot.ctr, is_intra_process,
+                         m_gap_tracking.load(std::memory_order_relaxed));
         }
         return;
     }
-    // Steady state: the callback is already resolved+cached (as a real counter OR the sentinel),
+    // Steady state: the callback is already resolved+cached (as a real endpoint OR the sentinel),
     // so a SHARED (concurrent) lock suffices. Only the FIRST time we see a callback do we take the
     // exclusive lock to run the full resolution chain and insert into the cache. This keeps
     // multi-threaded executors from serializing every received message on a single writer lock.
-    sTopicCounter* ctr = nullptr;
+    sEndpointCounter* ctr = nullptr;
     {
         std::shared_lock<std::shared_mutex> lock(m_mu);
         m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
@@ -410,7 +504,7 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     }
     // A null result here means "subscription, not resolvable yet" (chain still being populated):
     // leave the thread-local slot untouched so the next delivery retries resolution. A non-null
-    // result, a real counter or the sentinel, is decisive, so cache it thread-locally; that lets
+    // result, a real endpoint or the sentinel, is decisive, so cache it thread-locally; that lets
     // even a not-a-subscription callback drop the shared lock on subsequent same-thread calls.
     if (ctr == nullptr) {
         return;
@@ -419,14 +513,7 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     if (ctr == kNotASubscription) {
         return;  // proven timer/service callback, nothing to count
     }
-    if (is_intra_process) {
-        ctr->recv_intra.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (m_gap_tracking.load(std::memory_order_relaxed)) {
-        noteArrival(ctr->recv_last_ns, ctr->recv_max_dt_ns);
-    }
+    countArrival(ctr, is_intra_process, m_gap_tracking.load(std::memory_order_relaxed));
 }
 
 auto TopicRegistry::takeTag() const -> uint64_t {
@@ -436,7 +523,7 @@ auto TopicRegistry::takeTag() const -> uint64_t {
     return (m_id << 32) | m_sub_epoch.load(std::memory_order_relaxed);
 }
 
-auto TopicRegistry::resolveTake(const void* rmw_sub_handle) const -> sTopicCounter* {
+auto TopicRegistry::resolveTake(const void* rmw_sub_handle) const -> sEndpointCounter* {
     auto r = m_rmwsub_to_subhandle.find(rmw_sub_handle);
     if (r == m_rmwsub_to_subhandle.end()) {
         return nullptr;  // never initialized through rcl, nothing to attribute it to
@@ -459,7 +546,7 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
     // cache below carries the old tag and is re-resolved on the next take (conservative).
     const uint64_t tag = takeTag();
     sTlsSlot& slot = tlsSlotFor(rmw_sub_handle);
-    sTopicCounter* ctr = nullptr;
+    sEndpointCounter* ctr = nullptr;
     if (slot.id == tag && slot.key == rmw_sub_handle) {
         ctr = slot.ctr;
     } else {
@@ -468,8 +555,7 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
             std::shared_lock<std::shared_mutex> lock(m_mu);
             m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
             ctr = resolveTake(rmw_sub_handle);
-            prove_endpoint = ctr != nullptr && ctr != kTakeOwnedByRclcpp &&
-                             !ctr->recv_endpoint_seen;
+            prove_endpoint = ctr != nullptr && ctr != kTakeOwnedByRclcpp && !ctr->seen;
         }
         if (ctr == nullptr) {
             // Unknown handle: the rmw's own internal readers (ros_discovery_info) take through
@@ -479,26 +565,27 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
             ctr = kTakeUnknownHandle;
         }
         if (prove_endpoint) {
-            // First delivered take for this topic: mark it a proven receive endpoint so a later
-            // stall reads RECV 0.0 (KNOWN_ISSUES #12). recv_endpoint_seen is a plain bool written
-            // only under the exclusive lock; once per topic, so this escalation is cold.
+            // First delivered take for this subscription: mark it a proven receive endpoint so a
+            // later stall reads RECV 0.0 (KNOWN_ISSUES #12). The flags are plain bools written
+            // only under the exclusive lock; once per subscription, so this escalation is cold.
             std::unique_lock<std::shared_mutex> lock(m_mu);
-            ctr->recv_endpoint_seen = true;
+            markSeen(ctr);
         }
         slot = {tag, rmw_sub_handle, ctr};
     }
     if (ctr == kTakeOwnedByRclcpp || ctr == kTakeUnknownHandle) {
         return;  // rclcpp subscription (callback_start counts it) or rmw-internal reader
     }
-    ctr->recv_inter.fetch_add(1, std::memory_order_relaxed);
-    if (m_gap_tracking.load(std::memory_order_relaxed)) {
-        noteArrival(ctr->recv_last_ns, ctr->recv_max_dt_ns);
-    }
+    countArrival(ctr, /*is_intra_process=*/false, m_gap_tracking.load(std::memory_order_relaxed));
 }
 
 auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
     -> std::vector<sTopicStat> {
-    std::vector<sTopicStat> out;
+    return snapshotWindow(window_s, fold_open_gap).topics;
+}
+
+auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWindowSnapshot {
+    sWindowSnapshot out;
     std::unique_lock<std::shared_mutex> lock(m_mu);
     const double w = window_s > 0.0 ? window_s : 1.0;
     const bool gap = m_gap_tracking.load(std::memory_order_relaxed);
@@ -506,67 +593,91 @@ auto TopicRegistry::snapshot(double window_s, bool fold_open_gap)
                                   std::chrono::steady_clock::now()
                                       .time_since_epoch().count())
                             : 0ULL;
-    // Counters that carried traffic this window, used below to age per-node liveness. Filtered
-    // topics are excluded from the stats output but still count as node activity (a node emitting
-    // only /rosout is alive), so we record activity before the filter check.
-    std::unordered_set<const sTopicCounter*> active;
+    out.endpoints.reserve(m_endpoints.size());
     for (auto& kv : m_by_topic) {
-        sTopicCounter* c = kv.second.get();
-        // Exchange all split buckets first (this also resets them), so filtered topics still
-        // count toward node activity even though they are excluded from the stats output.
-        uint64_t p = c->pub_inter.exchange(0, std::memory_order_relaxed);
-        uint64_t px = c->pub_intra.exchange(0, std::memory_order_relaxed);
-        uint64_t ri = c->recv_inter.exchange(0, std::memory_order_relaxed);
-        uint64_t rx = c->recv_intra.exchange(0, std::memory_order_relaxed);
-        uint64_t pl = c->pub_loaned.exchange(0, std::memory_order_relaxed);
-        uint64_t rl = c->recv_loaned.exchange(0, std::memory_order_relaxed);
-        // Gap accumulators drain here too, for the same reason the counts do: a filtered topic
-        // is not REPORTED, but its per-window state must still be reset or it ratchets upward
-        // for the process lifetime and the first window after any filter change would report a
-        // gap accumulated since startup.
+        sTopicCounter* t = kv.second.get();
+        // Filtered topics are excluded from the stats output but still drained (so nothing
+        // ratchets) and still count as node activity: a node emitting only /rosout is alive.
+        const bool filtered = shouldFilter(t->topic);
+        sTopicStat s;
+        s.topic = t->topic;
+        // The per-topic numbers are SUMS of the per-endpoint ones, computed here at the window
+        // boundary: the hot path only ever touches the handle's own counter.
+        for (auto* ep : t->endpoints) {
+            const uint64_t in = ep->inter.exchange(0, std::memory_order_relaxed);
+            const uint64_t ix = ep->intra.exchange(0, std::memory_order_relaxed);
+            const uint64_t lo = ep->loaned.exchange(0, std::memory_order_relaxed);
+            // Gap accumulators drain here too, for the same reason the counts do: a filtered
+            // topic is not REPORTED, but its per-window state must still be reset or it ratchets
+            // upward for the process lifetime and the first window after any filter change would
+            // report a gap accumulated since startup.
+            double dt_ms = 0.0;
+            const bool has_dt =
+                gap && takeGap(ep->last_ns, ep->max_dt_ns, now_ns, fold_open_gap, dt_ms);
+            ep->active_this_window = in > 0 || ix > 0 || lo > 0;
+            if (ep->side == eEndpointSide::kPub) {
+                s.pub_inter_count += in;
+                s.pub_intra_count += ix;
+                s.pub_loaned_count += lo;
+            } else {
+                s.recv_inter_count += in;
+                s.recv_intra_count += ix;
+                s.recv_loaned_count += lo;
+            }
+            if (filtered) {
+                continue;
+            }
+            sEndpointStat e;
+            e.topic = t->topic;
+            e.node = ep->node != nullptr ? ep->node->name : std::string();
+            e.side = ep->side;
+            e.id = ep->id;
+            e.inter_count = in;
+            e.intra_count = ix;
+            e.loaned_count = lo;
+            e.inter_hz = static_cast<double>(in) / w;
+            e.intra_hz = static_cast<double>(ix) / w;
+            e.loaned_hz = static_cast<double>(lo) / w;
+            e.endpoint_seen = ep->seen;
+            e.has_max_dt = has_dt;
+            e.max_dt_ms = dt_ms;
+            out.endpoints.push_back(std::move(e));
+        }
         double pub_gap_ms = 0.0;
         double recv_gap_ms = 0.0;
         bool has_pub_gap = false;
         bool has_recv_gap = false;
         if (gap) {
-            has_pub_gap = takeGap(c->pub_last_ns, c->pub_max_dt_ns, now_ns, fold_open_gap,
+            has_pub_gap = takeGap(t->pub_last_ns, t->pub_max_dt_ns, now_ns, fold_open_gap,
                                   pub_gap_ms);
-            has_recv_gap = takeGap(c->recv_last_ns, c->recv_max_dt_ns, now_ns, fold_open_gap,
+            has_recv_gap = takeGap(t->recv_last_ns, t->recv_max_dt_ns, now_ns, fold_open_gap,
                                    recv_gap_ms);
         }
-        if (p > 0 || px > 0 || ri > 0 || rx > 0 || pl > 0 || rl > 0) {
-            active.insert(c);  // this topic's endpoints saw traffic -> owning node(s) are live
-        }
-        if (shouldFilter(c->topic)) {
+        if (filtered) {
             continue;  // counts and gaps reset above, but the topic itself is never reported
         }
-        sTopicStat s;
-        s.topic = c->topic;
-        s.pub_inter_count = p;
-        s.pub_intra_count = px;
-        s.recv_inter_count = ri;
-        s.recv_intra_count = rx;
-        s.pub_inter_hz = static_cast<double>(p) / w;
-        s.pub_intra_hz = static_cast<double>(px) / w;
-        s.recv_inter_hz = static_cast<double>(ri) / w;
-        s.recv_intra_hz = static_cast<double>(rx) / w;
-        s.pub_loaned_count = pl;
-        s.recv_loaned_count = rl;
-        s.pub_loaned_hz = static_cast<double>(pl) / w;
-        s.recv_loaned_hz = static_cast<double>(rl) / w;
-        s.recv_endpoint_seen = c->recv_endpoint_seen;
+        s.pub_inter_hz = static_cast<double>(s.pub_inter_count) / w;
+        s.pub_intra_hz = static_cast<double>(s.pub_intra_count) / w;
+        s.recv_inter_hz = static_cast<double>(s.recv_inter_count) / w;
+        s.recv_intra_hz = static_cast<double>(s.recv_intra_count) / w;
+        s.pub_loaned_hz = static_cast<double>(s.pub_loaned_count) / w;
+        s.recv_loaned_hz = static_cast<double>(s.recv_loaned_count) / w;
+        s.recv_endpoint_seen = t->recv_endpoint_seen;
         s.has_pub_max_dt = has_pub_gap;
         s.pub_max_dt_ms = pub_gap_ms;
         s.has_recv_max_dt = has_recv_gap;
         s.recv_max_dt_ms = recv_gap_ms;
-        out.push_back(std::move(s));
+        out.topics.push_back(std::move(s));
     }
-    // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose owned
-    // counters all sat idle this window advances its quiet-window count; any traffic resets it.
+    // snapshot() is the once-per-window boundary, so it also ages node liveness: a node whose OWN
+    // endpoints all sat idle this window advances its quiet-window count; any traffic resets it.
+    // Per-endpoint, not per-topic: every rclcpp node has a /rosout and a /parameter_events
+    // endpoint, and a shared per-topic counter let one node's log line keep every node in the
+    // process alive (PR #68 review).
     for (auto& node : m_nodes) {
         bool node_active = false;
-        for (auto* c : node->counters) {
-            if (active.count(c) != 0) {
+        for (auto* ep : node->endpoints) {
+            if (ep->active_this_window) {
                 node_active = true;
                 break;
             }
@@ -627,6 +738,9 @@ void TopicRegistry::forkChildReset() {
     for (auto& kv : m_by_topic) {
         kv.second->pub_max_dt_ns.store(0, std::memory_order_relaxed);
         kv.second->recv_max_dt_ns.store(0, std::memory_order_relaxed);
+    }
+    for (auto& ep : m_endpoints) {
+        ep->max_dt_ns.store(0, std::memory_order_relaxed);
     }
 }
 

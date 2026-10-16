@@ -332,6 +332,10 @@ private:
           // opt-in as every other flag: QUIET=true/yes/0 keep the banner, so a half-set flag
           // fails loud (banner still there) instead of half-silencing.
           m_quiet(envFlag("ROS_TOPIC_STATS_QUIET")),
+          // Per-endpoint EP lines in the TEXT format. Opt-in: the default text output stays
+          // byte-identical for every existing parser (jsonl carries the split unconditionally,
+          // as an additive key).
+          m_endpoints_text(envFlag("ROS_TOPIC_STATS_ENDPOINTS")),
           m_spec(loadRateSpec()) {
         // Output format (ROADMAP R6). Parsed in the ctor BODY so the unknown-value warning can
         // show the offending text. The ctor runs exactly once (tracepoint-reached singleton),
@@ -381,7 +385,10 @@ private:
         // max, EXCEPT on the exit window, rclcpp teardown stops traffic before the
         // process exits, so the open gap there measures the shutdown sequence and would
         // fire every max_gap_ms rule on a perfectly healthy stop.
-        auto stats = m_registry.snapshot(window_s, /*fold_open_gap=*/!exiting);
+        // One drain yields both the per-topic sums and the per-endpoint split they were summed
+        // from, so the two views of a window can never disagree.
+        auto snap = m_registry.snapshotWindow(window_s, /*fold_open_gap=*/!exiting);
+        const auto& stats = snap.topics;
         auto nodes = m_registry.activeNodes();
         if (stats.empty() && nodes.empty()) {
             return;
@@ -413,8 +420,9 @@ private:
         }
         std::string block;
         if (m_format == eStatsFormat::kJsonl) {
+            // jsonl always carries the per-endpoint split: an additive key every reader skips.
             block = formatWindowJsonl(stats, nodes, static_cast<long long>(ns), window_s,
-                                      m_emit_idle, warnings);
+                                      m_emit_idle, warnings, &snap.endpoints);
         } else {
             std::vector<std::string> warn_lines;
             warn_lines.reserve(warnings.size());
@@ -422,7 +430,8 @@ private:
                 warn_lines.push_back(renderWarnLine(w));
             }
             block = formatWindow(stats, nodes, static_cast<long long>(ns), window_s,
-                                 m_emit_idle, warn_lines);
+                                 m_emit_idle, warn_lines,
+                                 m_endpoints_text ? &snap.endpoints : nullptr);
         }
 
         rotateIfNeeded();
@@ -471,6 +480,8 @@ private:
     // ROS_TOPIC_STATS_QUIET=1: suppress the informational banner (never diagnostics, see
     // the rationale block in ensureStarted()).
     bool m_quiet;
+    // ROS_TOPIC_STATS_ENDPOINTS=1: append EP lines (per publisher / subscription) to text windows.
+    bool m_endpoints_text;
     // Output format (R6): text (default, byte-identical to pre-R6) or jsonl. Set once in the
     // ctor; an unrecognized value warned about there and fell back to text.
     eStatsFormat m_format{eStatsFormat::kText};

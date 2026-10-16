@@ -77,6 +77,29 @@ def test_jsonl_windows_are_valid_json_with_real_rates():
         assert lo <= best <= hi, f"pub_inter_hz={best} outside [{lo},{hi}]\n{text}"
         assert any("/poc_talker" in w["nodes"] for w in wins), text
 
+        # Per-endpoint split: always present in probe jsonl, and the /chatter publisher is
+        # attributed to the node that created it (real rcl_publisher_init -> rcl_node_init).
+        for w in wins:
+            assert isinstance(w["endpoints"], list), w
+        eps = [e for w in interior for e in w["endpoints"]
+               if e["topic"] == "/chatter" and e["side"] == "pub"]
+        assert eps, f"/chatter publisher endpoint never reported\n{text}"
+        assert all(e.get("node") == "/poc_talker" for e in eps), eps
+        assert lo <= max(e["inter_hz"] for e in eps) <= hi, eps
+
+
+def test_text_endpoint_lines_are_opt_in():
+    """ROS_TOPIC_STATS_ENDPOINTS=1 appends EP lines to text windows; without it the text
+    format is unchanged (no EP line at all)."""
+    with tempfile.TemporaryDirectory() as d:
+        on = ph.run_single("talker", os.path.join(d, "on.log"), run_s=4.0, period="1.0",
+                           extra_env={"ROS_TOPIC_STATS_ENDPOINTS": "1"})
+        off = ph.run_single("talker", os.path.join(d, "off.log"), run_s=4.0, period="1.0")
+        ep = [ln for ln in on.splitlines() if ln.startswith("EP /chatter pub ")]
+        assert ep, f"no EP line for /chatter\n{on}"
+        assert all(" node=/poc_talker " in ln for ln in ep), ep
+        assert not [ln for ln in off.splitlines() if ln.startswith("EP ")], off
+
 
 def test_unknown_format_warns_once_and_falls_back_to_text():
     """A typo'd format must neither crash the host nor be silently ignored: exactly one
