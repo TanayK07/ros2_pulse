@@ -300,10 +300,14 @@ That matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages
 publisher's clock runs ahead of ours). Humble / Iron rclcpp computed age from the message's
 `header.stamp` instead, which the probe cannot read without the message type; for a driver that
 stamps at publish the two agree, for a stamp taken at sensor acquisition that age also included
-the time before publish. Age needs jitter
-tracking and an inter-process delivery through an rmw that emits `rmw_take` (Cyclone DDS, Fast
-DDS); intra-process deliveries never reach `rmw_take` and carry no age. Like upstream, that
-layout does not carry the topic name.
+the time before publish. Age needs jitter tracking and an inter-process delivery through an rmw
+that emits `rmw_take` (Cyclone DDS, Fast DDS); an intra-process delivery itself never reaches
+`rmw_take` and carries no age. One exception: with intra-process comms on and a subscriber in
+another process as well, the publisher also sends every message over DDS, and the same-process
+subscription's DDS reader still takes that copy at `rmw_take` before rclcpp discards it as
+already delivered. That copy is age-sampled, so `message_age` then reflects the DDS path to this
+process; the counts and the receive period are unaffected (they come from `callback_start`).
+Like upstream, that layout does not carry the topic name.
 
 ```bash
 # Probed processes write jsonl (the bridge reads line by line; text windows span lines).

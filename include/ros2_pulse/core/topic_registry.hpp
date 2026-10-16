@@ -106,7 +106,9 @@ struct sEndpointCounter {
     // (PR #70 review). snapshot() pools them per topic (counts and sums add, min of the mins).
     sDurationAcc recv_dt;  // every interval that also feeds this handle's max_dt_ns
     // Message age at rmw_take: local CLOCK_REALTIME minus the DDS source timestamp, i.e. the
-    // publish-to-take latency. Inter-process takes only (intra-process never reaches rmw_take).
+    // publish-to-take latency. DDS takes only: an intra-process delivery never reaches rmw_take,
+    // though with a remote subscriber present the DDS copy rclcpp takes and then discards as
+    // already delivered intra-process still does, and is sampled.
     sAgeAcc recv_age;
 };
 

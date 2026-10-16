@@ -67,8 +67,11 @@ All notable changes to this project are documented here. Format follows
   This matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages from a
   publisher whose clock runs ahead are kept); Humble / Iron rclcpp used `header.stamp`, which
   needs the message type.
-  Intra-process deliveries never reach `rmw_take` and carry no age. Cost: one wall-clock read per
-  take with a source timestamp, about +26 ns on x86-64.
+  Intra-process deliveries never reach `rmw_take` and carry no age, with one exception: with
+  intra-process comms on and a remote subscriber present, the DDS copy that rclcpp takes and
+  discards in the same-process subscription is still age-sampled at `rmw_take` (counts and the
+  receive period are unaffected). Cost: one wall-clock read per take with a source timestamp,
+  about +26 ns on x86-64.
 - jsonl topic entries gain `recv_min_dt_ms`, `recv_stddev_dt_ms` and `recv_age_avg_ms` /
   `recv_age_min_ms` / `recv_age_max_ms` / `recv_age_stddev_ms` / `recv_age_count`, each group
   only when measured. The text format is unchanged. `recv_age_stddev_ms` (and the age `STDDEV`
