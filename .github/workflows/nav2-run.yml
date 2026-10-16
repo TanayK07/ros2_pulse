@@ -9,7 +9,7 @@ jobs:
     name: nav2 loopback (composition=${{ matrix.composed }})
     runs-on: ubuntu-24.04
     container: ros:jazzy-ros-base
-    timeout-minutes: 40
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:

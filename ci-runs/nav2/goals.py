@@ -2,7 +2,9 @@
 import time
 
 import rclpy
+import rclpy.time
 from geometry_msgs.msg import PoseStamped
+from tf2_ros import Buffer, TransformListener
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
 
 
@@ -18,8 +20,17 @@ def pose(nav, x, y):
 
 rclpy.init()
 nav = BasicNavigator()
-nav.setInitialPose(pose(nav, -2.0, -0.5))
-nav.waitUntilNav2Active()
+# The loopback sim has no amcl and only starts publishing map->odom once it has seen an
+# initial pose, which it can miss while it is still starting, so keep sending it.
+tf_buffer = Buffer()
+tf_listener = TransformListener(tf_buffer, nav)
+while not tf_buffer.can_transform('map', 'base_link', rclpy.time.Time()):
+    nav.setInitialPose(pose(nav, -2.0, -0.5))
+    end = time.time() + 2.0
+    while time.time() < end:
+        rclpy.spin_once(nav, timeout_sec=0.1)
+print('map -> base_link available', flush=True)
+nav.waitUntilNav2Active(navigator='bt_navigator', localizer='bt_navigator')
 print('nav2 active', flush=True)
 time.sleep(10)  # idle stretch, steady-state rates
 for x, y in [(1.5, -0.5), (-1.5, 0.5), (0.5, 1.0), (-2.0, -0.5)]:

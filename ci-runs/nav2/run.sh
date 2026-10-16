@@ -14,7 +14,7 @@ PROBE=$(ros2 pkg prefix ros2_pulse)/lib/libros2_pulse.so
 LD_PRELOAD=$PROBE setsid ros2 launch nav2_bringup "$LAUNCH" use_rviz:=False \
   use_composition:="$COMPOSED" > "$OUT/launch.log" 2>&1 &
 PGID=$!
-python3 ci-runs/nav2/goals.py 2>&1 | tee "$OUT/goals.log" || true
+timeout 600 python3 ci-runs/nav2/goals.py 2>&1 | tee "$OUT/goals.log" || true
 kill -INT -- -$PGID || true
 for _ in $(seq 30); do kill -0 $PGID 2>/dev/null || break; sleep 1; done
 kill -KILL -- -$PGID 2>/dev/null || true
