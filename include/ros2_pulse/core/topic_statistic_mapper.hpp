@@ -86,8 +86,10 @@ struct sTopicStatisticSample {
     long long max_ns{0};
 };
 
-/// One TopicStatistics message: every endpoint of the window's process, stamped with the
-/// window's end (system time, the clock graph-monitor's own shim stamps with).
+/// One TopicStatistics message: every endpoint of the window's process. timestamp_ns is the
+/// window's end (system time); pulse_bridge stamps the message with its own system-clock time at
+/// publish instead, as graph-monitor's shim does, since graph-monitor's stale check measures
+/// from the stamp.
 struct sTopicStatisticsBatch {
     long long timestamp_ns{0};
     std::vector<sTopicStatisticSample> statistics;

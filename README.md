@@ -357,8 +357,26 @@ window on `/topic_statistics` (`graph_monitor_topic`), the input
 ([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).
 
 ```bash
+# A 1 s probe window: graph-monitor flags an endpoint Stale (ERROR) after 3 s without a statistic.
+export ROS_TOPIC_STATS_FORMAT=jsonl ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=1 ROS_TOPIC_STATS_JITTER=1
+LD_PRELOAD=$(ros2 pkg prefix ros2_pulse)/lib/libros2_pulse.so ros2 launch my_robot bringup.launch.py
+
 ros2 run ros2_pulse pulse_bridge --ros-args -p graph_monitor:=true
 ```
+
+graph-monitor's `topic_statistics.stale_timeout_ms` (3000 by default) is the constraint: one
+statistic per endpoint arrives per probe window, up to `poll_period_s` late, so
+`ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` (5 s by default) plus `poll_period_s` must stay under it, or
+every endpoint reads `Stale topic statistics` between windows. The bridge warns once per log
+when a window breaks that; if you raise graph-monitor's timeout instead, pass the same value as
+`graph_monitor_stale_timeout_ms`. `ROS_TOPIC_STATS_JITTER=1` is optional and adds `min`, the
+interval `mean`, `max` and `TAKE_AGE`.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `graph_monitor` | `false` | Also publish `rosgraph_monitor_msgs/TopicStatistics`. |
+| `graph_monitor_topic` | `/topic_statistics` | Where to publish those. |
+| `graph_monitor_stale_timeout_ms` | `3000` | graph-monitor's `topic_statistics.stale_timeout_ms`, only used for the warning above. |
 
 | `TopicStatistic` field | Filled with |
 |---|---|
@@ -381,6 +399,7 @@ never saw initialize, and `/rosout` / `/parameter_events`, are not sent. A log f
 older than the per-endpoint split only carries per-process sums: there a process with several
 active nodes is skipped with a warning rather than credited to the wrong node. An endpoint with
 zero traffic is left out, so graph-monitor's stale timeout flags it.
+
 Partial windows (`"partial":true`, see the jsonl schema) send no `PUBLISHED_PERIOD`, and
 `RECEIVED_PERIOD` only when jitter tracking measured the subscription's interval mean, since
 1 / rate there reads slower than the topic is. The cost is at startup: graph-monitor starts an
@@ -388,10 +407,11 @@ endpoint's stale clock when it discovers it, so a publisher's first statistic co
 later, and it reads `Stale topic statistics` (ERROR) in between when two windows plus
 `poll_period_s` exceed `stale_timeout_ms`. The alternative was a wrong "sending too slowly" WARN
 on every start.
-`timestamp` is the window's end: keep `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` plus the bridge's
-`poll_period_s` under graph-monitor's `topic_statistics.stale_timeout_ms` (3 s by default), or
-raise the timeout. `rosgraph_monitor_msgs` is released for Humble through Rolling; a source build
-without it still builds the bridge, and the parameter then only warns.
+
+`timestamp` is the bridge's system-clock time at publish, as graph-monitor's own shim stamps
+it (graph-monitor measures staleness from it), not the window's end. `rosgraph_monitor_msgs` is
+released for Humble through Rolling; a source build without it still builds the bridge, and the
+parameter then only warns.
 
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 

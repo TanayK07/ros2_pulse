@@ -323,7 +323,10 @@ def test_graph_monitor_topic_statistics(ros):
         try:
             assert col.wait_for(1, 10.0), "no TopicStatistics on /topic_statistics within 10 s"
             m = col.msgs[0]
-            assert (m.timestamp.sec, m.timestamp.nanosec) == (1782887153, 899445923)
+            # Stamped at publish with the system clock, like graph-monitor's shim, not with the
+            # window's end: graph-monitor's stale check measures from it.
+            stamp = m.timestamp.sec + m.timestamp.nanosec * 1e-9
+            assert abs(stamp - time.time()) < 10.0, stamp
             by_type = {s.statistic_type: s for s in m.statistics}
             assert len(m.statistics) == 2
             pub = by_type[TopicStatistic.PUBLISHED_PERIOD]
@@ -338,7 +341,30 @@ def test_graph_monitor_topic_statistics(ros):
             assert (recv.max.sec, recv.max.nanosec) == (0, 0)  # no recv gap in this window
         finally:
             col.destroy_node()
-            stop(proc)
+            err = stop(proc)
+        # A 5 s window outlives graph-monitor's 3 s stale timeout: said once for the file.
+        assert err.count("reaches graph-monitor's stale timeout") == 1, err
+
+
+@pytest.mark.skipif(not HAVE_GM, reason="rosgraph_monitor_msgs not installed")
+def test_graph_monitor_stale_warning_follows_window_and_timeout(ros):
+    one_s = GM_WIN.replace('"window_s":5.000', '"window_s":1.000')
+    for win, params, want in (
+            (one_s, (), 0),  # 1 s + 0.2 s poll is under 3 s
+            (GM_WIN, ("-p", "graph_monitor_stale_timeout_ms:=10000"), 0),
+            (one_s, ("-p", "graph_monitor_stale_timeout_ms:=1000"), 1)):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "pulse.jsonl")
+            with open(path, "w") as f:
+                f.write(win * 2)
+            proc = start_bridge(path, ("-p", "graph_monitor:=true", *params))
+            col = GmCollector("/topic_statistics")
+            try:
+                assert col.wait_for(1, 10.0)
+            finally:
+                col.destroy_node()
+                err = stop(proc)
+            assert err.count("reaches graph-monitor's stale timeout") == want, (params, err)
 
 
 @pytest.mark.skipif(not HAVE_GM, reason="rosgraph_monitor_msgs not installed")

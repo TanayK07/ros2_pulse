@@ -93,16 +93,19 @@ All notable changes to this project are documented here. Format follows
   `window_count`, `mean` = 1 / rate and `max` = largest gap when jitter tracking is on. With
   jitter tracking on, `RECEIVED_PERIOD` takes `mean` / `min` from the subscription's own
   interval distribution and `TAKE_AGE` carries its message age (mean / min / max, a negative
-  age sent as 0); `PUBLISHED_PERIOD` `min` stays 0 (not tracked). A partial window sends no
-  `PUBLISHED_PERIOD`, and `RECEIVED_PERIOD` only from a measured interval mean (PR #68 review).
-  Each endpoint is reported under its owning node
-  from the per-endpoint split, so a component container reports every node; two handles of one
-  node on one topic and side report the slower one, not the sum (PR #68 review). A log without
-  the split (an older probe) falls back to per-process sums, and a process with several active
-  nodes is then skipped with a warning. Off by
-  default; `rosgraph_monitor_msgs` is a new `<depend>` found `QUIET`, so a source build without
-  it still builds the bridge. Mapping in the pure core (`topic_statistic_mapper`), 10 new unit
-  tests, 4 new bridge integration tests.
+  age sent as 0); `PUBLISHED_PERIOD` `min` stays 0 (not tracked). Each endpoint is reported
+  under its owning node from the per-endpoint split, so a component container reports every
+  node; two handles of one node on one topic and side report the slower one, not the sum. A
+  partial window sends no `PUBLISHED_PERIOD`, and `RECEIVED_PERIOD` only from a measured
+  interval mean. Messages are stamped with the bridge's system clock at publish, like
+  graph-monitor's shim, and the bridge warns once per log when `window_s` + `poll_period_s`
+  reaches graph-monitor's stale timeout (`graph_monitor_stale_timeout_ms`, 3000 by default);
+  the README example sets `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=1`. A log without the split (an
+  older probe) falls back to per-process sums, and a process with several active nodes is then
+  skipped with a warning, repeated at most once a minute (PR #68 review). Off by default;
+  `rosgraph_monitor_msgs` is a new `<depend>` found `QUIET`, so a source build without it still
+  builds the bridge. Mapping in the pure core (`topic_statistic_mapper`), 30 unit tests, 6
+  bridge integration tests.
 
 ## [0.6.0] - 2026-10-14
 
