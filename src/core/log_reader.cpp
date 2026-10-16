@@ -303,6 +303,137 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
     return true;
 }
 
+auto parseSide(const std::string& token, eEndpointSide& out) -> bool {
+    if (token == "pub") {
+        out = eEndpointSide::kPub;
+        return true;
+    }
+    if (token == "recv") {
+        out = eEndpointSide::kRecv;
+        return true;
+    }
+    return false;
+}
+
+// One element of "endpoints". Known keys land in the stat (max_dt_ms / loaned_hz presence is the
+// measurement marker, as for topics), unknown keys are skipped. An element with no topic or an
+// unknown side is DROPPED, not fatal: a newer probe may grow a side this reader cannot name, and
+// that must not cost the window its topic rates.
+auto parseEndpointObject(sCursor& c, sLogWindow& win) -> bool {
+    if (!consume(c, '{')) {
+        return false;
+    }
+    sEndpointStat e;
+    bool have_topic = false;
+    bool have_side = false;
+    if (!consume(c, '}')) {
+        while (true) {
+            std::string key;
+            if (!parseJsonString(c, key) || !consume(c, ':')) {
+                return false;
+            }
+            if (key == "topic") {
+                if (!parseJsonString(c, e.topic)) return false;
+                have_topic = true;
+            } else if (key == "side") {
+                std::string side;
+                if (!parseJsonString(c, side)) return false;
+                have_side = parseSide(side, e.side);
+            } else if (key == "node") {
+                if (!parseJsonString(c, e.node)) return false;
+            } else if (key == "id") {
+                double id = 0.0;
+                if (!parseJsonNumber(c, id)) return false;
+                e.id = id >= 0.0 && id <= 4294967295.0 ? static_cast<uint32_t>(id) : 0u;
+            } else if (key == "inter_hz") {
+                if (!parseJsonNumber(c, e.inter_hz)) return false;
+            } else if (key == "intra_hz") {
+                if (!parseJsonNumber(c, e.intra_hz)) return false;
+            } else if (key == "max_dt_ms") {
+                if (!parseJsonNumber(c, e.max_dt_ms)) return false;
+                e.has_max_dt = true;
+            } else if (key == "loaned_hz") {
+                if (!parseJsonNumber(c, e.loaned_hz)) return false;
+            } else if (!skipJsonValue(c)) {
+                return false;
+            }
+            if (consume(c, ',')) {
+                continue;
+            }
+            if (!consume(c, '}')) {
+                return false;
+            }
+            break;
+        }
+    }
+    if (have_topic && have_side) {
+        // A receive endpoint is only ever written once proven or active (shouldEmitEndpoint).
+        e.endpoint_seen = e.side == eEndpointSide::kRecv;
+        win.endpoints.push_back(std::move(e));
+    }
+    return true;
+}
+
+// Text EP line: "EP <topic> <side> id=<n> [node=<node>] inter=<hz> intra=<hz> [max_dt_ms=<ms>]
+// [loaned_hz=<hz>]". key=value after the side, unknown keys ignored, so later additions parse.
+// Returns false (line ignored) when the fixed part or a known value is malformed.
+auto parseEpLine(const std::string& line, sEndpointStat& e) -> bool {
+    std::vector<std::string> tok;
+    size_t i = 0;
+    while (i < line.size()) {
+        while (i < line.size() && line[i] == ' ') ++i;
+        const size_t j = line.find(' ', i);
+        const size_t stop = j == std::string::npos ? line.size() : j;
+        if (stop > i) {
+            tok.emplace_back(line.substr(i, stop - i));
+        }
+        i = stop;
+    }
+    if (tok.size() < 3 || tok[0] != "EP" || !parseSide(tok[2], e.side)) {
+        return false;
+    }
+    e.topic = tok[1];
+    bool have_inter = false;
+    for (size_t k = 3; k < tok.size(); ++k) {
+        const auto eq = tok[k].find('=');
+        if (eq == std::string::npos) {
+            continue;
+        }
+        const std::string key = tok[k].substr(0, eq);
+        const std::string val = tok[k].substr(eq + 1);
+        const char* b = val.data();
+        const char* end = val.data() + val.size();
+        double d = 0.0;
+        if (key == "node") {
+            e.node = val;
+            continue;
+        }
+        if (key != "id" && key != "inter" && key != "intra" && key != "max_dt_ms" &&
+            key != "loaned_hz") {
+            continue;
+        }
+        const auto res = std::from_chars(b, end, d);
+        if (res.ec != std::errc{} || res.ptr != end) {
+            return false;
+        }
+        if (key == "id") {
+            e.id = d >= 0.0 && d <= 4294967295.0 ? static_cast<uint32_t>(d) : 0u;
+        } else if (key == "inter") {
+            e.inter_hz = d;
+            have_inter = true;
+        } else if (key == "intra") {
+            e.intra_hz = d;
+        } else if (key == "max_dt_ms") {
+            e.max_dt_ms = d;
+            e.has_max_dt = true;
+        } else {
+            e.loaned_hz = d;
+        }
+    }
+    e.endpoint_seen = e.side == eEndpointSide::kRecv;
+    return have_inter;
+}
+
 // One whole jsonl window record. Returns false on ANY malformation (including trailing bytes
 // after the closing brace, the framing is one object per line, nothing else on it).
 auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
@@ -357,6 +488,24 @@ auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
                 if (!consume(c, ']')) {
                     while (true) {
                         if (!parseTopicObject(c, win)) {
+                            return false;
+                        }
+                        if (consume(c, ',')) {
+                            continue;
+                        }
+                        if (!consume(c, ']')) {
+                            return false;
+                        }
+                        break;
+                    }
+                }
+            } else if (key == "endpoints") {
+                if (!consume(c, '[')) {
+                    return false;
+                }
+                if (!consume(c, ']')) {
+                    while (true) {
+                        if (!parseEndpointObject(c, win)) {
                             return false;
                         }
                         if (consume(c, ',')) {
@@ -481,6 +630,11 @@ auto parseLog(const std::string& text) -> std::vector<sLogWindow> {
             statFor(*cur, name).recv_loaned_hz = a;
         } else if (std::sscanf(line.c_str(), "NODE %511s", name) == 1) {
             cur->nodes.emplace_back(name);
+        } else if (line.compare(0, 3, "EP ") == 0) {
+            sEndpointStat e;
+            if (parseEpLine(line, e)) {
+                cur->endpoints.push_back(std::move(e));
+            }
         }
         // anything else (WARN lines, future additions) is deliberately skipped: pulse-check
         // re-derives warnings from the raw rates instead of trusting probe-side output.

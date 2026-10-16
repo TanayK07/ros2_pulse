@@ -82,7 +82,7 @@ else()
   )
   target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_NAME}_core ${CMAKE_DL_LIBS})
   # Preloaded into every process on the robot: export ONLY the ros_trace_* interposer contract
-  # plus the two rcl loaned-message wrappers (explicit visibility("default") in interposers.cpp,
+  # plus the rcl loaned-message and fini wrappers (explicit visibility("default") in interposers.cpp,
   # named in exports.map), nothing else may leak into the host's
   # dynamic symbol namespace (KNOWN_ISSUES #14; pinned by test/integration/test_symbols.py).
   # The core objects are linked in statically, so they get the same treatment.

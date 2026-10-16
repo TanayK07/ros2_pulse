@@ -1,6 +1,6 @@
 # Known issues
 
-Defects found in review and benchmarking, with the PR that fixed each. All sixteen are fixed
+Defects found in review and benchmarking, with the PR that fixed each. All seventeen are fixed
 and have regression tests; the numbers are referenced from code comments and tests
 (`KNOWN_ISSUES #n`). Current overhead figures are in [bench/RESULTS.md](../bench/RESULTS.md);
 planned work is in [ROADMAP.md](ROADMAP.md).
@@ -23,6 +23,12 @@ planned work is in [ROADMAP.md](ROADMAP.md).
 | 14 | Low | build | The probe exported every symbol, not just `ros_trace_*`; lint deps were declared but unused | [#15](https://github.com/TanayK07/ros2_pulse/pull/15) |
 | 15 | Medium | efficiency | TLS cache hash aliased on allocator strides (about 90 % misses under realistic farms, +2-4 % workload CPU) | [#19](https://github.com/TanayK07/ros2_pulse/pull/19) |
 | 16 | High | correctness | After a SIGSTOP of the probed process the flush timer replayed every missed tick, so ~0-length windows with a ~0 ms gap buried the stall | [#62](https://github.com/TanayK07/ros2_pulse/pull/62) |
+| 17 | High | correctness | Counters were per topic per process: same-topic endpoints in one process shared one counter (interleaved gaps, summed rates per node, one node's `/rosout` kept every node alive) | [#72](https://github.com/TanayK07/ros2_pulse/pull/72) |
 
 Sub-items referenced from code: 8a is the timer first-fire off-by-one, 8b is the nominal
-window denominator (both fixed in #9).
+window denominator (both fixed in #9). 17a is endpoint teardown, found in the #72 review and
+fixed there: with no destroy tracepoint, a destroyed subscription stayed a stalled `inter=0.0`
+endpoint of a live node forever, a recycled node address handed the destroyed node's endpoints
+to the next node, and recycled callback or handle addresses could be served a dead endpoint
+from the thread-local cache. The probe now wraps `rcl_publisher_fini`, `rcl_subscription_fini`
+and `rcl_node_fini`, and the cache tag carries the key kind and the subscription epoch.

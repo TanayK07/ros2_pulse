@@ -37,16 +37,19 @@ per call would cost a symbol-table lookup per message).
 
 Hooked functions:
 - Graph (rare): `rcl_node_init`, `rcl_publisher_init`, `rcl_subscription_init`,
-  `rclcpp_subscription_init`, `rclcpp_subscription_callback_added`, build the handle→topic maps.
-- Publish (inter-process): `rcl_publish` → increment the publisher's topic counter.
-- Receive, rclcpp (all transports): `callback_start` → resolve callback→topic, increment
-  inter/intra by the `is_intra_process` flag.
+  `rclcpp_subscription_init`, `rclcpp_subscription_callback_added`, build the handle→endpoint
+  maps and attribute each endpoint to its node.
+- Publish (inter-process): `rcl_publish` → increment the publisher handle's own counter.
+- Receive, rclcpp (all transports): `callback_start` → resolve callback→subscription endpoint,
+  increment inter/intra by the `is_intra_process` flag.
 - Receive, every other rcl client (rclpy, rclc, ...): `rmw_take(rmw_sub, msg, source_ts, taken)`
   → if `taken`, map rmw handle → rcl handle → topic (from `rcl_subscription_init`) and increment
   inter. A subscription that `rclcpp_subscription_init` named is skipped here, because
   `callback_start` already counts it.
 - Loaned messages: `rcl_publish_loaned_message` and `rcl_take_loaned_message`, real rcl
   functions rather than tracepoints, see below.
+- Teardown: `rcl_publisher_fini`, `rcl_subscription_fini`, `rcl_node_fini`, also real rcl
+  functions (there is no destroy tracepoint), see "Teardown" under Core.
 
 ### Why rmw_take and not rcl_take
 
@@ -179,7 +182,10 @@ API whose signatures are stable within a distro and identical Humble to Rolling 
 not promised across distros. The wrappers therefore use only opaque pointers and the `int32_t`
 `rcl_ret_t`, forward every argument verbatim, dereference nothing except the take's
 out-parameter after success, and are exported by exact name in `src/probe/exports.map` (a
-wildcard would let any future `rcl_*` hook in unreviewed). The real function is found with
+wildcard would let any future `rcl_*` hook in unreviewed). The fini wrappers
+(`rcl_publisher_fini(rcl_publisher_t*, rcl_node_t*)`, `rcl_subscription_fini(rcl_subscription_t*,
+rcl_node_t*)`, `rcl_node_fini(rcl_node_t*)`, identical Humble to Rolling) follow the same rules,
+dereference nothing at all, and tell the registry after the real call returns. The real function is found with
 `dlsym(RTLD_NEXT, ...)`, which searches only the global scope. A plugin that links librcl and is
 `dlopen()`ed `RTLD_LOCAL` by a host that does not still binds its call to the preloaded wrapper,
 but its librcl is not in the global scope, so the wrapper falls back to
@@ -191,9 +197,47 @@ that changes either signature needs a probe release.
 
 ## Core (`core/`, no ROS dependency)
 
-- `TopicRegistry`: owns per-topic `sTopicCounter{atomic pub_inter, recv_inter, recv_intra}` (publish
-  vs receive kept in separate buckets so a same-process pub+sub of one topic never collide); pointer-
-  keyed maps for publisher_handle→counter and the callback→…→topic chain.
+- `TopicRegistry`: owns one `sEndpointCounter{atomic inter, intra, loaned, gap}` per publisher
+  handle and per rcl subscription handle, plus one `sTopicCounter` per topic that lists its
+  endpoints and holds the merged-stream gap accumulators. Pointer-keyed maps for
+  publisher_handle→endpoint and the callback→…→subscription endpoint chain. Publish and receive
+  endpoints are separate objects, so a same-process pub+sub of one topic never collide.
+- **Per endpoint, summed at flush.** Counting per topic made every endpoint of a topic in one
+  process share one counter: two subscriptions of one topic interleaved one inter-arrival
+  stream, two subscriptions of one node doubled a rate, and every node's `/rosout` publisher
+  shared one counter, so one node's log line kept every node in a container alive (PR #68 and
+  #70 reviews). The hot path still does one relaxed add, on the handle's own counter; the
+  per-topic `sTopicStat` is the sum of the endpoints' drained counts, built in `snapshotWindow()`
+  under the write lock that already serializes the drain. The per-endpoint `sEndpointStat` list
+  comes out of the same drain, so the two views of a window always agree.
+- **Node attribution.** Each endpoint remembers the node handle its init carried and is listed
+  under that node. rcl creates a node's `/rosout` publisher inside `rcl_node_init`, before that
+  function's tracepoint fires, so the endpoint init routinely arrives first; `onNodeInit` claims
+  the live, still-unowned endpoints indexed under its handle. It never takes an endpoint another
+  node owns: on a recycled node address the destroyed node's endpoints left the index at their
+  fini and the handle stopped naming that node at its `rcl_node_fini`, so only the new node's
+  pre-init `/rosout` is unowned.
+- **Teardown.** ros2_tracing has init tracepoints but no fini ones, so the probe wraps
+  `rcl_publisher_fini`, `rcl_subscription_fini` and `rcl_node_fini` (same pattern and ABI rules
+  as the loaned wrappers below; graph-rate, never on the per-message path). A fini marks the
+  endpoint retired; `snapshotWindow()` drains it once more, reports it only if that last window
+  carried traffic (never as a proven-idle 0.0 or by its open gap), then drops it from its topic
+  and node. `rcl_node_fini` retires everything still bound to the node handle, because rcl
+  finalizes the `/rosout` publisher inside it, a call within librcl that need not go through the
+  PLT (Ubuntu builds link with `-Bsymbolic-functions`). The topic-level `recv_endpoint_seen`
+  stays sticky (KNOWN_ISSUES #12).
+- **Recycled handles.** A publisher or subscription address that comes back in a new init
+  re-homes its existing endpoint object in place (new topic, node, id; gap state reset; retired
+  flag cleared) instead of allocating a second one, so thread-local cache slots and resolved
+  callbacks that still point at it follow the new identity. Memory is bounded by distinct
+  addresses, not churn. The endpoint's `topic` pointer is atomic for this reason; topic records
+  are never freed, so a hot-path reader racing a re-home updates at worst the old topic's merged
+  gap once. The thread-local cache tag carries the kind of key (publisher handle, rcl
+  subscription handle, callback, rmw handle), so one address reused across kinds is never served
+  the other kind's endpoint, and an address that comes back as the other kind retires the dead
+  endpoint still mapped there. `callback_added` drops the callback's resolved verdict and bumps
+  the subscription epoch that callback and take tags carry, so a re-created subscription at the
+  same callback address re-resolves (and is re-proven) on its first delivery.
 - **Hot path**: a thread-local `{registry-id, key, counter*}` cache serves the common repeated-
   endpoint case with a single relaxed atomic increment; a miss takes a `shared_lock` (concurrent),
   and only the first sighting of a callback takes the `unique_lock` to resolve + cache. No global

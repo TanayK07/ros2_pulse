@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 
@@ -45,6 +46,22 @@ class TopicWindow:
 
 
 @dataclass
+class EndpointWindow:
+    """One publisher or subscription handle of a window (jsonl "endpoints", text EP).
+
+    The per-node split behind the TopicWindow sums. node is None when the probe did
+    not see the owning node's init; max_dt_ms / loaned_hz are None when unmeasured."""
+    topic: str
+    side: str  # "pub" or "recv"
+    id: int = 0
+    node: str | None = None
+    inter_hz: float = 0.0
+    intra_hz: float = 0.0
+    max_dt_ms: float | None = None
+    loaned_hz: float | None = None
+
+
+@dataclass
 class Warn:
     kind: str
     topic: str | None = None
@@ -66,6 +83,9 @@ class Window:
     topics: list[TopicWindow]
     nodes: list[str]
     warns: list[Warn]
+    # Additive (probe 0.7+): empty for older probes and for text logs written without
+    # ROS_TOPIC_STATS_ENDPOINTS=1.
+    endpoints: list[EndpointWindow] = field(default_factory=list)
 
 
 def _warn_detail(w: dict) -> str:
@@ -132,9 +152,46 @@ def parse_jsonl_line(line: str) -> Window | None:
             )
             for w in rec.get("warns", [])
         ]
-        return Window(ts_ns, window_s, topics, list(rec.get("nodes", [])), warns)
+        endpoints = _jsonl_endpoints(rec.get("endpoints"))
+        return Window(ts_ns, window_s, topics, list(rec.get("nodes", [])), warns, endpoints)
     except (KeyError, ValueError, TypeError):
         return None
+
+
+def _jsonl_endpoints(raw: Any) -> list[EndpointWindow]:
+    """The additive "endpoints" array; one bad element costs that element, never the window.
+
+    Same contract as the C++ reader (parseEndpointObject): a non-object element, an
+    unknown side, a missing topic or a non-numeric field drops only that entry. A
+    missing or non-array key is an empty list.
+    """
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for e in raw:
+        if not isinstance(e, dict) or e.get("side") not in ("pub", "recv"):
+            continue  # also a side this reader cannot name
+        topic, node = e.get("topic"), e.get("node")
+        if not isinstance(topic, str) or not (node is None or isinstance(node, str)):
+            continue
+        try:
+            out.append(EndpointWindow(
+                topic=topic,
+                side=e["side"],
+                id=int(e.get("id", 0)),
+                node=node,
+                inter_hz=float(e.get("inter_hz", 0.0)),
+                intra_hz=float(e.get("intra_hz", 0.0)),
+                max_dt_ms=_opt_float(e.get("max_dt_ms")),
+                loaned_hz=_opt_float(e.get("loaned_hz")),
+            ))
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return out
+
+
+def _opt_float(v: Any) -> float | None:
+    return None if v is None else float(v)
 
 
 def _num(s: str) -> float | int:
@@ -151,7 +208,7 @@ def _kv(fields: list[str]) -> dict[str, str]:
 
 
 # Line kinds of the text format (src/core/window_format.cpp, rate_spec.cpp renderWarnLine).
-_TEXT_KINDS = ("TOPIC", "PUB", "RECV", "JITTER", "LOAN", "NODE", "WARN")
+_TEXT_KINDS = ("TOPIC", "PUB", "RECV", "JITTER", "LOAN", "NODE", "WARN", "EP")
 
 
 class _TextBlock:
@@ -163,6 +220,7 @@ class _TextBlock:
         self.topics: dict[str, TopicWindow] = {}
         self.nodes: list[str] = []
         self.warns: list[Warn] = []
+        self.endpoints: list[EndpointWindow] = []
 
     def topic(self, name: str) -> TopicWindow:
         tw = self.topics.get(name)
@@ -197,6 +255,13 @@ class _TextBlock:
             setattr(self.topic(parts[1]), f"{parts[2]}_loaned_hz", hz)
         elif kind == "NODE" and len(parts) == 2:
             self.nodes.append(parts[1])
+        elif kind == "EP" and len(parts) >= 4 and parts[2] in ("pub", "recv"):
+            kv = _kv(parts[3:])
+            self.endpoints.append(EndpointWindow(
+                topic=parts[1], side=parts[2], id=int(kv.get("id", "0")), node=kv.get("node"),
+                inter_hz=float(kv["inter"]), intra_hz=float(kv["intra"]),
+                max_dt_ms=float(kv["max_dt_ms"]) if "max_dt_ms" in kv else None,
+                loaned_hz=float(kv["loaned_hz"]) if "loaned_hz" in kv else None))
         elif kind == "WARN":
             w = self._warn(parts)
             if w is not None:
@@ -222,16 +287,17 @@ class _TextBlock:
         return None
 
     def window(self) -> Window:
-        return Window(self.ts_ns, self.window_s, list(self.topics.values()), self.nodes, self.warns)
+        return Window(self.ts_ns, self.window_s, list(self.topics.values()), self.nodes, self.warns,
+                      self.endpoints)
 
 
 class LogParser:
     """Streaming parser for ONE probe log, both encodings (issue #58).
 
     The probe's default is text: a "# ts_ns=... window_s=..." header, TOPIC/PUB/RECV/
-    JITTER/LOAN/NODE/WARN lines, and a blank line closing the block. jsonl is one record
-    per line. Sniffed per line, like the C++ log_reader, so a file the probe was
-    restarted into with the other format reads whole. Text maps onto the same Window
+    JITTER/LOAN/NODE/WARN (and opt-in EP) lines, and a blank line closing the block.
+    jsonl is one record per line. Sniffed per line, like the C++ log_reader, so a file
+    the probe was restarted into with the other format reads whole. Text maps onto the same Window
     the jsonl twin of that window parses to: a line the probe did not print is an
     absent field, never zero.
 

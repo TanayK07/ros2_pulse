@@ -18,6 +18,9 @@
 //                                                                -> loaned counting
 //   intra      : single process, intra-process comms ON, self pub+sub on /intra_topic at 50 Hz
 //                                                                -> intra-process receive
+//   churn      : one process publishes AND subscribes /churn at 50 Hz, destroys both endpoints
+//                after ~3 s and keeps publishing /churn_keepalive -> endpoint retirement through
+//                the rcl_publisher_fini / rcl_subscription_fini wrappers (PR #72)
 //   exit_storm : detached threads hammer the ros_trace_* interposers while main() returns
 //                                                                -> KNOWN_ISSUES #9 exit hazard
 //   fork_pub   : fork() WITHOUT exec; the child publishes via the interposers and must flush
@@ -215,6 +218,36 @@ private:
     size_t m_n = 0, m_got = 0;
 };
 
+// Lifecycle-style teardown: the /churn publisher and subscription are reset mid-run while the
+// node lives on. Without the fini wrappers the once-delivered subscription stayed in every
+// window as a stalled `recv inter=0.0` endpoint of /poc_churn, and the publisher's open gap grew.
+class ChurnNode : public rclcpp::Node {
+public:
+    explicit ChurnNode(const rclcpp::NodeOptions& o) : Node("poc_churn", o) {
+        m_pub = create_publisher<std_msgs::msg::String>("churn", qos());
+        m_sub = create_subscription<std_msgs::msg::String>(
+            "churn", qos(), [this](std_msgs::msg::String::SharedPtr) { ++m_got; });
+        m_keepalive = create_publisher<std_msgs::msg::String>("churn_keepalive", qos());
+        m_timer = create_wall_timer(20ms, [this]() {
+            std_msgs::msg::String m;
+            m.data = "churn " + std::to_string(m_n);
+            if (++m_n == 150) {  // ~3 s in
+                m_pub.reset();
+                m_sub.reset();
+            }
+            if (m_pub) m_pub->publish(m);
+            m_keepalive->publish(m);
+        });
+    }
+
+private:
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr m_pub;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr m_sub;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr m_keepalive;
+    rclcpp::TimerBase::SharedPtr m_timer;
+    size_t m_n = 0, m_got = 0;
+};
+
 int main(int argc, char** argv) {
     std::string mode = argc > 1 ? argv[1] : "talker";
 
@@ -273,6 +306,8 @@ int main(int argc, char** argv) {
         node = std::make_shared<LoanListener>(plain);
     } else if (mode == "intra") {
         node = std::make_shared<IntraNode>(ipc);
+    } else if (mode == "churn") {
+        node = std::make_shared<ChurnNode>(plain);
     } else if (mode == "exit_storm") {
         // Straggler-tracepoint exit hazard (KNOWN_ISSUES #9): a node init arms the probe, then
         // detached threads hammer the interposers with unknown handles and are STILL RUNNING
