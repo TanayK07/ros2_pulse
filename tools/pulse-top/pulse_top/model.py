@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass, field
+from typing import Any
 
 BLOCKS = "▁▂▃▄▅▆▇█"
 
@@ -151,23 +152,46 @@ def parse_jsonl_line(line: str) -> Window | None:
             )
             for w in rec.get("warns", [])
         ]
-        endpoints = [
-            EndpointWindow(
-                topic=e["topic"],
-                side=e["side"],
-                id=int(e.get("id", 0)),
-                node=e.get("node"),
-                inter_hz=float(e.get("inter_hz", 0.0)),
-                intra_hz=float(e.get("intra_hz", 0.0)),
-                max_dt_ms=e.get("max_dt_ms"),
-                loaned_hz=e.get("loaned_hz"),
-            )
-            for e in rec.get("endpoints", [])
-            if e.get("side") in ("pub", "recv")  # a side this reader cannot name is skipped
-        ]
+        endpoints = _jsonl_endpoints(rec.get("endpoints"))
         return Window(ts_ns, window_s, topics, list(rec.get("nodes", [])), warns, endpoints)
     except (KeyError, ValueError, TypeError):
         return None
+
+
+def _jsonl_endpoints(raw: Any) -> list[EndpointWindow]:
+    """The additive "endpoints" array; one bad element costs that element, never the window.
+
+    Same contract as the C++ reader (parseEndpointObject): a non-object element, an
+    unknown side, a missing topic or a non-numeric field drops only that entry. A
+    missing or non-array key is an empty list.
+    """
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for e in raw:
+        if not isinstance(e, dict) or e.get("side") not in ("pub", "recv"):
+            continue  # also a side this reader cannot name
+        topic, node = e.get("topic"), e.get("node")
+        if not isinstance(topic, str) or not (node is None or isinstance(node, str)):
+            continue
+        try:
+            out.append(EndpointWindow(
+                topic=topic,
+                side=e["side"],
+                id=int(e.get("id", 0)),
+                node=node,
+                inter_hz=float(e.get("inter_hz", 0.0)),
+                intra_hz=float(e.get("intra_hz", 0.0)),
+                max_dt_ms=_opt_float(e.get("max_dt_ms")),
+                loaned_hz=_opt_float(e.get("loaned_hz")),
+            ))
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return out
+
+
+def _opt_float(v: Any) -> float | None:
+    return None if v is None else float(v)
 
 
 def _num(s: str) -> float | int:
