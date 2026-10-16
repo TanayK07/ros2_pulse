@@ -101,29 +101,58 @@ inline void addDuration(sDurationAcc& a, uint64_t v_ns) {
     }
 }
 
-// Drain a duration accumulator for the window just ending. False when it saw no sample: no
-// distribution exists, which must not be reported as a minimum or a deviation of zero. The four
-// fields are exchanged one by one, so a sample racing the drain can split across two windows,
-// the same smear the counts accept; the variance is clamped at zero against exactly that.
-inline auto takeDuration(sDurationAcc& a, sDurationStats& out) -> bool {
-    const uint64_t n = a.n.exchange(0, std::memory_order_relaxed);
-    const uint64_t sum = a.sum_us.exchange(0, std::memory_order_relaxed);
-    const uint64_t sumsq = a.sumsq_us2.exchange(0, std::memory_order_relaxed);
-    const uint64_t mn = a.min_ns.exchange(UINT64_MAX, std::memory_order_relaxed);
-    if (n == 0 || mn == UINT64_MAX) {
+// One window of one accumulator, drained: plain integers, so a topic's subscriptions pool by
+// adding counts and sums and taking the min of the mins (the variance of the union follows from
+// the pooled sums exactly, no per-endpoint deviation is ever averaged).
+struct sDurationSums {
+    uint64_t n{0};
+    uint64_t sum_us{0};
+    uint64_t sumsq_us2{0};
+    uint64_t min_ns{UINT64_MAX};
+    void add(const sDurationSums& o) {
+        n += o.n;
+        sum_us += o.sum_us;
+        sumsq_us2 += o.sumsq_us2;
+        min_ns = o.min_ns < min_ns ? o.min_ns : min_ns;
+    }
+};
+
+// Drain a duration accumulator for the window just ending. The four fields are exchanged one by
+// one, so a sample racing the drain can split across two windows, the same smear the counts
+// accept; finishDuration() clamps the variance at zero against exactly that.
+inline auto drainDuration(sDurationAcc& a) -> sDurationSums {
+    sDurationSums d;
+    d.n = a.n.exchange(0, std::memory_order_relaxed);
+    d.sum_us = a.sum_us.exchange(0, std::memory_order_relaxed);
+    d.sumsq_us2 = a.sumsq_us2.exchange(0, std::memory_order_relaxed);
+    d.min_ns = a.min_ns.exchange(UINT64_MAX, std::memory_order_relaxed);
+    return d;
+}
+
+// The window's statistics from (pooled) sums. False when there was no sample: no distribution
+// exists, which must not be reported as a minimum or a deviation of zero.
+inline auto finishDuration(const sDurationSums& d, sDurationStats& out) -> bool {
+    if (d.n == 0 || d.min_ns == UINT64_MAX) {
         return false;
     }
-    const long double mean_us = static_cast<long double>(sum) / static_cast<long double>(n);
+    const long double mean_us = static_cast<long double>(d.sum_us) / static_cast<long double>(d.n);
     long double var_us2 =
-        static_cast<long double>(sumsq) / static_cast<long double>(n) - mean_us * mean_us;
+        static_cast<long double>(d.sumsq_us2) / static_cast<long double>(d.n) - mean_us * mean_us;
     if (var_us2 < 0.0L) {
         var_us2 = 0.0L;
     }
-    out.count = n;
+    out.count = d.n;
     out.mean_ms = static_cast<double>(mean_us / 1000.0L);
-    out.min_ms = static_cast<double>(mn) / 1e6;
+    out.min_ms = static_cast<double>(d.min_ns) / 1e6;
     out.stddev_ms = static_cast<double>(std::sqrt(var_us2) / 1000.0L);
     return true;
+}
+
+// Discard whatever an endpoint's distributions hold (re-home, fork child).
+inline void resetDistributions(sEndpointCounter* ep) {
+    drainDuration(ep->recv_dt);
+    drainDuration(ep->recv_age);
+    ep->recv_age_max_ns.store(0, std::memory_order_relaxed);
 }
 
 // Message age at rmw_take: local wall clock minus the DDS source timestamp. Both are
@@ -131,7 +160,7 @@ inline auto takeDuration(sDurationAcc& a, sDurationStats& out) -> bool {
 // so clock skew lands in the value exactly as it did in rclcpp's header-stamp age. A source
 // timestamp AHEAD of the local clock (skew the other way) has no unsigned representation and is
 // dropped rather than wrapped into a 584-year age.
-inline void noteAge(sTopicCounter& c, int64_t source_ns) {
+inline void noteAge(sEndpointCounter& c, int64_t source_ns) {
     const auto now = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch())
@@ -175,11 +204,13 @@ inline void noteArrivalAt(uint64_t now, std::atomic<uint64_t>& last_ns,
 
 // One arrival on @p ep, gap tracking on: the handle's own accumulator and its topic's merged
 // per-side accumulator share ONE clock read, so per-endpoint gaps cost an extra exchange, not
-// an extra ~21 ns clock read.
+// an extra ~21 ns clock read. The receive-side distribution is fed from the handle's OWN
+// interval only: the merged stream's intervals interleave subscriptions.
 inline void noteArrival(sEndpointCounter* ep) {
     const auto now = static_cast<uint64_t>(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    noteArrivalAt(now, ep->last_ns, ep->max_dt_ns);
+    noteArrivalAt(now, ep->last_ns, ep->max_dt_ns,
+                  ep->side == eEndpointSide::kRecv ? &ep->recv_dt : nullptr);
     sTopicCounter* t = ep->topic.load(std::memory_order_relaxed);
     if (t == nullptr) {
         return;
@@ -187,7 +218,7 @@ inline void noteArrival(sEndpointCounter* ep) {
     if (ep->side == eEndpointSide::kPub) {
         noteArrivalAt(now, t->pub_last_ns, t->pub_max_dt_ns);
     } else {
-        noteArrivalAt(now, t->recv_last_ns, t->recv_max_dt_ns, &t->recv_dt);
+        noteArrivalAt(now, t->recv_last_ns, t->recv_max_dt_ns);
     }
 }
 
@@ -366,6 +397,7 @@ auto TopicRegistry::bindEndpoint(const void* handle, const char* topic, const vo
         ep->seen = false;
         ep->last_ns.store(0, std::memory_order_relaxed);
         ep->max_dt_ns.store(0, std::memory_order_relaxed);
+        resetDistributions(ep);
     }
     ep->id = m_next_endpoint_id++;
     ep->topic.store(t, std::memory_order_relaxed);
@@ -753,17 +785,13 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken,
         // rclcpp subscription: callback_start counts the receive (and its interval), the take
         // only contributes the age. Gap tracking off keeps this a cache hit and a return.
         if (gap && source_timestamp_ns > 0) {
-            if (sTopicCounter* t = untagCounter(ctr)->topic.load(std::memory_order_relaxed)) {
-                noteAge(*t, source_timestamp_ns);
-            }
+            noteAge(*untagCounter(ctr), source_timestamp_ns);
         }
         return;
     }
     countArrival(ctr, /*is_intra_process=*/false, gap);
     if (gap && source_timestamp_ns > 0) {
-        if (sTopicCounter* t = ctr->topic.load(std::memory_order_relaxed)) {
-            noteAge(*t, source_timestamp_ns);
-        }
+        noteAge(*ctr, source_timestamp_ns);
     }
 }
 
@@ -792,8 +820,17 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
         sTopicStat s;
         s.topic = t->topic;
         // The per-topic numbers are SUMS of the per-endpoint ones, computed here at the window
-        // boundary: the hot path only ever touches the handle's own counter.
+        // boundary: the hot path only ever touches the handle's own counter. The distributions
+        // pool the same way, from integer sums, and drain unconditionally (cheap, and a stale one
+        // must never leak into the first window after gap tracking or a filter changes).
+        sDurationSums recv_dt_sums;
+        sDurationSums recv_age_sums;
+        uint64_t age_max = 0;
         for (auto* ep : t->endpoints) {
+            recv_dt_sums.add(drainDuration(ep->recv_dt));
+            recv_age_sums.add(drainDuration(ep->recv_age));
+            const uint64_t ep_age_max = ep->recv_age_max_ns.exchange(0, std::memory_order_relaxed);
+            age_max = ep_age_max > age_max ? ep_age_max : age_max;
             const uint64_t in = ep->inter.exchange(0, std::memory_order_relaxed);
             const uint64_t ix = ep->intra.exchange(0, std::memory_order_relaxed);
             const uint64_t lo = ep->loaned.exchange(0, std::memory_order_relaxed);
@@ -852,13 +889,10 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
             has_recv_gap = takeGap(t->recv_last_ns, t->recv_max_dt_ns, now_ns, fold_open_gap,
                                    recv_gap_ms);
         }
-        // Distributions drain unconditionally (cheap, and a stale one must never leak into the
-        // first window after gap tracking or a filter changes).
         sDurationStats recv_dt;
         sDurationStats recv_age;
-        const bool has_recv_dt = takeDuration(t->recv_dt, recv_dt);
-        const bool has_recv_age = takeDuration(t->recv_age, recv_age);
-        const uint64_t age_max = t->recv_age_max_ns.exchange(0, std::memory_order_relaxed);
+        const bool has_recv_dt = finishDuration(recv_dt_sums, recv_dt);
+        const bool has_recv_age = finishDuration(recv_age_sums, recv_age);
         recv_age.max_ms = static_cast<double>(age_max) / 1e6;
         if (filtered) {
             continue;  // counts and gaps reset above, but the topic itself is never reported
@@ -957,13 +991,10 @@ void TopicRegistry::forkChildReset() {
     for (auto& kv : m_by_topic) {
         kv.second->pub_max_dt_ns.store(0, std::memory_order_relaxed);
         kv.second->recv_max_dt_ns.store(0, std::memory_order_relaxed);
-        sDurationStats discard;
-        takeDuration(kv.second->recv_dt, discard);
-        takeDuration(kv.second->recv_age, discard);
-        kv.second->recv_age_max_ns.store(0, std::memory_order_relaxed);
     }
     for (auto& ep : m_endpoints) {
         ep->max_dt_ns.store(0, std::memory_order_relaxed);
+        resetDistributions(ep.get());
     }
 }
 

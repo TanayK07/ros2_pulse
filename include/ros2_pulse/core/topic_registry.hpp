@@ -77,6 +77,18 @@ struct sEndpointCounter {
     // This handle's own gap accumulator (ROADMAP R5), same contract as sTopicCounter's pairs.
     std::atomic<uint64_t> last_ns{0};
     std::atomic<uint64_t> max_dt_ns{0};  // reset per window by snapshot()
+
+    // --- receive-side distributions for the /statistics bridge (gap tracking on only) ---
+    // rclcpp's removed topic statistics published MINIMUM / STDDEV of the received message
+    // period and the message age, per subscription. Kept per handle for the same reason as the
+    // gap above: two subscriptions on one topic interleave their arrivals, and intervals taken
+    // across the merged stream would read as a period of roughly T/2 with a large deviation
+    // (PR #70 review). snapshot() pools them per topic (counts and sums add, min of the mins).
+    sDurationAcc recv_dt;  // every interval that also feeds this handle's max_dt_ns
+    // Message age at rmw_take: local CLOCK_REALTIME minus the DDS source timestamp, i.e. the
+    // publish-to-take latency. Inter-process takes only (intra-process never reaches rmw_take).
+    sDurationAcc recv_age;
+    std::atomic<uint64_t> recv_age_max_ns{0};
 };
 
 /// @brief One topic's process-wide record: its endpoints plus the merged-stream gap accumulators.
@@ -106,15 +118,6 @@ struct sTopicCounter {
     std::atomic<uint64_t> recv_last_ns{0};
     std::atomic<uint64_t> pub_max_dt_ns{0};   // reset per window by snapshot()
     std::atomic<uint64_t> recv_max_dt_ns{0};  // reset per window by snapshot()
-
-    // --- receive-side distributions for the /statistics bridge (gap tracking on only) ---
-    // rclcpp's removed topic statistics published MINIMUM / STDDEV of the received message
-    // period and the message age. Receive side only, which is where rclcpp measured them.
-    sDurationAcc recv_dt;   // every interval that also feeds recv_max_dt_ns
-    // Message age at rmw_take: local CLOCK_REALTIME minus the DDS source timestamp, i.e. the
-    // publish-to-take latency. Inter-process takes only (intra-process never reaches rmw_take).
-    sDurationAcc recv_age;
-    std::atomic<uint64_t> recv_age_max_ns{0};
 };
 
 /// @brief Snapshot of one sDurationAcc window, in milliseconds.
@@ -153,9 +156,11 @@ struct sTopicStat {
     double recv_max_dt_ms{0.0};
     bool has_pub_max_dt{false};
     bool has_recv_max_dt{false};
-    // Receive-side inter-arrival distribution: the observed intervals this window (the open gap
-    // folded into recv_max_dt_ms is not one). recv_dt.max_ms is unused, recv_max_dt_ms is the
-    // maximum. Valid only when has_recv_dt is set (gap tracking on and at least one interval).
+    // Receive-side inter-arrival distribution: the observed intervals this window, each one
+    // between two arrivals on the SAME subscription, pooled over the topic's subscriptions (the
+    // open gap folded into recv_max_dt_ms is not one). recv_dt.max_ms is unused, recv_max_dt_ms
+    // is the maximum. Valid only when has_recv_dt is set (gap tracking on and at least one
+    // interval).
     sDurationStats recv_dt;
     bool has_recv_dt{false};
     // Receive-side message age (publish-to-take latency), valid only when has_recv_age is set:

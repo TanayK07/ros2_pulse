@@ -50,9 +50,10 @@ All notable changes to this project are documented here. Format follows
   were removed from Rolling by [rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203). With
   `ROS_TOPIC_STATS_JITTER=1`, `message_period` messages now carry `MINIMUM` and `STDDEV` of the
   received inter-arrival period next to `AVERAGE`, `MAXIMUM` and `SAMPLE_COUNT`, in
-  libstatistics_collector's order. The probe keeps the minimum and the running sums for these in
-  the existing receive-side gap accumulator: lock-free, about +3 ns per receive, and only while
-  gap tracking is on.
+  libstatistics_collector's order. The probe keeps the minimum and the running sums for these per
+  subscription, next to that subscription's own gap accumulator, and pools them per topic at
+  flush time, so two subscriptions on one topic never interleave their intervals: lock-free,
+  about +3 ns per receive, and only while gap tracking is on.
 - **`message_age`.** The `rmw_take` hook now also reads the DDS source timestamp it already
   received, and with gap tracking on records local wall clock minus that timestamp per
   inter-process take, for rclcpp subscriptions too (their receive is still counted at

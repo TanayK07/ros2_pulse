@@ -118,6 +118,36 @@ TEST(StatisticsParity, CallbackPathFeedsTheDistribution) {
     EXPECT_GE(s->recv_dt.min_ms, 10.0);
 }
 
+// Two subscriptions on one topic (a component container, or one node subscribing twice) each
+// receive every message at period T. Intervals are per subscription, never across the merged
+// stream: interleaved, those would alternate ~0 and ~T, MINIMUM ~0 and STDDEV ~T/2 (PR #70
+// review). Pooled per topic, MINIMUM stays ~T and the deviation is scheduling slack only.
+TEST(StatisticsParity, TwoSubscriptionsOneTopicKeepTheirOwnIntervals) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    initRclcppSub(reg, 0x50, 0x51, 0x52, 0x53, "/scan");
+    constexpr int kPeriodMs = 20;
+    constexpr int kMessages = 6;
+    for (int i = 0; i < kMessages; ++i) {
+        if (i > 0) sleepMs(kPeriodMs);
+        reg.onTake(H(0x41), true);
+        reg.onCallbackStart(H(0x53), false);
+    }
+    const auto snap = reg.snapshot(1.0, false);
+    const auto* s = statOf(snap, "/scan");
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->recv_inter_count, 2u * kMessages);
+    ASSERT_TRUE(s->has_recv_dt);
+    EXPECT_EQ(s->recv_dt.count, 2u * (kMessages - 1)) << "intervals of both subscriptions";
+    EXPECT_GE(s->recv_dt.min_ms, kPeriodMs);
+    EXPECT_GE(s->recv_dt.mean_ms, kPeriodMs);
+    EXPECT_LT(s->recv_dt.stddev_ms, kPeriodMs / 4.0) << "no ~0 cross-subscription intervals";
+    // The merged-stream JITTER gap is unchanged: still the gap between ANY two messages.
+    ASSERT_TRUE(s->has_recv_max_dt);
+    EXPECT_GE(s->recv_max_dt_ms, kPeriodMs);
+}
+
 // One arrival is a timestamp, not an interval: no distribution, like no max_dt.
 TEST(StatisticsParity, SingleArrivalHasNoDistribution) {
     TopicRegistry reg;

@@ -202,7 +202,8 @@ Schema rules, pinned by golden-byte unit tests:
   smooth".
 - With gap tracking on, the receive side also carries what `pulse_bridge` needs for rclcpp's
   `/statistics` fields (jsonl only; the text format is unchanged): `recv_min_dt_ms` and
-  `recv_stddev_dt_ms` over the intervals observed in the window, and `recv_age_avg_ms`,
+  `recv_stddev_dt_ms` over the intervals observed in the window (each one between two arrivals on
+  the same subscription, pooled over the topic's subscriptions in the process), and `recv_age_avg_ms`,
   `recv_age_min_ms`, `recv_age_max_ms`, `recv_age_stddev_ms`, `recv_age_count` for the message
   age (see [below](#publishing-on-statistics-pulse_bridge)). Each group is absent when it has no
   sample.
