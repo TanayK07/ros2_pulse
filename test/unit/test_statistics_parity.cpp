@@ -230,19 +230,49 @@ TEST(StatisticsParity, RclcppTakeWithoutGapTrackingIsANoOp) {
     }
 }
 
-// No source timestamp (0), or one ahead of the local clock (skew), is not an age sample: an
-// unsigned age would wrap into centuries.
-TEST(StatisticsParity, MissingOrFutureSourceTimestampIgnored) {
+// No source timestamp (0) is not an age sample.
+TEST(StatisticsParity, MissingSourceTimestampIgnored) {
     TopicRegistry reg;
     reg.setGapTracking(true);
     initRclpySub(reg, 0x40, 0x41, "/scan");
     reg.onTake(H(0x41), true, 0);
-    reg.onTake(H(0x41), true, wallNowNs() + 60LL * 1000000000LL);
+    reg.onTake(H(0x41), true, 0);
     const auto snap = reg.snapshot(1.0, false);
     const auto* s = statOf(snap, "/scan");
     ASSERT_NE(s, nullptr);
     EXPECT_EQ(s->recv_inter_count, 2u);
     EXPECT_FALSE(s->has_recv_age);
+}
+
+// A source timestamp ahead of the local clock (the publisher's host runs fast) is a NEGATIVE
+// age, kept like rclcpp Jazzy+ keeps it: min and the mean go negative, nothing wraps. Dropping
+// it would bias the mean up and hide the skew.
+TEST(StatisticsParity, FutureSourceTimestampIsANegativeAge) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    reg.onTake(H(0x41), true, wallNowNs() + 60LL * 1000000000LL);  // 60 s ahead
+    reg.onTake(H(0x41), true, wallNowNs() - 10000000LL);            // 10 ms ago
+    const auto snap = reg.snapshot(1.0, false);
+    const auto* s = statOf(snap, "/scan");
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->has_recv_age);
+    EXPECT_EQ(s->recv_age.count, 2u);
+    EXPECT_LE(s->recv_age.min_ms, -59990.0);
+    EXPECT_GT(s->recv_age.min_ms, -60000.1);
+    EXPECT_GE(s->recv_age.max_ms, 10.0);
+    EXPECT_LT(s->recv_age.max_ms, 30.0);
+    EXPECT_NEAR(s->recv_age.mean_ms, (-60000.0 + 10.0) / 2.0, 10.0);
+    ASSERT_TRUE(s->recv_age.has_stddev);
+    EXPECT_NEAR(s->recv_age.stddev_ms, 30005.0, 10.0);
+
+    // Signed through jsonl and the reader.
+    const std::string line = formatWindowJsonl(snap, {}, 42LL, 1.0, false);
+    EXPECT_NE(line.find("\"recv_age_min_ms\":-"), std::string::npos) << line;
+    const auto wins = parseLog(line);
+    ASSERT_EQ(wins.size(), 1u);
+    ASSERT_EQ(wins[0].stats.size(), 1u);
+    EXPECT_LT(wins[0].stats[0].recv_age.min_ms, -59990.0);
 }
 
 // A constant clock skew between hosts (10 min here) lands in the age, and must not cost the

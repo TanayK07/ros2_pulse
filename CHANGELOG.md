@@ -59,7 +59,9 @@ All notable changes to this project are documented here. Format follows
   inter-process take, for rclcpp subscriptions too (their receive is still counted at
   `callback_start`). The new `metrics_source:=metric` bridge parameter publishes it as rclcpp
   did: `metrics_source` is `message_period` / `message_age`, `measurement_source_name` the node.
-  This is publish-to-take latency, not rclcpp's `header.stamp` age, which needs the message type.
+  This matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages from a
+  publisher whose clock runs ahead are kept); Humble / Iron rclcpp used `header.stamp`, which
+  needs the message type.
   Intra-process deliveries never reach `rmw_take` and carry no age. Cost: one wall-clock read per
   take with a source timestamp, about +26 ns on x86-64.
 - jsonl topic entries gain `recv_min_dt_ms`, `recv_stddev_dt_ms` and `recv_age_avg_ms` /

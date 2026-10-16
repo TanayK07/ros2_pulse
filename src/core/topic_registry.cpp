@@ -270,19 +270,18 @@ inline void resetDistributions(sEndpointCounter* ep) {
     drainAge(ep->recv_age);
 }
 
-// Message age at rmw_take: local wall clock minus the DDS source timestamp. Both are
-// CLOCK_REALTIME-based nanoseconds since the epoch, on two machines when the publisher is remote,
-// so clock skew lands in the value exactly as it did in rclcpp's header-stamp age. A source
-// timestamp AHEAD of the local clock (skew the other way) has no unsigned representation and is
-// dropped rather than wrapped into a 584-year age.
+// Message age at rmw_take: local wall clock minus the DDS source timestamp, which is what
+// rclcpp Jazzy+ computes (now - message_info.source_timestamp); Humble / Iron rclcpp used
+// header.stamp instead. Both clocks are CLOCK_REALTIME-based nanoseconds since the epoch, on two
+// machines when the publisher is remote, so clock skew lands in the value either way. A source
+// timestamp AHEAD of the local clock gives a negative age, which is kept, as upstream keeps it:
+// dropping it would bias the mean up and hide the skew. Both operands are positive int64, so the
+// difference cannot overflow.
 inline void noteAge(sEndpointCounter& c, int64_t source_ns) {
     const auto now = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
-    if (now <= source_ns) {
-        return;
-    }
     addAge(c.recv_age, now - source_ns);
 }
 

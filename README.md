@@ -288,9 +288,11 @@ type, same topic, no change to the nodes being measured.
 (`message_period`, `message_age`) instead of the topic, as the built-in publisher wrote it, and a
 `message_age` message is published beside each `message_period` one. The age is measured at
 `rmw_take`: the local wall clock minus the DDS source timestamp, so it is publish-to-take latency.
-rclcpp computed age from the message's `header.stamp` instead, which the probe cannot read
-without the message type; for a driver that stamps at publish the two agree, for a stamp taken
-at sensor acquisition the built-in age also included the time before publish. Age needs jitter
+That matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages kept when the
+publisher's clock runs ahead of ours). Humble / Iron rclcpp computed age from the message's
+`header.stamp` instead, which the probe cannot read without the message type; for a driver that
+stamps at publish the two agree, for a stamp taken at sensor acquisition that age also included
+the time before publish. Age needs jitter
 tracking and an inter-process delivery through an rmw that emits `rmw_take` (Cyclone DDS, Fast
 DDS); intra-process deliveries never reach `rmw_take` and carry no age. Like upstream, that
 layout does not carry the topic name.
