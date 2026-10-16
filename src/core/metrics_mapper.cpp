@@ -23,7 +23,8 @@ auto sourceName(const sLogWindow& win, const sMapperOptions& opts) -> std::strin
 
 auto mapWindow(const sLogWindow& win, const sMapperOptions& opts) -> std::vector<sMetricSample> {
     std::vector<sMetricSample> out;
-    out.reserve(win.stats.size());
+    out.reserve(opts.metrics_source == eMetricsSource::Metric ? 2 * win.stats.size()
+                                                              : win.stats.size());
     const std::string source = sourceName(win, opts);
     const long long window_ns = std::llround(win.window_s * 1e9);
 
@@ -44,7 +45,34 @@ auto mapWindow(const sLogWindow& win, const sMapperOptions& opts) -> std::vector
 
         const bool by_metric = opts.metrics_source == eMetricsSource::Metric;
         if (by_metric) {
+            // rclcpp's layout is per SUBSCRIPTION: a publisher-only topic had no collector
+            // upstream, and without the topic name in the message a publish rate would be
+            // indistinguishable from a receive period. The topic layout keeps it.
+            if (!recv_side) {
+                continue;
+            }
             m.metrics_source = "message_period";
+            // message_age first, then message_period, as rclcpp's subscription publishes them.
+            // Always present, like upstream's collector: an empty window (no age sample, e.g.
+            // gap tracking off or intra-process only) is all-NaN points with SAMPLE_COUNT 0.
+            sMetricSample a;
+            a.measurement_source_name = source;
+            a.metrics_source = "message_age";
+            a.unit = "ms";
+            a.window_start_ns = win.ts_ns - window_ns;
+            a.window_stop_ns = win.ts_ns;
+            if (s.has_recv_age && s.recv_age.count > 0) {
+                a.has_average = true;
+                a.average = s.recv_age.mean_ms;
+                a.has_minimum = true;
+                a.minimum = s.recv_age.min_ms;
+                a.has_maximum = true;
+                a.maximum = s.recv_age.max_ms;
+                a.has_stddev = s.recv_age.has_stddev;
+                a.stddev = a.has_stddev ? s.recv_age.stddev_ms : 0.0;
+                a.sample_count = static_cast<double>(s.recv_age.count);
+            }
+            out.push_back(std::move(a));
         }
 
         if (opts.unit == eRateUnit::Period_ms) {
@@ -64,27 +92,6 @@ auto mapWindow(const sLogWindow& win, const sMapperOptions& opts) -> std::vector
             m.average = hz;
         }
         out.push_back(std::move(m));
-
-        // message_age needs its own message, and only rclcpp's layout can tell it apart from the
-        // period (the topic layout has the topic, not the metric, in metrics_source). Always ms.
-        if (by_metric && s.has_recv_age && s.recv_age.count > 0) {
-            sMetricSample a;
-            a.measurement_source_name = source;
-            a.metrics_source = "message_age";
-            a.unit = "ms";
-            a.window_start_ns = win.ts_ns - window_ns;
-            a.window_stop_ns = win.ts_ns;
-            a.has_average = true;
-            a.average = s.recv_age.mean_ms;
-            a.has_minimum = true;
-            a.minimum = s.recv_age.min_ms;
-            a.has_maximum = true;
-            a.maximum = s.recv_age.max_ms;
-            a.has_stddev = s.recv_age.has_stddev;
-            a.stddev = a.has_stddev ? s.recv_age.stddev_ms : 0.0;
-            a.sample_count = static_cast<double>(s.recv_age.count);
-            out.push_back(std::move(a));
-        }
     }
     return out;
 }

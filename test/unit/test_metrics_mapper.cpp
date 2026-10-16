@@ -13,6 +13,7 @@
 #include "ros2_pulse/core/log_reader.hpp"
 #include "ros2_pulse/core/metrics_mapper.hpp"
 
+using ros2_pulse::core::eMetricsSource;
 using ros2_pulse::core::eRateUnit;
 using ros2_pulse::core::mapWindow;
 using ros2_pulse::core::sLogWindow;
@@ -143,4 +144,52 @@ TEST(MetricsMapper, OneSamplePerTopic) {
     EXPECT_EQ(v[0].metrics_source, "/scan");
     EXPECT_EQ(v[1].metrics_source, "/tf");
     EXPECT_DOUBLE_EQ(v[1].average, 10.0);
+}
+
+// rclcpp's layout (metrics_source:=metric) mirrors upstream's per-subscription collectors: a
+// publisher-only topic has none there, and without the topic in the message its publish rate
+// would be indistinguishable from a receive period, so it is skipped. The topic layout keeps it.
+TEST(MetricsMapper, MetricLayoutSkipsPublisherOnlyTopics) {
+    auto w = scanWindow();
+    sTopicStat t;
+    t.topic = "/tf";
+    t.pub_inter_hz = 100.0;
+    w.stats.push_back(t);
+    sMapperOptions o;
+    o.metrics_source = eMetricsSource::Metric;
+    const auto v = mapWindow(w, o);
+    ASSERT_EQ(v.size(), 2u) << "/scan only: message_age + message_period";
+    EXPECT_EQ(v[0].metrics_source, "message_age");
+    EXPECT_EQ(v[1].metrics_source, "message_period");
+    EXPECT_DOUBLE_EQ(v[1].average, 50.0);  // /scan's receive period, not /tf's 10 ms
+    EXPECT_EQ(mapWindow(w, sMapperOptions{}).size(), 2u) << "topic layout keeps /tf";
+}
+
+// Every receive-side topic gets a message_age, before its message_period (upstream's order),
+// even with no age sample this window: empty, SAMPLE_COUNT 0, no measured point.
+TEST(MetricsMapper, MetricLayoutAlwaysHasMessageAgeFirst) {
+    sMapperOptions o;
+    o.metrics_source = eMetricsSource::Metric;
+    const auto v = mapWindow(scanWindow(), o);  // no recv_age in this window
+    ASSERT_EQ(v.size(), 2u);
+    const auto& a = v[0];
+    EXPECT_EQ(a.metrics_source, "message_age");
+    EXPECT_EQ(a.unit, "ms");
+    EXPECT_EQ(a.measurement_source_name, "/perception");
+    EXPECT_EQ(a.window_start_ns, v[1].window_start_ns);
+    EXPECT_EQ(a.window_stop_ns, v[1].window_stop_ns);
+    EXPECT_FALSE(a.has_average || a.has_minimum || a.has_maximum || a.has_stddev);
+    EXPECT_DOUBLE_EQ(a.sample_count, 0.0);
+    EXPECT_EQ(v[1].metrics_source, "message_period");
+    EXPECT_DOUBLE_EQ(v[1].sample_count, 100.0);
+
+    // A proven subscription at 0 Hz is still receive side: both messages, both empty-ish.
+    auto idle = scanWindow();
+    idle.stats[0].recv_inter_hz = 0.0;
+    idle.stats[0].pub_inter_hz = 0.0;
+    idle.stats[0].has_recv_max_dt = false;
+    const auto w = mapWindow(idle, o);
+    ASSERT_EQ(w.size(), 2u);
+    EXPECT_DOUBLE_EQ(w[0].sample_count, 0.0);
+    EXPECT_FALSE(w[1].has_average);
 }

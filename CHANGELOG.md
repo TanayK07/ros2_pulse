@@ -61,7 +61,9 @@ All notable changes to this project are documented here. Format follows
   received, and with gap tracking on records local wall clock minus that timestamp per
   inter-process take, for rclcpp subscriptions too (their receive is still counted at
   `callback_start`). The new `metrics_source:=metric` bridge parameter publishes it as rclcpp
-  did: `metrics_source` is `message_period` / `message_age`, `measurement_source_name` the node.
+  did: `metrics_source` is `message_age` / `message_period` (in that order, one pair per
+  receive-side topic, `message_age` empty with `SAMPLE_COUNT` 0 when unmeasured; publisher-only
+  topics are left out), `measurement_source_name` the node.
   This matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages from a
   publisher whose clock runs ahead are kept); Humble / Iron rclcpp used `header.stamp`, which
   needs the message type.

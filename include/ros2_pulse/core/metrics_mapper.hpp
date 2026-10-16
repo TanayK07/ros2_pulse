@@ -16,6 +16,8 @@
 // in metrics_source. eMetricsSource::Metric reproduces rclcpp's layout exactly: metrics_source is
 // the metric name ("message_period", "message_age") and the topic is not carried, as upstream;
 // that layout also has room for the message_age sample (publish-to-take latency at rmw_take).
+// Like upstream's per-subscription collectors it covers receive-side topics only, and every
+// one gets a message_age sample (before its message_period), empty when no age was measured.
 
 #ifndef ROS2_PULSE__CORE__METRICS_MAPPER_HPP_
 #define ROS2_PULSE__CORE__METRICS_MAPPER_HPP_

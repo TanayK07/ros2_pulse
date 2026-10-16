@@ -480,22 +480,22 @@ TEST(StatisticsParity, MapperTopicLayoutAddsMinimumAndStddev) {
 }
 
 // rclcpp's own layout: metric name in metrics_source, node in measurement_source_name, and a
-// message_age message beside message_period.
+// message_age message before message_period, as rclcpp's subscription published them.
 TEST(StatisticsParity, MapperMetricLayoutMatchesRclcpp) {
     sMapperOptions o;
     o.metrics_source = eMetricsSource::Metric;
     const auto v = mapWindow(parityWindow(), o);
     ASSERT_EQ(v.size(), 2u);
-    EXPECT_EQ(v[0].metrics_source, "message_period");
-    EXPECT_EQ(v[0].measurement_source_name, "/perception");
-    EXPECT_TRUE(v[0].has_minimum);
-    EXPECT_TRUE(v[0].has_stddev);
-    const auto& a = v[1];
+    EXPECT_EQ(v[1].metrics_source, "message_period");
+    EXPECT_EQ(v[1].measurement_source_name, "/perception");
+    EXPECT_TRUE(v[1].has_minimum);
+    EXPECT_TRUE(v[1].has_stddev);
+    const auto& a = v[0];
     EXPECT_EQ(a.metrics_source, "message_age");
     EXPECT_EQ(a.measurement_source_name, "/perception");
     EXPECT_EQ(a.unit, "ms");
-    EXPECT_EQ(a.window_start_ns, v[0].window_start_ns);
-    EXPECT_EQ(a.window_stop_ns, v[0].window_stop_ns);
+    EXPECT_EQ(a.window_start_ns, v[1].window_start_ns);
+    EXPECT_EQ(a.window_stop_ns, v[1].window_stop_ns);
     EXPECT_DOUBLE_EQ(a.average, 2.0);
     EXPECT_DOUBLE_EQ(a.minimum, 1.0);
     EXPECT_DOUBLE_EQ(a.maximum, 4.0);
@@ -503,15 +503,22 @@ TEST(StatisticsParity, MapperMetricLayoutMatchesRclcpp) {
     EXPECT_DOUBLE_EQ(a.sample_count, 99.0);
 }
 
-// No age measured (gap tracking off, intra-process only): message_period alone.
+// No age measured (gap tracking off, intra-process only): message_age is still published, like
+// upstream's always-present collector, as an empty window (no points measured, count 0).
 TEST(StatisticsParity, MapperMetricLayoutWithoutAge) {
     auto w = parityWindow();
     w.stats[0].has_recv_age = false;
     sMapperOptions o;
     o.metrics_source = eMetricsSource::Metric;
     const auto v = mapWindow(w, o);
-    ASSERT_EQ(v.size(), 1u);
-    EXPECT_EQ(v[0].metrics_source, "message_period");
+    ASSERT_EQ(v.size(), 2u);
+    EXPECT_EQ(v[0].metrics_source, "message_age");
+    EXPECT_FALSE(v[0].has_average);
+    EXPECT_FALSE(v[0].has_minimum);
+    EXPECT_FALSE(v[0].has_maximum);
+    EXPECT_FALSE(v[0].has_stddev);
+    EXPECT_DOUBLE_EQ(v[0].sample_count, 0.0);
+    EXPECT_EQ(v[1].metrics_source, "message_period");
 }
 
 // Same side rule as MAXIMUM: a publisher-only process carries no distribution, and Hz mode

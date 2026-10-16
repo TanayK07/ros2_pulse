@@ -287,8 +287,12 @@ Existing `/statistics` consumers keep working by running `pulse_bridge` instead:
 type, same topic, no change to the nodes being measured.
 
 `metrics_source:=metric` switches to rclcpp's own layout: `metrics_source` is the metric name
-(`message_period`, `message_age`) instead of the topic, as the built-in publisher wrote it, and a
-`message_age` message is published beside each `message_period` one. Every message there carries
+(`message_period`, `message_age`) instead of the topic, as the built-in publisher wrote it, and
+every receive-side topic gets a `message_age` message before its `message_period` one, as
+upstream's per-subscription collectors published them; with no age measured that window it is
+empty (`SAMPLE_COUNT` 0). Publisher-only topics are left out of this layout: upstream had no
+collector for them, and without the topic name a publish rate would read as a receive period.
+Every message there carries
 all five points, an unmeasured one as NaN, as libstatistics_collector does for an empty window,
 so consumers that index the points by position read it unchanged. The age is measured at
 `rmw_take`: the local wall clock minus the DDS source timestamp, so it is publish-to-take latency.
@@ -324,7 +328,7 @@ message per topic per window from a process that is not the one under test.
 | `unit` | `ms` | `ms`: `AVERAGE` is the message period (built-in convention). `Hz`: `AVERAGE` is the rate, no `MINIMUM` / `MAXIMUM` / `STDDEV`. |
 | `poll_period_s` | `1.0` | How often the logs are read. |
 | `source_name` | `""` | `measurement_source_name`. Empty: the window's single node name, or `ros2_pulse` when the process has several. |
-| `metrics_source` | `topic` | `topic`: `metrics_source` is the topic name, `message_period` only. `metric`: rclcpp's layout, `metrics_source` is `message_period` / `message_age`. |
+| `metrics_source` | `topic` | `topic`: `metrics_source` is the topic name, `message_period` only. `metric`: rclcpp's layout, receive-side topics only, `metrics_source` is `message_age` / `message_period`, all five points (NaN when unmeasured). |
 
 The rate is taken at the subscription when the process has one (what the built-in statistics
 measure) and at the publisher otherwise. Inter- and intra-process paths report the busier of

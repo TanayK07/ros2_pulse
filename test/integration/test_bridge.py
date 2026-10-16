@@ -208,8 +208,11 @@ def test_metric_layout_always_carries_all_five_points(ros):
         proc = start_bridge(path, ("-p", "metrics_source:=metric"))
         col = Collector("/statistics")
         try:
-            assert col.wait_for(1, 10.0), "no MetricsMessage on /statistics within 10 s"
-            period = next(m for m in col.msgs if m.metrics_source == "message_period")
+            # message_age comes first, so wait for the pair (no age in this window: it is
+            # still published, empty, like upstream's collector).
+            assert col.wait_for(2, 10.0), "expected message_age and message_period"
+            assert [m.metrics_source for m in col.msgs[:2]] == ["message_age", "message_period"]
+            period = col.msgs[1]
             assert [p.data_type for p in period.statistics] == ALL_FIVE
             st = stats_by_type(period)
             T = StatisticDataType
@@ -218,6 +221,13 @@ def test_metric_layout_always_carries_all_five_points(ros):
             assert math.isnan(st[T.STATISTICS_DATA_TYPE_MINIMUM])
             assert math.isnan(st[T.STATISTICS_DATA_TYPE_STDDEV])
             assert st[T.STATISTICS_DATA_TYPE_SAMPLE_COUNT] == 100.0
+            age = col.msgs[0]
+            assert [p.data_type for p in age.statistics] == ALL_FIVE
+            st = stats_by_type(age)
+            assert st[T.STATISTICS_DATA_TYPE_SAMPLE_COUNT] == 0.0
+            for t in (T.STATISTICS_DATA_TYPE_AVERAGE, T.STATISTICS_DATA_TYPE_MAXIMUM,
+                      T.STATISTICS_DATA_TYPE_MINIMUM, T.STATISTICS_DATA_TYPE_STDDEV):
+                assert math.isnan(st[t]), (t, st[t])
         finally:
             col.destroy_node()
             stop(proc)
