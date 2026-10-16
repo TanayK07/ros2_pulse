@@ -1,0 +1,51 @@
+name: nav2 composed run
+
+on:
+  push:
+    branches: [run/nav2-composed]
+
+jobs:
+  nav2:
+    name: nav2 loopback (composition=${{ matrix.composed }})
+    runs-on: ubuntu-24.04
+    container: ros:jazzy-ros-base
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        composed: ['True', 'False']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ws/src/ros2_pulse
+      - name: Install nav2
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ros-jazzy-navigation2 ros-jazzy-nav2-bringup ros-jazzy-nav2-loopback-sim \
+            ros-jazzy-nav2-simple-commander
+      - name: Build probe
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd ws
+          rosdep update -q && rosdep install -y -q --from-paths src --ignore-src || true
+          colcon build --packages-select ros2_pulse --event-handlers console_direct-
+      - name: Run
+        shell: bash
+        run: |
+          cd ws
+          cp -r src/ros2_pulse/ci-runs .
+          ./ci-runs/nav2/run.sh ${{ matrix.composed }}
+      - name: Summarize
+        if: always()
+        shell: bash
+        run: |
+          cd ws
+          python3 ci-runs/nav2/summarize.py out "use_composition:=${{ matrix.composed }}" \
+            | tee out/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nav2-composed-${{ matrix.composed }}
+          path: ws/out
