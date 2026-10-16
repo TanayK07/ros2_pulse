@@ -43,6 +43,14 @@
 //                   tracking measured one (has_max); otherwise left at zero. TAKE_AGE: the
 //                   largest age.
 // The older-probe fallback below fills periods only: 1 / rate, max, no min, no TAKE_AGE.
+//
+// Partial windows (sLogWindow::partial: the probe's first window after attach and its exit
+// window) carry a rate diluted by the lead-in before traffic started, or cut short at exit, so
+// PUBLISHED_PERIOD is not sent for them and RECEIVED_PERIOD only when its interval mean was
+// measured; TAKE_AGE is sent as usual. The trade-off: graph-monitor starts an endpoint's stale
+// clock when it discovers it, so at startup a publisher waits a second window for its first
+// statistic, and reads Stale (ERROR) meanwhile if two windows plus the bridge's poll exceed
+// stale_timeout_ms (3 s by default). A wrong "too slow" WARN on every start was the other choice.
 // A zero-rate endpoint is left out rather than reported as an infinite period: graph-monitor
 // treats a missing update as stale, which is the right verdict for a dead topic.
 

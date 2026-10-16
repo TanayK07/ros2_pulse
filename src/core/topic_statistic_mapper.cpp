@@ -104,19 +104,30 @@ void mapEndpoints(const sLogWindow& win, sTopicStatisticsBatch& out) {
     for (const auto& k : keys) {
         if (k.dead) continue;
         const sEndpointStat& e = *k.slowest;
-        const auto type = e.side == eEndpointSide::kPub ? eTopicStatisticType::PublishedPeriod
-                                                        : eTopicStatisticType::ReceivedPeriod;
-        out.statistics.push_back(
-            sample(type, e.node, e.topic, k.hz, win.window_s, e.has_max_dt, e.max_dt_ms));
-        if (e.side != eEndpointSide::kRecv) continue;
-        fillReceived(e, out.statistics.back());
+        const bool measured_dt = e.has_recv_dt && e.recv_dt.count > 0;
+        // A partial window's count / window_s is diluted by the lead-in before traffic started
+        // (or cut short at exit), so 1 / rate would read as a slow period. Only a measured
+        // interval mean is sent then; the age does not depend on the window length.
+        if (e.side == eEndpointSide::kPub) {
+            if (win.partial) continue;
+            out.statistics.push_back(sample(eTopicStatisticType::PublishedPeriod, e.node, e.topic,
+                                            k.hz, win.window_s, e.has_max_dt, e.max_dt_ms));
+            continue;
+        }
+        if (!win.partial || measured_dt) {
+            out.statistics.push_back(sample(eTopicStatisticType::ReceivedPeriod, e.node, e.topic,
+                                            k.hz, win.window_s, e.has_max_dt, e.max_dt_ms));
+            fillReceived(e, out.statistics.back());
+        }
         if (e.has_recv_age && e.recv_age.count > 0) out.statistics.push_back(takeAge(e));
     }
 }
 
 // Older probe, no per-endpoint split: the per-process topic sums can only be attributed when
-// the process has exactly one active node.
+// the process has exactly one active node. Such a log never marks a window partial, but a
+// partial one is skipped whole here: it has no interval mean to fall back on.
 void mapTopicsSingleNode(const sLogWindow& win, sTopicStatisticsBatch& out) {
+    if (win.partial) return;
     const bool attributable = win.nodes.size() == 1;
     for (const auto& s : win.stats) {
         const double pub_hz = std::max(s.pub_inter_hz, s.pub_intra_hz);

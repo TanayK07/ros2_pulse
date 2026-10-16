@@ -421,8 +421,11 @@ private:
         std::string block;
         if (m_format == eStatsFormat::kJsonl) {
             // jsonl always carries the per-endpoint split: an additive key every reader skips.
+            // The windows grace-skipped above are flagged partial for consumers (pulse_bridge's
+            // graph-monitor output) that would otherwise read their rates as the real ones.
+            const bool partial = window_index == 0 || exiting;
             block = formatWindowJsonl(stats, nodes, static_cast<long long>(ns), window_s,
-                                      m_emit_idle, warnings, &snap.endpoints);
+                                      m_emit_idle, warnings, &snap.endpoints, partial);
         } else {
             std::vector<std::string> warn_lines;
             warn_lines.reserve(warnings.size());

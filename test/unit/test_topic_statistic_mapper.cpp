@@ -453,3 +453,46 @@ TEST(TopicStatisticMapper, ParsedJsonlEndpointDistributionsMapEndToEnd) {
     EXPECT_EQ(b.statistics[1].type, eTopicStatisticType::TakeAge);
     EXPECT_EQ(b.statistics[1].mean_ns, 1500000LL);
 }
+
+// ---- partial windows (the probe's attach / exit window) ----
+
+TEST(TopicStatisticMapper, PartialWindowSendsNoPublishedPeriod) {
+    auto w = scanWindowWithEndpoints();
+    w.partial = true;
+    const auto b = mapWindowTopicStatistics(w);
+    // No interval distribution on the recv side either: 1 / rate would be diluted, so nothing.
+    EXPECT_TRUE(b.statistics.empty());
+    EXPECT_FALSE(b.ambiguous_node);
+}
+
+TEST(TopicStatisticMapper, PartialWindowKeepsAMeasuredReceivePeriodAndTheAge) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    w.partial = true;
+    w.endpoints.push_back(endpoint("/n", "/scan", eEndpointSide::kPub, 4.0));
+    auto r = measuredRecv();
+    r.inter_hz = 4.0;  // 20 messages in a 5 s window that started 4 s before traffic
+    w.endpoints.push_back(r);
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[0].type, eTopicStatisticType::ReceivedPeriod);
+    EXPECT_EQ(b.statistics[0].mean_ns, 49500000LL);  // the intervals, not 1 / 4 Hz
+    EXPECT_EQ(b.statistics[1].type, eTopicStatisticType::TakeAge);
+}
+
+TEST(TopicStatisticMapper, PartialWindowOfAnOlderLogIsSkippedWhole) {
+    auto w = scanWindow();
+    w.partial = true;
+    EXPECT_TRUE(mapWindowTopicStatistics(w).statistics.empty());
+}
+
+TEST(TopicStatisticMapper, ParsedPartialJsonlWindowMapsEndToEnd) {
+    const std::string line =
+        "{\"ts_ns\":\"1\",\"window_s\":5.000,\"partial\":true,\"topics\":[],"
+        "\"nodes\":[\"/n\"],\"warns\":[],\"endpoints\":[{\"topic\":\"/scan\",\"side\":\"pub\","
+        "\"id\":1,\"node\":\"/n\",\"inter_hz\":4.000000,\"intra_hz\":0.000000}]}\n";
+    const auto wins = ros2_pulse::core::parseLog(line);
+    ASSERT_EQ(wins.size(), 1u);
+    EXPECT_TRUE(wins[0].partial);
+    EXPECT_TRUE(mapWindowTopicStatistics(wins[0]).statistics.empty());
+}

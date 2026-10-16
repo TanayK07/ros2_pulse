@@ -209,7 +209,7 @@ void appendJsonBound(std::string& out, double v) {
 auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
                        long long ts_ns, double window_s, bool emit_idle,
                        const std::vector<sRateWarning>& warnings,
-                       const std::vector<sEndpointStat>* endpoints) -> std::string {
+                       const std::vector<sEndpointStat>* endpoints, bool partial) -> std::string {
     std::string out;
     // Rough upper bound (fields are wider than their text twins), same single-write goal.
     out.reserve(96 + stats.size() * 192 + nodes.size() * 40 + warnings.size() * 112);
@@ -224,6 +224,11 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
     // golden-byte testable and a text↔jsonl diff differs in structure only, never in value.
     out += "\",\"window_s\":";
     out += sprintfStr("%.3f", window_s);
+    // Attach / exit window (see the header): absent, not false, on a full one, so every
+    // existing record stays byte-identical.
+    if (partial) {
+        out += ",\"partial\":true";
+    }
 
     out += ",\"topics\":[";
     bool first = true;

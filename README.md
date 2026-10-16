@@ -215,6 +215,10 @@ Schema rules, pinned by golden-byte unit tests:
 - `topics`, `nodes` and `warns` are always present (empty arrays when empty), so `.warns[]`
   needs no null guards. Probe 0.7 adds `endpoints` (also always present in probe output, see
   [below](#per-node-per-endpoint-breakdown)); a record without it comes from an older probe.
+- `"partial":true` marks the probe's first window after attach and the one written at exit,
+  the two it never judges alerts on: the first one's rates are diluted by the time before
+  traffic started, the exit one is cut short. Absent on every other window (and in older
+  probes). jsonl only; the text header is unchanged.
 - `warns` are structured (`kind` is `topic_rate`, `topic_gap` or `node_missing`, with the
   numbers as JSON numbers) rather than preformatted strings. An unbounded `max_hz` omits the
   key, since JSON has no `Infinity`. The text `WARN` line is a rendering of the same data.
@@ -377,6 +381,13 @@ never saw initialize, and `/rosout` / `/parameter_events`, are not sent. A log f
 older than the per-endpoint split only carries per-process sums: there a process with several
 active nodes is skipped with a warning rather than credited to the wrong node. An endpoint with
 zero traffic is left out, so graph-monitor's stale timeout flags it.
+Partial windows (`"partial":true`, see the jsonl schema) send no `PUBLISHED_PERIOD`, and
+`RECEIVED_PERIOD` only when jitter tracking measured the subscription's interval mean, since
+1 / rate there reads slower than the topic is. The cost is at startup: graph-monitor starts an
+endpoint's stale clock when it discovers it, so a publisher's first statistic comes one window
+later, and it reads `Stale topic statistics` (ERROR) in between when two windows plus
+`poll_period_s` exceed `stale_timeout_ms`. The alternative was a wrong "sending too slowly" WARN
+on every start.
 `timestamp` is the window's end: keep `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` plus the bridge's
 `poll_period_s` under graph-monitor's `topic_statistics.stale_timeout_ms` (3 s by default), or
 raise the timeout. `rosgraph_monitor_msgs` is released for Humble through Rolling; a source build

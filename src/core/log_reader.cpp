@@ -532,6 +532,10 @@ auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
                     return false;
                 }
                 have_window = true;
+            } else if (key == "partial") {
+                if (!parseJsonBool(c, win.partial)) {
+                    return false;
+                }
             } else if (key == "topics") {
                 if (!consume(c, '[')) {
                     return false;

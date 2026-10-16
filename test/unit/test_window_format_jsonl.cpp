@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "ros2_pulse/core/log_reader.hpp"
 #include "ros2_pulse/core/rate_spec.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
 #include "ros2_pulse/core/window_format.hpp"
@@ -225,4 +226,29 @@ TEST(WindowFormatJsonl, HostileNamesEscapedAndFramingHolds) {
     ASSERT_FALSE(got.empty());
     EXPECT_EQ(got.back(), '\n');
     EXPECT_EQ(std::count(got.begin(), got.end(), '\n'), 1);
+}
+
+// The probe's attach / exit window: one additive key after window_s, absent on a full window
+// (so every existing record keeps its bytes), and the reader inverts it.
+TEST(WindowFormatJsonl, PartialWindowFlagRoundTrip) {
+    const std::vector<sTopicStat> stats{stat("/scan", 50, 0, 0, 10.0, 0.0, 0.0)};
+    const std::string full = formatWindowJsonl(stats, {"/n"}, 42LL, 5.0, false, {}, nullptr);
+    const std::string part =
+        formatWindowJsonl(stats, {"/n"}, 42LL, 5.0, false, {}, nullptr, /*partial=*/true);
+    EXPECT_EQ(full.find("partial"), std::string::npos);
+    const std::string head = "{\"ts_ns\":\"42\",\"window_s\":5.000,\"partial\":true,\"topics\":";
+    EXPECT_EQ(part.compare(0, head.size(), head), 0) << part;
+    std::string stripped = part;
+    stripped.erase(stripped.find(",\"partial\":true"), 15);
+    EXPECT_EQ(stripped, full);
+
+    const auto wins = ros2_pulse::core::parseLog(full + part);
+    ASSERT_EQ(wins.size(), 2u);
+    EXPECT_FALSE(wins[0].partial);
+    EXPECT_TRUE(wins[1].partial);
+    EXPECT_EQ(wins[1].stats.size(), 1u);
+    // A non-boolean value is a malformed record, like any other known key's wrong type.
+    std::string bad = part;
+    bad.replace(bad.find("true"), 4, "1");
+    EXPECT_TRUE(ros2_pulse::core::parseLog(bad).empty());
 }
