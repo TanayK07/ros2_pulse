@@ -2,7 +2,7 @@
 # Runs Nav2's loopback sim bringup under the probe, drives a few goals, then shuts down.
 set -eo pipefail
 source /opt/ros/jazzy/setup.bash
-source ws/install/setup.bash
+source install/setup.bash
 set -u
 COMPOSED=${1:-True}
 OUT=$PWD/out; mkdir -p "$OUT"
