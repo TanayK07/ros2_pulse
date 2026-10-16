@@ -68,13 +68,16 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 ///           {"kind":"topic_gap","topic":"/x","max_dt_ms":N,"max_gap_ms":N},
 ///           {"kind":"node_missing","node":"/a"}, ...],
 ///  "endpoints":[{"topic":"/x","side":"pub","id":3,"node":"/a","inter_hz":N,"intra_hz":N,
-///                "max_dt_ms":N,"loaned_hz":N}, ...]}
+///                "max_dt_ms":N,"avg_dt_ms":N,"min_dt_ms":N,"stddev_dt_ms":N,"dt_count":N,
+///                "age_avg_ms":N,"age_min_ms":N,"age_max_ms":N,"age_stddev_ms":N,
+///                "age_count":N,"loaned_hz":N}, ...]}
 /// @endcode
 ///
 /// `endpoints` is the per-publisher / per-subscription split of the `topics` sums, one element
 /// per endpoint passing TopicRegistry::shouldEmitEndpoint: `side` is "pub" or "recv", `id` is the
 /// probe's process-unique endpoint id, `node` the owning node (absent when unknown), and
-/// `max_dt_ms` / `loaned_hz` follow the same absence-means-unmeasured rule as the topic keys.
+/// `max_dt_ms` / `loaned_hz` follow the same absence-means-unmeasured rule as the topic keys, as
+/// do a subscription's own receive distributions (`*_dt_*` / `age_*`, gap tracking on only).
 /// The key is written only when @p endpoints is non-null (the probe always passes it, so the
 /// probe's records always carry it, empty or not); a reader must treat its absence as "older
 /// probe", never as "no endpoints".

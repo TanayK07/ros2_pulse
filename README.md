@@ -254,6 +254,11 @@ EP /scan recv id=8 node=/local_costmap/local_costmap inter=20.000000 intra=0.000
   so a second subscription that stopped receiving shows its own stall. The per-topic `JITTER`
   line keeps measuring the gap between any two messages on the topic in the process.
   `loaned_hz` is this handle's loaned subset. Both are absent when not measured.
+- jsonl only, with gap tracking on: a subscription also carries its own receive distributions,
+  the per-subscription twins of the topic's `recv_*_dt_ms` / `recv_age_*` keys: `avg_dt_ms`,
+  `min_dt_ms`, `stddev_dt_ms`, `dt_count` over its observed intervals, and `age_avg_ms`,
+  `age_min_ms`, `age_max_ms`, `age_stddev_ms`, `age_count` for its message age. Each group is
+  absent when it has no sample. The text `EP` line does not carry them.
 - An entry is written under the same gates as the topic lines: traffic this window, a proven
   subscription at an explicit 0.0, a tracked gap, or `ROS_PULSE_EMIT_IDLE=1`. `/rosout`,
   `/parameter_events` and `/diagnostics` are filtered as before.

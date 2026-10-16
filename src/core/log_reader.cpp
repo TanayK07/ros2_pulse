@@ -349,6 +349,7 @@ auto parseEndpointObject(sCursor& c, sLogWindow& win) -> bool {
     sEndpointStat e;
     bool have_topic = false;
     bool have_side = false;
+    bool have_age_stddev = false;
     if (!consume(c, '}')) {
         while (true) {
             std::string key;
@@ -377,6 +378,32 @@ auto parseEndpointObject(sCursor& c, sLogWindow& win) -> bool {
                 e.has_max_dt = true;
             } else if (key == "loaned_hz") {
                 if (!parseJsonNumber(c, e.loaned_hz)) return false;
+            } else if (key == "avg_dt_ms") {
+                if (!parseJsonNumber(c, e.recv_dt.mean_ms)) return false;
+                e.has_recv_dt = true;
+            } else if (key == "min_dt_ms") {
+                if (!parseJsonNumber(c, e.recv_dt.min_ms)) return false;
+                e.has_recv_dt = true;
+            } else if (key == "stddev_dt_ms") {
+                if (!parseJsonNumber(c, e.recv_dt.stddev_ms)) return false;
+            } else if (key == "dt_count") {
+                double n = 0.0;
+                if (!parseJsonNumber(c, n)) return false;
+                e.recv_dt.count = n > 0.0 ? static_cast<uint64_t>(n) : 0;
+            } else if (key == "age_avg_ms") {
+                if (!parseJsonNumber(c, e.recv_age.mean_ms)) return false;
+                e.has_recv_age = true;
+            } else if (key == "age_min_ms") {
+                if (!parseJsonNumber(c, e.recv_age.min_ms)) return false;
+            } else if (key == "age_max_ms") {
+                if (!parseJsonNumber(c, e.recv_age.max_ms)) return false;
+            } else if (key == "age_stddev_ms") {
+                if (!parseJsonNumber(c, e.recv_age.stddev_ms)) return false;
+                have_age_stddev = true;
+            } else if (key == "age_count") {
+                double n = 0.0;
+                if (!parseJsonNumber(c, n)) return false;
+                e.recv_age.count = n > 0.0 ? static_cast<uint64_t>(n) : 0;
             } else if (!skipJsonValue(c)) {
                 return false;
             }
@@ -389,6 +416,7 @@ auto parseEndpointObject(sCursor& c, sLogWindow& win) -> bool {
             break;
         }
     }
+    e.recv_age.has_stddev = have_age_stddev;
     if (have_topic && have_side) {
         // A receive endpoint is only ever written once proven or active (shouldEmitEndpoint).
         e.endpoint_seen = e.side == eEndpointSide::kRecv;

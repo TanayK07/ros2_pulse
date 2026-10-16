@@ -214,6 +214,15 @@ struct sEndpointStat {
     // This handle's own largest inter-arrival gap this window (R5), valid only when has_max_dt.
     double max_dt_ms{0.0};
     bool has_max_dt{false};
+    // Receive side, gap tracking on: this subscription's own inter-arrival distribution and
+    // message age, the per-handle views sTopicStat::recv_dt / recv_age pool. Same validity rules
+    // as there (recv_dt.max_ms unused, max_dt_ms is the maximum). Lets a consumer that matches
+    // one subscription (graph-monitor) read its period and age without the topic's other
+    // subscriptions mixed in.
+    sDurationStats recv_dt;
+    bool has_recv_dt{false};
+    sDurationStats recv_age;
+    bool has_recv_age{false};
 };
 
 /// @brief Everything one flush window measured: per-topic sums plus the per-endpoint split.

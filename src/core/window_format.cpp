@@ -406,6 +406,32 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
                 out += ",\"max_dt_ms\":";
                 out += sprintfStr("%.3f", e.max_dt_ms);
             }
+            // This subscription's own distributions, the per-handle twins of the topic's
+            // recv_*_dt / recv_age_* keys (jsonl only, like those). Same absence rule.
+            if (e.has_recv_dt) {
+                out += ",\"avg_dt_ms\":";
+                out += sprintfStr("%.3f", e.recv_dt.mean_ms);
+                out += ",\"min_dt_ms\":";
+                out += sprintfStr("%.3f", e.recv_dt.min_ms);
+                out += ",\"stddev_dt_ms\":";
+                out += sprintfStr("%.3f", e.recv_dt.stddev_ms);
+                out += ",\"dt_count\":";
+                out += sprintfStr("%llu", static_cast<unsigned long long>(e.recv_dt.count));
+            }
+            if (e.has_recv_age) {
+                out += ",\"age_avg_ms\":";
+                out += sprintfStr("%.3f", e.recv_age.mean_ms);
+                out += ",\"age_min_ms\":";
+                out += sprintfStr("%.3f", e.recv_age.min_ms);
+                out += ",\"age_max_ms\":";
+                out += sprintfStr("%.3f", e.recv_age.max_ms);
+                if (e.recv_age.has_stddev) {
+                    out += ",\"age_stddev_ms\":";
+                    out += sprintfStr("%.3f", e.recv_age.stddev_ms);
+                }
+                out += ",\"age_count\":";
+                out += sprintfStr("%llu", static_cast<unsigned long long>(e.recv_age.count));
+            }
             if (e.loaned_count > 0) {
                 out += ",\"loaned_hz\":";
                 out += sprintfStr("%.6f", e.loaned_hz);

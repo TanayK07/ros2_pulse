@@ -938,8 +938,10 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
         sDurationSums recv_dt_sums;
         sAgeMoments recv_age_moments;
         for (auto* ep : t->endpoints) {
-            recv_dt_sums.add(drainDuration(ep->recv_dt));
-            recv_age_moments.add(drainAge(ep->recv_age));
+            const sDurationSums ep_dt = drainDuration(ep->recv_dt);
+            const sAgeMoments ep_age = drainAge(ep->recv_age);
+            recv_dt_sums.add(ep_dt);
+            recv_age_moments.add(ep_age);
             const uint64_t in = ep->inter.exchange(0, std::memory_order_relaxed);
             const uint64_t ix = ep->intra.exchange(0, std::memory_order_relaxed);
             const uint64_t lo = ep->loaned.exchange(0, std::memory_order_relaxed);
@@ -986,6 +988,9 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
             e.endpoint_seen = ep->seen && !ep->retired;
             e.has_max_dt = has_dt && !ep->retired;
             e.max_dt_ms = e.has_max_dt ? dt_ms : 0.0;
+            // Samples taken before a fini are real ones, unlike its open gap: kept.
+            e.has_recv_dt = finishDuration(ep_dt, e.recv_dt);
+            e.has_recv_age = finishAge(ep_age, e.recv_age);
             out.endpoints.push_back(std::move(e));
         }
         double pub_gap_ms = 0.0;

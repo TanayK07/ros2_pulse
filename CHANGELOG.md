@@ -77,6 +77,11 @@ All notable changes to this project are documented here. Format follows
   only when measured. The text format is unchanged. `recv_age_stddev_ms` (and the age `STDDEV`
   point) is dropped for a window whose ages spread over more than ~71 min rather than reported
   wrapped; a constant cross-host clock skew does not affect it.
+- jsonl `endpoints` entries of a subscription gain its own receive distributions, the
+  per-subscription twins of the topic keys above: `avg_dt_ms` / `min_dt_ms` / `stddev_dt_ms` /
+  `dt_count` and `age_avg_ms` / `age_min_ms` / `age_max_ms` / `age_stddev_ms` / `age_count`, each
+  group only when measured (gap tracking on). Drained from the accumulators the topic already
+  pools, at flush time; the hot path is unchanged. Text `EP` lines are unchanged.
 - **pulse_bridge: `rosgraph_monitor_msgs/TopicStatistics` for graph-monitor
   ([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).** With
   `graph_monitor:=true` the bridge also publishes each window on `/topic_statistics`
