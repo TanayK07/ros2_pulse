@@ -7,7 +7,8 @@
 //  - two nodes in one process, each with its own subscription on the same topic (composition);
 //  - one node with two subscriptions on the same topic;
 //  - /rosout shared by every node of the process, attributed per node for liveness.
-// Plus the format and reader round trip of the additive output. Registers into the shared test
+// Plus teardown (rcl_*_fini) and address reuse across lives and kinds (PR #72 review), and the
+// format and reader round trip of the additive output. Registers into the shared test
 // binary (no main()).
 
 #include <gtest/gtest.h>
@@ -298,29 +299,69 @@ TEST(PerEndpoint, RecycledPublisherHandleRehomesEndpoint) {
     EXPECT_TRUE(endpointsOf(snap, "/old", eEndpointSide::kPub).empty());
 }
 
-// A node address can be recycled too. The new node's /rosout (or any) publisher init arrives
-// before its rcl_node_init and is provisionally given to the destroyed node at that address;
-// the node init then claims it.
-TEST(PerEndpoint, RecycledNodeHandleIsReattributedOnNodeInit) {
-    TopicRegistry reg;
+// A node address can be recycled too. The destroyed node's endpoints were finalized before it
+// (rcl_publisher_fini, then rcl_node_fini); the new node's /rosout (or any) publisher init
+// arrives before its rcl_node_init. The new node claims exactly that endpoint and never the
+// destroyed node's (PR #72 review: a /map subscription of an unloaded component must not show
+// up under the next component's name).
+TEST(PerEndpoint, RecycledNodeHandleOnlyClaimsTheNewNodesEndpoints) {
+    TopicRegistry reg(/*quiet_windows=*/1);
+    reg.onPublisherInit(H(0x110), H(0x100), "/rosout");  // first's /rosout, before its init
     reg.onNodeInit(H(0x100), "first", "/");
     reg.onPublisherInit(H(0x600), H(0x100), "/status");
     reg.onPublish(H(0x600));
     auto snap = reg.snapshotWindow(1.0);
     ASSERT_EQ(endpointsOf(snap, "/status", eEndpointSide::kPub).at(0).node, "/first");
 
-    reg.onPublisherInit(H(0x700), H(0x100), "/status");  // second node's publisher, before init
+    // Component unloaded: rclcpp finalizes the publisher, then the node (which finalizes its
+    // /rosout publisher inside rcl_node_fini, here without a separate wrapper call).
+    reg.onPublisherFini(H(0x600));
+    reg.onNodeFini(H(0x100));
+    // Next component at the same node address.
+    reg.onPublisherInit(H(0x710), H(0x100), "/rosout");  // second's /rosout, before its init
     reg.onNodeInit(H(0x100), "second", "/");
+    reg.onPublisherInit(H(0x700), H(0x100), "/status");
     reg.onPublish(H(0x700));
+    reg.onPublish(H(0x710));
     snap = reg.snapshotWindow(1.0);
     const auto eps = endpointsOf(snap, "/status", eEndpointSide::kPub);
-    const sEndpointStat* live = nullptr;
-    for (const auto& e : eps) {
-        if (e.inter_count == 1u) live = &e;
+    ASSERT_EQ(eps.size(), 1u) << "the destroyed node's /status publisher is still reported";
+    EXPECT_EQ(eps[0].node, "/second");
+    EXPECT_EQ(eps[0].inter_count, 1u);
+    for (const auto& e : snap.endpoints) {
+        EXPECT_FALSE(e.node == "/second" && e.inter_count == 0u)
+            << "an endpoint /second never created is attributed to it: " << e.topic;
     }
-    ASSERT_NE(live, nullptr);
-    EXPECT_EQ(live->node, "/second");
-    EXPECT_TRUE(hasNode(reg.activeNodes(), "/second"));
+    // Only /second's own /rosout publisher logs now: it must count as /second's liveness.
+    reg.onPublish(H(0x710));
+    reg.snapshotWindow(1.0);
+    EXPECT_TRUE(hasNode(reg.activeNodes(), "/second"))
+        << "the pre-init /rosout publisher was not claimed";
+}
+
+// The same recycled node address, but the destroyed node's fini was never seen (no wrapper
+// reached). The new node must still not inherit an endpoint the old node owned: attribution
+// stays with the old owner rather than becoming a lie under the new name.
+TEST(PerEndpoint, RecycledNodeHandleWithoutFiniNeverStealsOwnedEndpoints) {
+    TopicRegistry reg;
+    reg.onNodeInit(H(0x100), "first", "/");
+    reg.onPublisherInit(H(0x600), H(0x100), "/status");
+    reg.onPublish(H(0x600));
+    reg.snapshotWindow(1.0);
+
+    reg.onNodeInit(H(0x100), "second", "/");
+    reg.onPublisherInit(H(0x700), H(0x100), "/status");
+    reg.onPublish(H(0x700));
+    const auto snap = reg.snapshotWindow(1.0);
+    const auto eps = endpointsOf(snap, "/status", eEndpointSide::kPub);
+    ASSERT_EQ(eps.size(), 2u);
+    for (const auto& e : eps) {
+        if (e.inter_count == 1u) {
+            EXPECT_EQ(e.node, "/second");  // bound after the init: the new node's own
+        } else {
+            EXPECT_EQ(e.node, "/first") << "the old node's endpoint was handed to /second";
+        }
+    }
 }
 
 // An endpoint whose node was never initialized (no rcl_node_init seen) is still counted, with
@@ -463,4 +504,209 @@ TEST(PerEndpoint, ReaderRoundTripsBothFormats) {
         "\"endpoints\":[{\"topic\":\"/x\",\"side\":\"service\",\"id\":1,\"inter_hz\":1.0}]}\n");
     ASSERT_EQ(future.size(), 1u);
     EXPECT_TRUE(future[0].endpoints.empty());
+}
+
+// ---- teardown (rcl_*_fini wrappers) and address reuse, PR #72 review ----
+
+// A destroyed subscription and publisher (lifecycle on_cleanup) must not stay behind as ghost
+// endpoints of a live node: a once-proven subscription would read inter=0.0 every window
+// forever, and a publisher's open gap would grow without bound with gap tracking on. Their last
+// window's traffic still reaches the topic sum, then they are gone.
+TEST(PerEndpoint, DestroyedEndpointsRetireAfterOneFinalDrain) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    reg.onNodeInit(H(0x100), "controller_server", "/");
+    initRclcppSub(reg, 0x100, 0x1000, 0x1100, 0x1200, "/odom");
+    reg.onPublisherInit(H(0x500), H(0x100), "/cmd_vel");
+    reg.onPublisherInit(H(0x510), H(0x100), "/keepalive");  // the node stays alive
+    reg.onCallbackStart(H(0x1200), false);
+    reg.onPublish(H(0x500));
+    reg.onPublish(H(0x500));
+    reg.snapshotWindow(1.0);
+
+    reg.onCallbackStart(H(0x1200), false);  // last delivery before the destroy
+    reg.onSubscriptionFini(H(0x1000));
+    reg.onPublisherFini(H(0x500));
+    reg.onPublish(H(0x510));
+
+    // Final drain: the last window's counts are reported, never as a proven-idle or gap record.
+    auto snap = reg.snapshotWindow(1.0);
+    auto odom = endpointsOf(snap, "/odom", eEndpointSide::kRecv);
+    ASSERT_EQ(odom.size(), 1u);
+    EXPECT_EQ(odom[0].inter_count, 1u);
+    EXPECT_EQ(odom[0].node, "/controller_server");
+    EXPECT_FALSE(odom[0].endpoint_seen);
+    EXPECT_FALSE(odom[0].has_max_dt);
+    EXPECT_TRUE(endpointsOf(snap, "/cmd_vel", eEndpointSide::kPub).empty())
+        << "a destroyed publisher with no traffic in its last window is still reported";
+    const auto* t = findTopic(snap.topics, "/odom");
+    ASSERT_NE(t, nullptr);
+    EXPECT_EQ(t->recv_inter_count, 1u);
+
+    for (int w = 0; w < 3; ++w) {
+        SCOPED_TRACE(w);
+        reg.onPublish(H(0x510));
+        snap = reg.snapshotWindow(1.0);
+        EXPECT_TRUE(endpointsOf(snap, "/odom", eEndpointSide::kRecv).empty());
+        EXPECT_TRUE(endpointsOf(snap, "/cmd_vel", eEndpointSide::kPub).empty());
+        // The topic-level line keeps its KNOWN_ISSUES #12 meaning: the topic delivered once in
+        // this process, so a dead upstream still reads RECV 0.0 rather than vanishing.
+        t = findTopic(snap.topics, "/odom");
+        ASSERT_NE(t, nullptr);
+        EXPECT_EQ(t->recv_inter_count, 0u);
+        EXPECT_TRUE(TopicRegistry::shouldEmitRecv(*t));
+    }
+    EXPECT_TRUE(hasNode(reg.activeNodes(), "/controller_server"));
+}
+
+// on_cleanup then on_configure: the subscription comes back on new handles. Exactly one live
+// endpoint per subscription, and the recycled address of a destroyed one re-homes (un-retires).
+TEST(PerEndpoint, RecreatedEndpointAtRecycledAddressIsLiveAgain) {
+    TopicRegistry reg;
+    reg.onNodeInit(H(0x100), "controller_server", "/");
+    reg.onPublisherInit(H(0x500), H(0x100), "/cmd_vel");
+    reg.onPublish(H(0x500));
+    reg.snapshotWindow(1.0);
+    reg.onPublisherFini(H(0x500));
+    reg.snapshotWindow(1.0);  // final drain, nothing left
+
+    reg.onPublisherInit(H(0x500), H(0x100), "/cmd_vel");  // same address again
+    reg.onPublish(H(0x500));
+    const auto snap = reg.snapshotWindow(1.0);
+    const auto eps = endpointsOf(snap, "/cmd_vel", eEndpointSide::kPub);
+    ASSERT_EQ(eps.size(), 1u);
+    EXPECT_EQ(eps[0].inter_count, 1u);
+    EXPECT_EQ(eps[0].node, "/controller_server");
+}
+
+// rcl_node_fini finalizes the node's /rosout publisher inside librcl, possibly without going
+// through our rcl_publisher_fini wrapper; anything still bound to the node handle retires with
+// the node.
+TEST(PerEndpoint, NodeFiniRetiresEndpointsStillBoundToIt) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    reg.onNodeInit(H(0x100), "planner", "/");
+    reg.onPublisherInit(H(0x600), H(0x100), "/plan");
+    reg.onPublish(H(0x600));
+    reg.snapshotWindow(1.0);
+    reg.onNodeFini(H(0x100));
+    for (int w = 0; w < 2; ++w) {
+        const auto snap = reg.snapshotWindow(1.0);
+        EXPECT_TRUE(endpointsOf(snap, "/plan", eEndpointSide::kPub).empty()) << w;
+    }
+    reg.onPublisherFini(H(0x600));  // a late or duplicate fini is harmless
+    reg.onSubscriptionFini(H(0x600));
+    reg.onNodeFini(H(0x100));
+    reg.onPublisherFini(H(0xdead));  // never initialized
+}
+
+// rclcpp fires rclcpp_subscription_init and callback_added from the Subscription ctor, and the
+// callback is an interior pointer of the Subscription object, so a re-created Subscription very
+// likely comes back at the same object AND callback address. Case A: the rcl handle recycles too.
+// The warm caches must not skip re-resolution, or the new topic is never proven and a later
+// stall vanishes instead of reading RECV 0.0 (KNOWN_ISSUES #12).
+TEST(PerEndpoint, RecreatedSubscriptionAtSameAddressesIsProvenAgain) {
+    TopicRegistry reg;
+    reg.onNodeInit(H(0x100), "n", "/");
+    initRclcppSub(reg, 0x100, 0x1000, 0x1100, 0x1200, "/a");
+    reg.onCallbackStart(H(0x1200), false);  // resolves, warms this thread's slot
+    reg.onCallbackStart(H(0x1200), false);
+    reg.snapshotWindow(1.0);
+
+    reg.onSubscriptionFini(H(0x1000));
+    initRclcppSub(reg, 0x100, 0x1000, 0x1100, 0x1200, "/b");  // all three addresses recycled
+    reg.onCallbackStart(H(0x1200), false);
+    auto snap = reg.snapshotWindow(1.0);
+    const auto* b = findTopic(snap.topics, "/b");
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(b->recv_inter_count, 1u);
+    const auto* a = findTopic(snap.topics, "/a");
+    if (a != nullptr) {
+        EXPECT_EQ(a->recv_inter_count, 0u);
+    }
+
+    snap = reg.snapshotWindow(1.0);  // /b's upstream stalls
+    b = findTopic(snap.topics, "/b");
+    ASSERT_NE(b, nullptr);
+    EXPECT_TRUE(TopicRegistry::shouldEmitRecv(*b)) << "/b was never re-proven after re-creation";
+    const auto eps = endpointsOf(snap, "/b", eEndpointSide::kRecv);
+    ASSERT_EQ(eps.size(), 1u);
+    EXPECT_TRUE(eps[0].endpoint_seen);
+}
+
+// Case B: same Subscription object and callback addresses, but a NEW rcl handle. The cached
+// callback verdict pointed at the destroyed subscription's endpoint; the new deliveries must go
+// to the new endpoint on the new topic.
+TEST(PerEndpoint, RecreatedSubscriptionWithNewRclHandleCountsIntoTheNewEndpoint) {
+    TopicRegistry reg;
+    reg.onNodeInit(H(0x100), "n", "/");
+    initRclcppSub(reg, 0x100, 0x1000, 0x1100, 0x1200, "/a");
+    reg.onCallbackStart(H(0x1200), false);
+    reg.snapshotWindow(1.0);
+
+    reg.onSubscriptionFini(H(0x1000));
+    initRclcppSub(reg, 0x100, 0x3000, 0x1100, 0x1200, "/b");
+    reg.onCallbackStart(H(0x1200), false);
+    reg.onCallbackStart(H(0x1200), true);
+    const auto snap = reg.snapshotWindow(1.0);
+    const auto* b = findTopic(snap.topics, "/b");
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(b->recv_inter_count, 1u);
+    EXPECT_EQ(b->recv_intra_count, 1u);
+    EXPECT_TRUE(b->recv_endpoint_seen);
+    const auto* a = findTopic(snap.topics, "/a");
+    ASSERT_NE(a, nullptr);
+    EXPECT_EQ(a->recv_inter_count + a->recv_intra_count, 0u)
+        << "deliveries counted into the destroyed subscription's endpoint";
+    EXPECT_TRUE(endpointsOf(snap, "/a", eEndpointSide::kRecv).empty());
+}
+
+// rcl_publisher_t and rcl_subscription_t are both 8-byte structs from the same allocator bin, so
+// a destroyed publisher's handle is a prime candidate for the next subscription's handle (and
+// the reverse). A warm thread-local slot of one kind must never be served to the other.
+TEST(PerEndpoint, AddressReusedAcrossKindsNeverServesTheOtherKind) {
+    TopicRegistry reg;
+    reg.onNodeInit(H(0x100), "n", "/");
+    // Publisher at 0x800 warms this thread's slot (plain and loaned path), then is destroyed
+    // without its fini being seen; the address comes back as an rcl subscription handle.
+    reg.onPublisherInit(H(0x800), H(0x100), "/old_pub");
+    reg.onPublish(H(0x800));
+    reg.onLoanedPublish(H(0x800), /*counted_by_tracepoint=*/true);
+    reg.snapshotWindow(1.0);
+    reg.onSubscriptionInit(H(0x800), H(0x100), "/new_sub", H(0x801));
+    reg.onLoanedTake(H(0x800));
+    reg.onTake(H(0x801), true);
+
+    // Subscription at 0x900 warms the loaned-take slot, then the address becomes a publisher.
+    reg.onSubscriptionInit(H(0x900), H(0x100), "/old_sub", H(0x901));
+    reg.onLoanedTake(H(0x900));
+    reg.onTake(H(0x901), true);
+    reg.snapshotWindow(1.0);  // (also drains the windows above for /new_sub, so redo it)
+    reg.onLoanedTake(H(0x800));
+    reg.onTake(H(0x801), true);
+    reg.onPublisherInit(H(0x900), H(0x100), "/new_pub");
+    reg.onPublish(H(0x900));
+    reg.onLoanedPublish(H(0x900), /*counted_by_tracepoint=*/true);
+
+    const auto snap = reg.snapshotWindow(1.0);
+    const auto* ns = findTopic(snap.topics, "/new_sub");
+    ASSERT_NE(ns, nullptr);
+    EXPECT_EQ(ns->recv_inter_count, 1u);
+    EXPECT_EQ(ns->recv_loaned_count, 1u) << "loaned take served the dead publisher's slot";
+    EXPECT_EQ(ns->pub_loaned_count, 0u);
+    const auto* np = findTopic(snap.topics, "/new_pub");
+    ASSERT_NE(np, nullptr);
+    EXPECT_EQ(np->pub_inter_count, 1u) << "publish served the dead subscription's slot";
+    EXPECT_EQ(np->pub_loaned_count, 1u);
+    EXPECT_EQ(np->recv_inter_count, 0u);
+    for (const char* dead : {"/old_pub", "/old_sub"}) {
+        const auto* d = findTopic(snap.topics, dead);
+        if (d != nullptr) {
+            EXPECT_EQ(d->pub_inter_count + d->pub_loaned_count + d->recv_inter_count +
+                          d->recv_loaned_count, 0u) << dead;
+        }
+        // The other-kind reuse proves the old object dead: it is retired, not a ghost.
+        EXPECT_TRUE(endpointsOf(snap, dead, eEndpointSide::kPub).empty()) << dead;
+        EXPECT_TRUE(endpointsOf(snap, dead, eEndpointSide::kRecv).empty()) << dead;
+    }
 }

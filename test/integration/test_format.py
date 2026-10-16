@@ -101,6 +101,34 @@ def test_text_endpoint_lines_are_opt_in():
         assert not [ln for ln in off.splitlines() if ln.startswith("EP ")], off
 
 
+def test_destroyed_endpoints_stop_being_reported():
+    """A real rclcpp publisher and subscription destroyed mid-run (node still alive) leave the
+    endpoints list after one final window, through the rcl_*_fini wrappers. Before them, the
+    once-delivered subscription stayed forever as a `recv inter_hz=0.0` endpoint of the live
+    node, and with gap tracking the publisher reported an ever-growing max_dt_ms."""
+    with tempfile.TemporaryDirectory() as d:
+        out = os.path.join(d, "out.jsonl")
+        text = ph.run_single("churn", out, run_s=8.0, period="1.0",
+                             extra_env={"ROS_TOPIC_STATS_FORMAT": "jsonl",
+                                        "ROS_TOPIC_STATS_JITTER": "1"})
+        wins = _jsonl_windows(text)
+        assert len(wins) >= 6, f"too few windows\n{text}"
+
+        def churn_eps(w):
+            return [e for e in w["endpoints"] if e["topic"] == "/churn"]
+
+        assert any(e["side"] == "recv" and e["inter_hz"] > 0 and e.get("node") == "/poc_churn"
+                   for w in wins for e in churn_eps(w)), f"/churn never delivered\n{text}"
+        last = max(i for i, w in enumerate(wins) if churn_eps(w))
+        later = wins[last + 1:]
+        assert len(later) >= 2, (
+            f"/churn endpoints still reported {len(wins) - 1 - last} window(s) from the end, "
+            f"long after both were destroyed\n{text}")
+        # The process kept running and writing endpoints the whole time.
+        assert all(any(e["topic"] == "/churn_keepalive" for e in w["endpoints"])
+                   for w in later[:-1]), text
+
+
 def test_unknown_format_warns_once_and_falls_back_to_text():
     """A typo'd format must neither crash the host nor be silently ignored: exactly one
     stderr warning, and the log is plain text (byte-compatible headers, no '{' lines)."""

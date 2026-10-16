@@ -45,6 +45,10 @@ struct sEndpointCounter {
     // Receive side: a message has been delivered here at least once, the per-endpoint twin of
     // sTopicCounter::recv_endpoint_seen (KNOWN_ISSUES #12).
     bool seen{false};
+    // Destroyed: its rcl_publisher_fini / rcl_subscription_fini (or its node's rcl_node_fini)
+    // was seen. Drained once more so its last counts reach the topic sum, then dropped from its
+    // topic and node. The map entry stays: a recycled address re-homes it and clears this.
+    bool retired{false};
     bool active_this_window{false};  // scratch for snapshot()'s node-liveness pass
 
     // pub:  rcl_publish | rclcpp_intra_publish (iron+) | loaned subset of inter (rcl wrapper).
@@ -190,10 +194,21 @@ public:
     /// (which sees intra-process, serialized and loaned deliveries too), so onTake skips it.
     void onRclcppSubscriptionInit(const void* subscription, const void* sub_handle);
     void onCallbackAdded(const void* callback, const void* subscription);
-    /// Also attributes every endpoint initialized with @p node_handle to this node, including
-    /// ones that arrived first (rcl creates the node's /rosout publisher inside rcl_node_init,
-    /// before this tracepoint fires).
+    /// Also claims every live, still-unowned endpoint initialized with @p node_handle: rcl
+    /// creates the node's /rosout publisher inside rcl_node_init, before this tracepoint fires.
+    /// Endpoints of a previous node at a recycled address are never claimed (onNodeFini).
     void onNodeInit(const void* node_handle, const char* node_name, const char* node_namespace);
+
+    // --- graph teardown (rcl_*_fini wrappers; there is no destroy tracepoint) ---
+    /// The publisher / rcl subscription at @p handle is being destroyed: its endpoint is drained
+    /// once more and then stops being reported (no ghost endpoint of a live node). Unknown
+    /// handles are ignored.
+    void onPublisherFini(const void* pub_handle);
+    void onSubscriptionFini(const void* sub_handle);
+    /// The node at @p node_handle is being destroyed: the handle stops naming it (so a recycled
+    /// node address never inherits it) and every endpoint still bound to the handle retires too
+    /// (rcl finalizes /rosout inside rcl_node_fini, possibly without going through the PLT).
+    void onNodeFini(const void* node_handle);
 
     // --- hot path ---
     void onPublish(const void* pub_handle);       // inter-process publish (rcl_publish)
@@ -294,17 +309,26 @@ private:
     auto resolveCallback(const void* callback) -> sEndpointCounter*;
     auto counterForTopic(const std::string& topic) -> sTopicCounter*;
 
-    // Caller must hold the write lock. Binds @p handle (a publisher or rcl subscription handle)
-    // to an endpoint on @p topic owned by @p node_handle. A handle seen for the first time gets
-    // a new endpoint; a RECYCLED handle (destroyed, address reused: there is no destroy
-    // tracepoint) re-homes its existing endpoint in place under a fresh id, so every
-    // thread-local cache entry and resolved callback pointing at it follows the new identity.
-    auto bindEndpoint(std::unordered_map<const void*, sEndpointCounter*>& map, const void* handle,
-                      const char* topic, const void* node_handle, eEndpointSide side)
-        -> sEndpointCounter*;
+    // Caller must hold the write lock. Binds @p handle (a publisher handle for kPub, an rcl
+    // subscription handle for kRecv) to an endpoint on @p topic owned by @p node_handle. A handle
+    // seen for the first time gets a new endpoint; a RECYCLED handle (destroyed, address reused)
+    // re-homes its existing endpoint in place under a fresh id and un-retires it, so every
+    // thread-local cache entry and resolved callback pointing at it follows the new identity. An
+    // endpoint of the OTHER side still mapped at this address is dead (the address now belongs
+    // to a different kind of object) and is retired.
+    auto bindEndpoint(const void* handle, const char* topic, const void* node_handle,
+                      eEndpointSide side) -> sEndpointCounter*;
+    auto mapFor(eEndpointSide side) -> std::unordered_map<const void*, sEndpointCounter*>&;
     // Caller must hold the write lock. Detach @p ep from its owning node (if resolved) and from
     // the by-node-handle index.
     void unlinkEndpointNode(sEndpointCounter* ep);
+    // Caller must hold the write lock. Drop @p ep from the by-node-handle index only.
+    void unindexNodeHandle(sEndpointCounter* ep);
+    // Caller must hold the write lock. Mark @p ep destroyed (see sEndpointCounter::retired) and
+    // drop it from the by-node-handle index at once, so a recycled node address never claims it.
+    // Its node and topic links are dropped after its final drain in snapshotWindow().
+    void retireEndpoint(sEndpointCounter* ep);
+    void onEndpointFini(const void* handle, eEndpointSide side);
     // Caller must hold the write lock. Mark a receive endpoint (and its topic) proven.
     static void markSeen(sEndpointCounter* ep);
 
@@ -312,24 +336,34 @@ private:
     // nullptr when the handle is unknown, kTakeOwnedByRclcpp's sentinel for an rclcpp-owned
     // subscription, otherwise the subscription's endpoint.
     auto resolveTake(const void* rmw_sub_handle) const -> sEndpointCounter*;
-    // Thread-local cache tag for take-path entries: registry id plus the subscription-graph
-    // epoch, so any (re)init of a subscription invalidates every thread's cached take verdicts.
-    auto takeTag() const -> uint64_t;
+    // Thread-local cache tag: registry id, the KIND of key, and (for callbacks and rmw handles)
+    // the subscription-graph epoch. The kind keeps one address recycled across kinds (a
+    // destroyed publisher's handle reused as a subscription handle, or a callback object) from
+    // ever being served the other kind's endpoint; the epoch makes any subscription (re)init or
+    // callback_added invalidate every thread's cached callback and take verdicts.
+    enum eTlsKind : uint64_t { kTlsPub = 0, kTlsSubHandle = 1, kTlsCallback = 2, kTlsRmw = 3 };
+    auto tlsTag(eTlsKind kind, uint32_t epoch) const -> uint64_t {
+        return (m_id << 34) | (static_cast<uint64_t>(kind) << 32) | epoch;
+    }
+    auto epochTag(eTlsKind kind) const -> uint64_t {
+        return tlsTag(kind, m_sub_epoch.load(std::memory_order_relaxed));
+    }
 
     // Shared hot path for both publish transports: TLS-cache hit or shared-lock lookup on
     // m_pub_to_counter, then bump the inter or intra publish bucket.
     void publishCount(const void* pub_handle, bool is_intra_process);
 
-    // TLS-cache hit or shared-lock lookup of a handle in @p map (the loaned paths). nullptr when
-    // the handle is unknown. Publisher handles, rcl subscription handles and callback objects
-    // are distinct live allocations, so they share the TLS cache without key collisions.
-    auto lookupHandle(const void* handle,
-                      const std::unordered_map<const void*, sEndpointCounter*>& map)
-        -> sEndpointCounter*;
+    // TLS-cache hit or shared-lock lookup of a handle on @p side's map (the loaned paths).
+    // nullptr when the handle is unknown. The slot tag carries the side, so a publisher-handle
+    // entry is never served to a subscription-handle lookup at a recycled address, or back.
+    auto lookupHandle(const void* handle, eEndpointSide side) -> sEndpointCounter*;
 
     // Unique per-instance id (from a process-global atomic). Used to scope the thread-local
     // hot-path cache so a recycled stack/heap address never serves a destroyed instance's counter.
     uint64_t m_id;
+    // tlsTag(kTlsPub, 0), precomputed: the publish hot path compares against it with no extra
+    // load (publisher endpoints are re-homed in place, so they need no epoch).
+    uint64_t m_pub_tag;
 
     // Consecutive quiet windows tolerated before a node drops out of activeNodes().
     uint32_t m_quiet_windows;
@@ -356,9 +390,10 @@ private:
     // take-layer receive resolution (rmw_take carries only the rmw handle)
     std::unordered_map<const void*, const void*> m_rmwsub_to_subhandle;  // rmw sub -> rcl sub
     std::unordered_map<const void*, bool> m_subhandle_rclcpp;            // rcl sub -> rclcpp-owned
-    // Bumped (under the write lock) by every subscription init / ownership change; part of the
-    // take-path TLS tag, so a recycled rmw handle or a late ownership mark is never served a
-    // stale cached verdict. Read relaxed once per take.
+    // Bumped (under the write lock) by every subscription init / ownership change and every
+    // callback_added; part of the take-path and callback-path TLS tags, so a recycled rmw handle,
+    // a late ownership mark or a re-registered callback is never served a stale cached verdict.
+    // Read relaxed once per take / callback.
     std::atomic<uint32_t> m_sub_epoch{0};
 
     // Count of hot-path escalations to the exclusive lock (see writeLockResolutions()).
@@ -372,11 +407,12 @@ private:
     std::vector<std::unique_ptr<sNode>> m_nodes;
     std::unordered_map<std::string, sNode*> m_node_by_name;
     std::unordered_map<const void*, sNode*> m_nodehandle_to_node;
-    // Every endpoint by the node handle its init carried, resolved or not. rcl creates a node's
-    // /rosout publisher INSIDE rcl_node_init, before that function's tracepoint fires, so that
-    // publisher's init always arrives first, and on a recycled node address m_nodehandle_to_node
-    // still names the destroyed node at that moment. onNodeInit therefore (re)attributes every
-    // endpoint carrying its handle to the node it just initialized.
+    // Every LIVE endpoint by the node handle its init carried, resolved or not. rcl creates a
+    // node's /rosout publisher INSIDE rcl_node_init, before that function's tracepoint fires, so
+    // that publisher's init always arrives first; onNodeInit claims such still-unowned endpoints.
+    // Retired endpoints leave this index at fini time, and onNodeFini drops the handle from
+    // m_nodehandle_to_node, so a recycled node address never inherits the destroyed node's
+    // endpoints.
     std::unordered_map<const void*, std::vector<sEndpointCounter*>> m_eps_by_nodehandle;
 };
 

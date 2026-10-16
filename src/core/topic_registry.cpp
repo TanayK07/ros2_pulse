@@ -33,9 +33,11 @@ sEndpointCounter* const kTakeOwnedByRclcpp = &g_take_owned_by_rclcpp;
 sEndpointCounter g_take_unknown_handle;
 sEndpointCounter* const kTakeUnknownHandle = &g_take_unknown_handle;
 
-// Direct-mapped thread-local hot-path cache, shared by onPublish and onCallbackStart (publisher
-// handles and callback objects are distinct live allocations, so the key domains cannot
-// collide). A single-entry cache thrashed on the REALISTIC pattern, one thread alternating
+// Direct-mapped thread-local hot-path cache, shared by every hot path. Keys of different kinds
+// (publisher handle, rcl subscription handle, callback object, rmw handle) can be the same
+// address over time, a destroyed object's memory reused for another kind, so the tag carries the
+// kind (TopicRegistry::tlsTag) and a slot is only ever served to a lookup of its own kind. A
+// single-entry cache thrashed on the REALISTIC pattern, one thread alternating
 // between a few endpoints per cycle, pushing every operation onto the shared rw-lock
 // (KNOWN_ISSUES #13). A same-slot collision merely degrades that key to the shared-lock path
 // (it is a cache, not a map). Entries are scoped by registry id so a recycled instance address
@@ -151,6 +153,7 @@ void eraseValue(std::vector<T*>& v, const T* value) {
 
 TopicRegistry::TopicRegistry(uint32_t quiet_windows)
     : m_id(g_next_registry_id.fetch_add(1, std::memory_order_relaxed)),
+      m_pub_tag(tlsTag(kTlsPub, 0)),
       m_quiet_windows(quiet_windows) {}
 
 auto TopicRegistry::shouldFilter(const std::string& topic) -> bool {
@@ -188,6 +191,8 @@ auto TopicRegistry::shouldEmitEndpoint(const sEndpointStat& stat, bool emit_idle
     if (stat.side == eEndpointSide::kRecv && stat.endpoint_seen) {
         return true;
     }
+    // A destroyed endpoint reaches here only for its final window, with neither flag set and
+    // with traffic, so it is never kept alive by this gate (see snapshotWindow()).
     return stat.has_max_dt || emit_idle;
 }
 
@@ -208,6 +213,10 @@ void TopicRegistry::unlinkEndpointNode(sEndpointCounter* ep) {
         eraseValue(ep->node->endpoints, ep);
         ep->node = nullptr;
     }
+    unindexNodeHandle(ep);
+}
+
+void TopicRegistry::unindexNodeHandle(sEndpointCounter* ep) {
     if (ep->node_handle != nullptr) {
         auto it = m_eps_by_nodehandle.find(ep->node_handle);
         if (it != m_eps_by_nodehandle.end()) {
@@ -220,10 +229,34 @@ void TopicRegistry::unlinkEndpointNode(sEndpointCounter* ep) {
     }
 }
 
-auto TopicRegistry::bindEndpoint(std::unordered_map<const void*, sEndpointCounter*>& map,
-                                 const void* handle, const char* topic, const void* node_handle,
+auto TopicRegistry::mapFor(eEndpointSide side)
+    -> std::unordered_map<const void*, sEndpointCounter*>& {
+    return side == eEndpointSide::kPub ? m_pub_to_counter : m_subhandle_to_counter;
+}
+
+void TopicRegistry::retireEndpoint(sEndpointCounter* ep) {
+    if (ep->retired) {
+        return;
+    }
+    ep->retired = true;
+    // Out of the node-handle index NOW, so a recycled node address cannot claim it. The node
+    // link itself stays until the final drain, which still reports the last window's traffic
+    // under the node that really owned it.
+    unindexNodeHandle(ep);
+}
+
+auto TopicRegistry::bindEndpoint(const void* handle, const char* topic, const void* node_handle,
                                  eEndpointSide side) -> sEndpointCounter* {
     sTopicCounter* t = counterForTopic(topic);
+    // The same address still mapped on the OTHER side is a dead object of the other kind whose
+    // fini we did not see. Retire it so it stops being reported; the TLS tag carries the kind,
+    // so no cached slot of that kind can be served to this one.
+    auto& other = mapFor(side == eEndpointSide::kPub ? eEndpointSide::kRecv : eEndpointSide::kPub);
+    auto o = other.find(handle);
+    if (o != other.end()) {
+        retireEndpoint(o->second);
+    }
+    auto& map = mapFor(side);
     sEndpointCounter* ep = nullptr;
     auto it = map.find(handle);
     if (it == map.end()) {
@@ -243,9 +276,10 @@ auto TopicRegistry::bindEndpoint(std::unordered_map<const void*, sEndpointCounte
         // the next window; the hot path cannot tell them apart without a lock.
         ep = it->second;
         if (sTopicCounter* old = ep->topic.load(std::memory_order_relaxed)) {
-            eraseValue(old->endpoints, ep);
+            eraseValue(old->endpoints, ep);  // a no-op once a retired endpoint was dropped
         }
         unlinkEndpointNode(ep);
+        ep->retired = false;
         ep->seen = false;
         ep->last_ns.store(0, std::memory_order_relaxed);
         ep->max_dt_ns.store(0, std::memory_order_relaxed);
@@ -280,7 +314,7 @@ void TopicRegistry::onPublisherInit(const void* pub_handle, const void* node_han
         return;
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    bindEndpoint(m_pub_to_counter, pub_handle, topic, node_handle, eEndpointSide::kPub);
+    bindEndpoint(pub_handle, topic, node_handle, eEndpointSide::kPub);
 }
 
 void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_handle,
@@ -289,7 +323,7 @@ void TopicRegistry::onSubscriptionInit(const void* sub_handle, const void* node_
         return;
     }
     std::unique_lock<std::shared_mutex> lock(m_mu);
-    bindEndpoint(m_subhandle_to_counter, sub_handle, topic, node_handle, eEndpointSide::kRecv);
+    bindEndpoint(sub_handle, topic, node_handle, eEndpointSide::kRecv);
     // A fresh rcl subscription: ownership is unknown until rclcpp_subscription_init (rclcpp
     // fires it right after rcl init, in the Subscription ctor, before any executor can take).
     // Resetting here also covers a recycled rcl handle that used to be rclcpp's.
@@ -316,8 +350,14 @@ void TopicRegistry::onCallbackAdded(const void* callback, const void* subscripti
     }
     // Record the link only. Resolution to an endpoint is deferred to onCallbackStart, because for
     // intra-process subscriptions this fires before the intra waitable's full chain is populated.
+    // A callback address seen before belongs to a destroyed subscription (or timer) whose memory
+    // was reused: drop its resolved verdict and bump the epoch so every thread's cached slot for
+    // it misses, and the first delivery re-resolves (and re-proves the endpoint, KNOWN_ISSUES
+    // #12) instead of counting into the dead one.
     std::unique_lock<std::shared_mutex> lock(m_mu);
     m_cb_to_sub[callback] = subscription;
+    m_cb_to_counter.erase(callback);
+    m_sub_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 void TopicRegistry::onNodeInit(const void* node_handle, const char* node_name,
@@ -344,24 +384,63 @@ void TopicRegistry::onNodeInit(const void* node_handle, const char* node_name,
     }
     if (node_handle != nullptr) {
         m_nodehandle_to_node[node_handle] = node;
-        // Claim every endpoint initialized with this handle: the ones rcl_node_init created
-        // before its own tracepoint (/rosout), and, on a recycled node address, the ones that
-        // bindEndpoint provisionally gave to the destroyed node that held it before. Endpoints of
-        // that destroyed node move too; they are dead (rcl finalizes them before the node) and
-        // carry no traffic, so they cannot keep this node alive.
+        // Claim the endpoints rcl_node_init created before its own tracepoint (/rosout): live
+        // and still unowned. Only live endpoints are indexed (retired ones leave at fini), and a
+        // destroyed node's handle stops naming it at rcl_node_fini, so on a recycled node
+        // address the new /rosout is unowned here while the old node's endpoints are not in the
+        // index at all. One already owned by another node is never taken: without its fini
+        // there is no telling it apart from the old node's own, and attribution must not lie.
         auto eps = m_eps_by_nodehandle.find(node_handle);
         if (eps != m_eps_by_nodehandle.end()) {
             for (auto* ep : eps->second) {
-                if (ep->node == node) {
+                if (ep->node != nullptr || ep->retired) {
                     continue;
-                }
-                if (ep->node != nullptr) {
-                    eraseValue(ep->node->endpoints, ep);
                 }
                 ep->node = node;
                 node->endpoints.push_back(ep);
             }
         }
+    }
+}
+
+void TopicRegistry::onEndpointFini(const void* handle, eEndpointSide side) {
+    if (handle == nullptr) {
+        return;
+    }
+    std::unique_lock<std::shared_mutex> lock(m_mu);
+    auto& map = mapFor(side);
+    auto it = map.find(handle);
+    if (it != map.end()) {
+        retireEndpoint(it->second);
+    }
+}
+
+void TopicRegistry::onPublisherFini(const void* pub_handle) {
+    onEndpointFini(pub_handle, eEndpointSide::kPub);
+}
+
+void TopicRegistry::onSubscriptionFini(const void* sub_handle) {
+    onEndpointFini(sub_handle, eEndpointSide::kRecv);
+}
+
+void TopicRegistry::onNodeFini(const void* node_handle) {
+    if (node_handle == nullptr) {
+        return;
+    }
+    std::unique_lock<std::shared_mutex> lock(m_mu);
+    m_nodehandle_to_node.erase(node_handle);
+    auto eps = m_eps_by_nodehandle.find(node_handle);
+    if (eps == m_eps_by_nodehandle.end()) {
+        return;
+    }
+    // Anything still bound to the handle is dead with it: rcl finalizes the node's /rosout
+    // publisher inside rcl_node_fini (a call within librcl that need not go through the PLT, so
+    // its own fini wrapper may not see it), and rcl endpoints cannot outlive their node.
+    const std::vector<sEndpointCounter*> bound = std::move(eps->second);
+    m_eps_by_nodehandle.erase(eps);
+    for (auto* ep : bound) {
+        ep->node_handle = nullptr;  // already out of the index
+        retireEndpoint(ep);
     }
 }
 
@@ -413,7 +492,7 @@ void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) 
     }
     const bool gap = m_gap_tracking.load(std::memory_order_relaxed);
     sTlsSlot& slot = tlsSlotFor(pub_handle);
-    if (slot.id == m_id && slot.key == pub_handle) {
+    if (slot.id == m_pub_tag && slot.key == pub_handle) {
         countArrival(slot.ctr, is_intra_process, gap);
         return;
     }
@@ -422,24 +501,26 @@ void TopicRegistry::publishCount(const void* pub_handle, bool is_intra_process) 
     auto it = m_pub_to_counter.find(pub_handle);
     if (it != m_pub_to_counter.end()) {
         countArrival(it->second, is_intra_process, gap);
-        slot = {m_id, pub_handle, it->second};
+        slot = {m_pub_tag, pub_handle, it->second};
     }
 }
 
-auto TopicRegistry::lookupHandle(const void* handle,
-                                 const std::unordered_map<const void*, sEndpointCounter*>& map)
-    -> sEndpointCounter* {
+auto TopicRegistry::lookupHandle(const void* handle, eEndpointSide side) -> sEndpointCounter* {
+    // Same tag as publishCount for publisher handles (one map, so one cache), a different kind
+    // for rcl subscription handles. Neither needs an epoch: both maps re-home in place.
+    const uint64_t tag = side == eEndpointSide::kPub ? m_pub_tag : tlsTag(kTlsSubHandle, 0);
     sTlsSlot& slot = tlsSlotFor(handle);
-    if (slot.id == m_id && slot.key == handle && slot.ctr != kNotASubscription) {
+    if (slot.id == tag && slot.key == handle) {
         return slot.ctr;
     }
     std::shared_lock<std::shared_mutex> lock(m_mu);
     m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
+    const auto& map = side == eEndpointSide::kPub ? m_pub_to_counter : m_subhandle_to_counter;
     auto it = map.find(handle);
     if (it == map.end()) {
         return nullptr;
     }
-    slot = {m_id, handle, it->second};
+    slot = {tag, handle, it->second};
     return it->second;
 }
 
@@ -447,7 +528,7 @@ void TopicRegistry::onLoanedPublish(const void* pub_handle, bool counted_by_trac
     if (pub_handle == nullptr) {
         return;
     }
-    sEndpointCounter* c = lookupHandle(pub_handle, m_pub_to_counter);
+    sEndpointCounter* c = lookupHandle(pub_handle, eEndpointSide::kPub);
     if (c == nullptr) {
         return;
     }
@@ -464,7 +545,7 @@ void TopicRegistry::onLoanedTake(const void* sub_handle) {
     if (sub_handle == nullptr) {
         return;
     }
-    sEndpointCounter* c = lookupHandle(sub_handle, m_subhandle_to_counter);
+    sEndpointCounter* c = lookupHandle(sub_handle, eEndpointSide::kRecv);
     if (c != nullptr) {
         c->loaned.fetch_add(1, std::memory_order_relaxed);
     }
@@ -474,8 +555,12 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     if (callback == nullptr) {
         return;
     }
+    // Epoch in the tag: a callback_added (re-registered callback address) or subscription init
+    // since this slot was filled makes it miss, see onCallbackAdded. Tag read BEFORE the lookup,
+    // like onTake, so a racing graph event leaves what we cache below already stale.
+    const uint64_t tag = epochTag(kTlsCallback);
     sTlsSlot& slot = tlsSlotFor(callback);
-    if (slot.id == m_id && slot.key == callback) {
+    if (slot.id == tag && slot.key == callback) {
         // slot.ctr is either a resolved endpoint or the kNotASubscription sentinel. The sentinel
         // means "known timer/service callback", skip it without touching the lock or a counter.
         if (slot.ctr != kNotASubscription) {
@@ -489,18 +574,25 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     // exclusive lock to run the full resolution chain and insert into the cache. This keeps
     // multi-threaded executors from serializing every received message on a single writer lock.
     sEndpointCounter* ctr = nullptr;
+    bool prove_endpoint = false;
     {
         std::shared_lock<std::shared_mutex> lock(m_mu);
         m_shared_lock_lookups.fetch_add(1, std::memory_order_relaxed);
         auto it = m_cb_to_counter.find(callback);
         if (it != m_cb_to_counter.end()) {
             ctr = it->second;
+            // Cached, but its rcl handle was recycled since (bindEndpoint re-homed the endpoint
+            // and reset `seen`): this delivery re-proves it, as onTake does.
+            prove_endpoint = ctr != kNotASubscription && !ctr->seen;
         }
     }
     if (ctr == nullptr) {
         std::unique_lock<std::shared_mutex> lock(m_mu);
         m_write_lock_resolutions.fetch_add(1, std::memory_order_relaxed);
         ctr = resolveCallback(callback);
+    } else if (prove_endpoint) {
+        std::unique_lock<std::shared_mutex> lock(m_mu);
+        markSeen(ctr);
     }
     // A null result here means "subscription, not resolvable yet" (chain still being populated):
     // leave the thread-local slot untouched so the next delivery retries resolution. A non-null
@@ -509,18 +601,11 @@ void TopicRegistry::onCallbackStart(const void* callback, bool is_intra_process)
     if (ctr == nullptr) {
         return;
     }
-    slot = {m_id, callback, ctr};
+    slot = {tag, callback, ctr};
     if (ctr == kNotASubscription) {
         return;  // proven timer/service callback, nothing to count
     }
     countArrival(ctr, is_intra_process, m_gap_tracking.load(std::memory_order_relaxed));
-}
-
-auto TopicRegistry::takeTag() const -> uint64_t {
-    // m_id >= 1 occupies the high word, so a take tag never equals a plain m_id tag (and the key
-    // domains are disjoint anyway: rmw handles are distinct live allocations from rcl publisher
-    // handles and rclcpp callback objects).
-    return (m_id << 32) | m_sub_epoch.load(std::memory_order_relaxed);
 }
 
 auto TopicRegistry::resolveTake(const void* rmw_sub_handle) const -> sEndpointCounter* {
@@ -544,7 +629,7 @@ void TopicRegistry::onTake(const void* rmw_sub_handle, bool taken) {
     }
     // Tag read BEFORE the lookup: an init racing with this take bumps the epoch, so whatever we
     // cache below carries the old tag and is re-resolved on the next take (conservative).
-    const uint64_t tag = takeTag();
+    const uint64_t tag = epochTag(kTlsRmw);
     sTlsSlot& slot = tlsSlotFor(rmw_sub_handle);
     sEndpointCounter* ctr = nullptr;
     if (slot.id == tag && slot.key == rmw_sub_handle) {
@@ -594,6 +679,8 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
                                       .time_since_epoch().count())
                             : 0ULL;
     out.endpoints.reserve(m_endpoints.size());
+    // Destroyed endpoints drained for the last time this window, dropped after the liveness pass.
+    std::vector<sEndpointCounter*> retired;
     for (auto& kv : m_by_topic) {
         sTopicCounter* t = kv.second.get();
         // Filtered topics are excluded from the stats output but still drained (so nothing
@@ -624,7 +711,16 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
                 s.recv_intra_count += ix;
                 s.recv_loaned_count += lo;
             }
+            if (ep->retired) {
+                retired.push_back(ep);
+            }
             if (filtered) {
+                continue;
+            }
+            // A destroyed endpoint is reported only for traffic it carried before its fini, so
+            // the topic sum still equals its endpoints; never as a proven-idle 0.0 or by its
+            // ever-growing open gap, which would read as a stall of a live node.
+            if (ep->retired && !ep->active_this_window) {
                 continue;
             }
             sEndpointStat e;
@@ -638,9 +734,9 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
             e.inter_hz = static_cast<double>(in) / w;
             e.intra_hz = static_cast<double>(ix) / w;
             e.loaned_hz = static_cast<double>(lo) / w;
-            e.endpoint_seen = ep->seen;
-            e.has_max_dt = has_dt;
-            e.max_dt_ms = dt_ms;
+            e.endpoint_seen = ep->seen && !ep->retired;
+            e.has_max_dt = has_dt && !ep->retired;
+            e.max_dt_ms = e.has_max_dt ? dt_ms : 0.0;
             out.endpoints.push_back(std::move(e));
         }
         double pub_gap_ms = 0.0;
@@ -683,6 +779,14 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
             }
         }
         node->idle_windows = node_active ? 0u : (node->idle_windows + 1u);
+    }
+    // Final drain done: a destroyed endpoint leaves its topic and node for good. It stays in its
+    // handle map, so a recycled address re-homes (and un-retires) this same object.
+    for (auto* ep : retired) {
+        if (sTopicCounter* t = ep->topic.load(std::memory_order_relaxed)) {
+            eraseValue(t->endpoints, ep);
+        }
+        unlinkEndpointNode(ep);
     }
     return out;
 }
