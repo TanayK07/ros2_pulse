@@ -37,12 +37,54 @@ auto sample(eTopicStatisticType type, const std::string& node, const std::string
     return s;
 }
 
-}  // namespace
+// One (node, topic, type) key while the window's endpoints are folded into it. Several handles
+// can share a key (one node subscribing twice, or publishing twice); graph-monitor keeps one
+// statistic per key, so the key carries its SLOWEST handle, and a stalled handle (0 Hz, a proven
+// subscription that went quiet) makes the whole key dead.
+struct sKeyed {
+    const sEndpointStat* slowest{nullptr};
+    double hz{0.0};
+    bool dead{false};
+};
 
-auto mapWindowTopicStatistics(const sLogWindow& win) -> sTopicStatisticsBatch {
-    sTopicStatisticsBatch out;
-    out.timestamp_ns = win.ts_ns;
+void mapEndpoints(const sLogWindow& win, sTopicStatisticsBatch& out) {
+    std::vector<sKeyed> keys;
+    keys.reserve(win.endpoints.size());
+    auto sameKey = [](const sEndpointStat& a, const sEndpointStat& b) {
+        return a.side == b.side && a.node == b.node && a.topic == b.topic;
+    };
+    for (const auto& e : win.endpoints) {
+        // An endpoint of a node the probe never saw initialize has no name graph-monitor could
+        // match; the probe's own infrastructure filter (/rosout, /parameter_events, ...) is
+        // re-applied for logs written by a probe with a different filter.
+        if (e.node.empty() || TopicRegistry::shouldFilter(e.topic)) continue;
+        const double hz = std::max(e.inter_hz, e.intra_hz);
+        auto it = std::find_if(keys.begin(), keys.end(),
+                               [&](const sKeyed& k) { return sameKey(*k.slowest, e); });
+        if (it == keys.end()) {
+            keys.push_back(sKeyed{&e, hz, hz <= 0.0});
+            continue;
+        }
+        if (hz <= 0.0) {
+            it->dead = true;
+        } else if (hz < it->hz) {
+            it->slowest = &e;
+            it->hz = hz;
+        }
+    }
+    for (const auto& k : keys) {
+        if (k.dead) continue;
+        const sEndpointStat& e = *k.slowest;
+        const auto type = e.side == eEndpointSide::kPub ? eTopicStatisticType::PublishedPeriod
+                                                        : eTopicStatisticType::ReceivedPeriod;
+        out.statistics.push_back(
+            sample(type, e.node, e.topic, k.hz, win.window_s, e.has_max_dt, e.max_dt_ms));
+    }
+}
 
+// Older probe, no per-endpoint split: the per-process topic sums can only be attributed when
+// the process has exactly one active node.
+void mapTopicsSingleNode(const sLogWindow& win, sTopicStatisticsBatch& out) {
     const bool attributable = win.nodes.size() == 1;
     for (const auto& s : win.stats) {
         const double pub_hz = std::max(s.pub_inter_hz, s.pub_intra_hz);
@@ -63,6 +105,18 @@ auto mapWindowTopicStatistics(const sLogWindow& win) -> sTopicStatisticsBatch {
                                             recv_hz, win.window_s, s.has_recv_max_dt,
                                             s.recv_max_dt_ms));
         }
+    }
+}
+
+}  // namespace
+
+auto mapWindowTopicStatistics(const sLogWindow& win) -> sTopicStatisticsBatch {
+    sTopicStatisticsBatch out;
+    out.timestamp_ns = win.ts_ns;
+    if (!win.endpoints.empty()) {
+        mapEndpoints(win, out);
+    } else {
+        mapTopicsSingleNode(win, out);
     }
     return out;
 }

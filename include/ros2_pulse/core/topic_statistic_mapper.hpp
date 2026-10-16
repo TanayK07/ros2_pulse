@@ -8,23 +8,31 @@
 //
 // graph-monitor matches every TopicStatistic to one endpoint by (node_name, topic_name):
 // PUBLISHED_PERIOD to a publisher, RECEIVED_PERIOD to a subscription, and checks `mean` against
-// the endpoint's QoS deadline. The probe counts per topic per PROCESS, not per endpoint, so a
-// window is attributed only when the process has exactly one active node. Several active nodes
-// would hand every node the process-wide rate; the window is dropped instead (`ambiguous_node`).
+// the endpoint's QoS deadline. The probe's per-endpoint split (sLogWindow::endpoints, one entry
+// per publisher / subscription handle with its owning node) maps onto that directly, so a
+// component container or any multi-node process reports every node. Several handles of one
+// node on one topic and side (a node subscribing twice) share one key, and graph-monitor holds
+// one statistic per key: the key reports its SLOWEST handle, the one a deadline would catch
+// first, and is left out when any of them stalled to 0 Hz. Endpoints whose node the probe never
+// saw initialize, and the probe's infrastructure topics (TopicRegistry::shouldFilter: /rosout,
+// /parameter_events, ...), are not sent.
+//
+// A log from an older probe has no per-endpoint split. Its per-process topic sums are then
+// attributed only when the process has exactly one active node; several active nodes would hand
+// every node the process-wide rate, so the window is dropped instead (`ambiguous_node`).
 //
 // What is filled, and what is not:
-//   statistic_type  PUBLISHED_PERIOD when the topic was published in the window, RECEIVED_PERIOD
-//                   when it was received; both when the process does both. TAKE_AGE is never
-//                   emitted: the probe does not read rmw_take's source_timestamp yet.
-//   node_name       the window's single active node, fully qualified (/ns/name), which is the
-//                   form graph-monitor builds from the graph.
+//   statistic_type  PUBLISHED_PERIOD for a publisher, RECEIVED_PERIOD for a subscription. TAKE_AGE
+//                   is never emitted: the probe does not read rmw_take's source_timestamp yet.
+//   node_name       the endpoint's owning node, fully qualified (/ns/name), which is the form
+//                   graph-monitor builds from the graph.
 //   topic_name      the topic as the probe recorded it (resolved, fully qualified).
 //   window_count    messages in the window: rate * window length, rounded.
 //   mean            1 / rate. Inter and intra paths report the busier one, never the sum.
-//   max             the largest inter-arrival gap on that side, only when the probe's gap
-//                   tracking measured one (has_max); otherwise left at zero.
+//   max             the endpoint's largest inter-arrival gap, only when the probe's gap tracking
+//                   measured one (has_max); otherwise left at zero.
 //   min             never filled: the probe does not track the smallest gap.
-// A side with zero rate is left out rather than reported as an infinite period: graph-monitor
+// A zero-rate endpoint is left out rather than reported as an infinite period: graph-monitor
 // treats a missing update as stale, which is the right verdict for a dead topic.
 
 #ifndef ROS2_PULSE__CORE__TOPIC_STATISTIC_MAPPER_HPP_

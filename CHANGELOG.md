@@ -82,8 +82,11 @@ All notable changes to this project are documented here. Format follows
   `graph_monitor:=true` the bridge also publishes each window on `/topic_statistics`
   (`graph_monitor_topic`): `PUBLISHED_PERIOD` / `RECEIVED_PERIOD` per (node, topic), with
   `window_count`, `mean` = 1 / rate and `max` = largest gap when jitter tracking is on. `min` stays
-  0 (not tracked) and `TAKE_AGE` is not sent. Windows from a process with several active nodes
-  are skipped with one warning, since the probe counts per process, not per endpoint. Off by
+  0 (not tracked) and `TAKE_AGE` is not sent. Each endpoint is reported under its owning node
+  from the per-endpoint split, so a component container reports every node; two handles of one
+  node on one topic and side report the slower one, not the sum (PR #68 review). A log without
+  the split (an older probe) falls back to per-process sums, and a process with several active
+  nodes is then skipped with a warning. Off by
   default; `rosgraph_monitor_msgs` is a new `<depend>` found `QUIET`, so a source build without
   it still builds the bridge. Mapping in the pure core (`topic_statistic_mapper`), 10 new unit
   tests, 4 new bridge integration tests.

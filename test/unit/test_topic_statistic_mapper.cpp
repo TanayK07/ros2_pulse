@@ -13,8 +13,10 @@
 #include "ros2_pulse/core/log_reader.hpp"
 #include "ros2_pulse/core/topic_statistic_mapper.hpp"
 
+using ros2_pulse::core::eEndpointSide;
 using ros2_pulse::core::eTopicStatisticType;
 using ros2_pulse::core::mapWindowTopicStatistics;
+using ros2_pulse::core::sEndpointStat;
 using ros2_pulse::core::sLogWindow;
 using ros2_pulse::core::sTopicStat;
 
@@ -36,6 +38,29 @@ auto scanWindow() -> sLogWindow {
     s.has_recv_max_dt = true;
     w.stats.push_back(s);
     w.nodes = {"/perception"};
+    return w;
+}
+
+auto endpoint(const std::string& node, const std::string& topic, eEndpointSide side, double hz)
+    -> sEndpointStat {
+    sEndpointStat e;
+    e.node = node;
+    e.topic = topic;
+    e.side = side;
+    e.inter_hz = hz;
+    e.endpoint_seen = side == eEndpointSide::kRecv;
+    return e;
+}
+
+// The same window as written by a probe with the per-endpoint split: the topic sums stay, and
+// the endpoints say which node owns what.
+auto scanWindowWithEndpoints() -> sLogWindow {
+    auto w = scanWindow();
+    w.endpoints.push_back(endpoint("/perception", "/scan", eEndpointSide::kPub, 20.0));
+    auto r = endpoint("/perception", "/scan", eEndpointSide::kRecv, 20.0);
+    r.max_dt_ms = 21.284;
+    r.has_max_dt = true;
+    w.endpoints.push_back(r);
     return w;
 }
 
@@ -106,9 +131,10 @@ TEST(TopicStatisticMapper, InterAndIntraReportTheBusierPathNotTheSum) {
     EXPECT_EQ(b.statistics[1].window_count, 200);
 }
 
-TEST(TopicStatisticMapper, SeveralNodesInOneProcessAreNotGuessed) {
-    // The probe counts per topic per process; handing the process total to every node would
-    // report a wrong period for each, so nothing is emitted and the caller is told why.
+TEST(TopicStatisticMapper, OlderProbeSeveralNodesInOneProcessAreNotGuessed) {
+    // Without the per-endpoint split the probe's rates are per topic per process; handing the
+    // process total to every node would report a wrong period for each, so nothing is emitted
+    // and the caller is told why.
     auto w = scanWindow();
     w.nodes = {"/a", "/b"};
     const auto b = mapWindowTopicStatistics(w);
@@ -161,4 +187,155 @@ TEST(TopicStatisticMapper, ParsedJsonlWindowMapsEndToEnd) {
     EXPECT_EQ(b.statistics[0].mean_ns, 100000000LL);
     EXPECT_EQ(b.statistics[0].window_count, 50);
     EXPECT_EQ(b.timestamp_ns, kTs);
+}
+
+// ---- per-endpoint split (probe 0.7+) ----
+
+TEST(TopicStatisticMapper, EndpointsMapLikeTheSingleNodeCase) {
+    const auto b = mapWindowTopicStatistics(scanWindowWithEndpoints());
+    EXPECT_FALSE(b.ambiguous_node);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[0].type, eTopicStatisticType::PublishedPeriod);
+    EXPECT_EQ(b.statistics[0].node_name, "/perception");
+    EXPECT_EQ(b.statistics[0].mean_ns, 50000000LL);
+    EXPECT_EQ(b.statistics[0].window_count, 100);
+    EXPECT_FALSE(b.statistics[0].has_max);
+    EXPECT_EQ(b.statistics[1].type, eTopicStatisticType::ReceivedPeriod);
+    EXPECT_TRUE(b.statistics[1].has_max);
+    EXPECT_EQ(b.statistics[1].max_ns, 21284000LL);
+}
+
+TEST(TopicStatisticMapper, ComposedProcessReportsEveryNode) {
+    // A component container: /driver publishes /scan at 20 Hz, /filter receives it and
+    // publishes /scan_filtered at 10 Hz. Before the per-endpoint split this window was dropped.
+    sLogWindow w;
+    w.ts_ns = kTs;
+    w.window_s = 5.0;
+    w.nodes = {"/driver", "/filter"};
+    w.endpoints.push_back(endpoint("/driver", "/scan", eEndpointSide::kPub, 20.0));
+    w.endpoints.push_back(endpoint("/filter", "/scan", eEndpointSide::kRecv, 20.0));
+    w.endpoints.push_back(endpoint("/filter", "/scan_filtered", eEndpointSide::kPub, 10.0));
+    const auto b = mapWindowTopicStatistics(w);
+    EXPECT_FALSE(b.ambiguous_node);
+    ASSERT_EQ(b.statistics.size(), 3u);
+    EXPECT_EQ(b.statistics[0].node_name, "/driver");
+    EXPECT_EQ(b.statistics[0].type, eTopicStatisticType::PublishedPeriod);
+    EXPECT_EQ(b.statistics[1].node_name, "/filter");
+    EXPECT_EQ(b.statistics[1].type, eTopicStatisticType::ReceivedPeriod);
+    EXPECT_EQ(b.statistics[1].mean_ns, 50000000LL);
+    EXPECT_EQ(b.statistics[2].node_name, "/filter");
+    EXPECT_EQ(b.statistics[2].topic_name, "/scan_filtered");
+    EXPECT_EQ(b.statistics[2].mean_ns, 100000000LL);
+}
+
+TEST(TopicStatisticMapper, TwoSubscriptionsOfOneNodeReportOnePeriodNotHalfOfIt) {
+    // One node subscribing twice to a 5 Hz topic: the topic sum reads 10 Hz (a 100 ms period
+    // that would pass a 150 ms deadline), each subscription 5 Hz. One statistic, 200 ms.
+    sLogWindow w;
+    w.ts_ns = kTs;
+    w.window_s = 5.0;
+    w.nodes = {"/n"};
+    sTopicStat s;
+    s.topic = "/x";
+    s.recv_inter_hz = 10.0;
+    s.recv_endpoint_seen = true;
+    w.stats.push_back(s);
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 5.0));
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 5.0));
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 1u);
+    EXPECT_EQ(b.statistics[0].mean_ns, 200000000LL);
+    EXPECT_EQ(b.statistics[0].window_count, 25);
+}
+
+TEST(TopicStatisticMapper, SharedKeyReportsTheSlowestHandle) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 10.0));
+    auto slow = endpoint("/n", "/x", eEndpointSide::kRecv, 4.0);
+    slow.max_dt_ms = 400.0;
+    slow.has_max_dt = true;
+    w.endpoints.push_back(slow);
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 8.0));
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 1u);
+    EXPECT_EQ(b.statistics[0].mean_ns, 250000000LL);
+    EXPECT_TRUE(b.statistics[0].has_max);
+    EXPECT_EQ(b.statistics[0].max_ns, 400000000LL);
+}
+
+TEST(TopicStatisticMapper, StalledHandleMakesItsKeyDead) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 10.0));
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 0.0));
+    w.endpoints.push_back(endpoint("/n", "/y", eEndpointSide::kRecv, 2.0));
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 1u);
+    EXPECT_EQ(b.statistics[0].topic_name, "/y");
+}
+
+TEST(TopicStatisticMapper, PublisherAndSubscriptionOfOneNodeAreSeparateKeys) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kPub, 20.0));
+    w.endpoints.push_back(endpoint("/n", "/x", eEndpointSide::kRecv, 10.0));
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[0].mean_ns, 50000000LL);
+    EXPECT_EQ(b.statistics[1].mean_ns, 100000000LL);
+}
+
+TEST(TopicStatisticMapper, LogOnlyActivityOfASecondNodeNoLongerSuppressesOutput) {
+    // /b only logged this window: the probe lists it as active, which made the single-node gate
+    // drop the whole window. Its /rosout endpoint is filtered, /a still reports.
+    auto w = scanWindowWithEndpoints();
+    w.nodes = {"/perception", "/b"};
+    w.endpoints.push_back(endpoint("/b", "/rosout", eEndpointSide::kPub, 1.0));
+    w.endpoints.push_back(endpoint("/b", "/parameter_events", eEndpointSide::kPub, 1.0));
+    const auto b = mapWindowTopicStatistics(w);
+    EXPECT_FALSE(b.ambiguous_node);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    for (const auto& st : b.statistics) EXPECT_EQ(st.node_name, "/perception");
+}
+
+TEST(TopicStatisticMapper, EndpointOfAnUnknownNodeIsLeftOut) {
+    auto w = scanWindowWithEndpoints();
+    w.endpoints.push_back(endpoint("", "/odom", eEndpointSide::kPub, 50.0));
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[0].topic_name, "/scan");
+    EXPECT_EQ(b.statistics[1].topic_name, "/scan");
+}
+
+TEST(TopicStatisticMapper, IntraEndpointReportsTheBusierPath) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    auto e = endpoint("/n", "/x", eEndpointSide::kRecv, 2.0);
+    e.intra_hz = 20.0;
+    w.endpoints.push_back(e);
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 1u);
+    EXPECT_EQ(b.statistics[0].mean_ns, 50000000LL);
+}
+
+TEST(TopicStatisticMapper, ParsedJsonlEndpointsMapEndToEnd) {
+    const std::string line =
+        "{\"ts_ns\":\"1782887153899445923\",\"window_s\":5.000,\"topics\":[{\"topic\":\"/scan\","
+        "\"recv_inter_hz\":10.000000,\"recv_intra_hz\":0.000000,\"recv_endpoint_seen\":true}],"
+        "\"nodes\":[\"/a\",\"/b\"],\"warns\":[],\"endpoints\":["
+        "{\"topic\":\"/scan\",\"side\":\"recv\",\"id\":4,\"node\":\"/a\",\"inter_hz\":5.000000,"
+        "\"intra_hz\":0.000000},"
+        "{\"topic\":\"/scan\",\"side\":\"recv\",\"id\":5,\"node\":\"/b\",\"inter_hz\":5.000000,"
+        "\"intra_hz\":0.000000,\"max_dt_ms\":201.500}]}\n";
+    const auto wins = ros2_pulse::core::parseLog(line);
+    ASSERT_EQ(wins.size(), 1u);
+    const auto b = mapWindowTopicStatistics(wins[0]);
+    EXPECT_FALSE(b.ambiguous_node);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[0].node_name, "/a");
+    EXPECT_EQ(b.statistics[0].mean_ns, 200000000LL);
+    EXPECT_FALSE(b.statistics[0].has_max);
+    EXPECT_EQ(b.statistics[1].node_name, "/b");
+    EXPECT_EQ(b.statistics[1].max_ns, 201500000LL);
 }

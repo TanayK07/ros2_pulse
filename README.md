@@ -353,16 +353,21 @@ ros2 run ros2_pulse pulse_bridge --ros-args -p graph_monitor:=true
 
 | `TopicStatistic` field | Filled with |
 |---|---|
-| `statistic_type` | `PUBLISHED_PERIOD` if the topic was published in the window, `RECEIVED_PERIOD` if it was received, both if both. `TAKE_AGE` is not sent yet. |
-| `node_name`, `topic_name` | The process's single active node (`/ns/name`) and the topic. |
+| `statistic_type` | `PUBLISHED_PERIOD` per publisher, `RECEIVED_PERIOD` per subscription. `TAKE_AGE` is not sent yet. |
+| `node_name`, `topic_name` | The endpoint's owning node (`/ns/name`) and the topic. |
 | `window_count` | Messages in the window (rate x window length). |
 | `mean` | 1 / rate, busier of the inter- and intra-process paths. |
-| `max` | Largest inter-arrival gap on that side when jitter tracking is on, else 0. |
+| `max` | The endpoint's largest inter-arrival gap when jitter tracking is on, else 0. |
 | `min` | Always 0: the probe does not track the smallest gap. |
 
-The probe counts per topic per process, not per endpoint, so a process with several active
-nodes (a component container) is skipped with one warning per log rather than credited to the
-wrong node. A side with zero traffic is left out, so graph-monitor's stale timeout flags it.
+Each publisher and subscription is reported under its own node, from the probe's per-endpoint
+split, so a component container reports every node it hosts. graph-monitor keeps one statistic
+per (node, topic): a node with two subscriptions (or two publishers) on one topic reports the
+slower one, never the sum, and nothing when one of them stalled. Endpoints of a node the probe
+never saw initialize, and `/rosout` / `/parameter_events`, are not sent. A log from a probe
+older than the per-endpoint split only carries per-process sums: there a process with several
+active nodes is skipped with a warning rather than credited to the wrong node. An endpoint with
+zero traffic is left out, so graph-monitor's stale timeout flags it.
 `timestamp` is the window's end: keep `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` plus the bridge's
 `poll_period_s` under graph-monitor's `topic_statistics.stale_timeout_ms` (3 s by default), or
 raise the timeout. `rosgraph_monitor_msgs` is released for Humble through Rolling; a source build
