@@ -274,8 +274,10 @@ EP /scan recv id=8 node=/local_costmap/local_costmap inter=20.000000 intra=0.000
 If something already consumes rclcpp's built-in topic statistics, `pulse_bridge` republishes the
 probe's windows there: one `statistics_msgs/MetricsMessage` per topic per window, in the same
 shape (`unit` `ms`, `AVERAGE` = message period, `SAMPLE_COUNT` = messages in the window). With
-jitter tracking on (`ROS_TOPIC_STATS_JITTER=1`) the receive side adds `MINIMUM`, `MAXIMUM` and
-`STDDEV` of the inter-arrival period, in libstatistics_collector's order. Intra-process topics
+jitter tracking on (`ROS_TOPIC_STATS_JITTER=1`) the receive side adds `MAXIMUM`, `MINIMUM` and
+`STDDEV` of the inter-arrival period. Points are in libstatistics_collector's order (`AVERAGE`,
+`MAXIMUM`, `MINIMUM`, `SAMPLE_COUNT`, `STDDEV`); in this default layout an unmeasured point is
+left out. Intra-process topics
 included, which is what the built-in statistics cannot report on Humble
 ([rclcpp#2911](https://github.com/ros2/rclcpp/issues/2911)).
 
@@ -286,7 +288,9 @@ type, same topic, no change to the nodes being measured.
 
 `metrics_source:=metric` switches to rclcpp's own layout: `metrics_source` is the metric name
 (`message_period`, `message_age`) instead of the topic, as the built-in publisher wrote it, and a
-`message_age` message is published beside each `message_period` one. The age is measured at
+`message_age` message is published beside each `message_period` one. Every message there carries
+all five points, an unmeasured one as NaN, as libstatistics_collector does for an empty window,
+so consumers that index the points by position read it unchanged. The age is measured at
 `rmw_take`: the local wall clock minus the DDS source timestamp, so it is publish-to-take latency.
 That matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages kept when the
 publisher's clock runs ahead of ours). Humble / Iron rclcpp computed age from the message's

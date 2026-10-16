@@ -32,6 +32,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -92,28 +93,31 @@ auto point(std::uint8_t type, double value) -> StatisticDataPoint {
     return p;
 }
 
-auto toMessage(const sMetricSample& s) -> MetricsMessage {
+// @p all_points: rclcpp's layout (metrics_source:=metric) always carries all five points, an
+// unmeasured one as NaN, which is what libstatistics_collector publishes for an empty window.
+// The topic layout keeps its optional points (absent = not measured), in the same relative order.
+auto toMessage(const sMetricSample& s, bool all_points) -> MetricsMessage {
     MetricsMessage m;
     m.measurement_source_name = s.measurement_source_name;
     m.metrics_source = s.metrics_source;
     m.unit = s.unit;
     m.window_start = toTime(s.window_start_ns);
     m.window_stop = toTime(s.window_stop_ns);
-    // libstatistics_collector's order: AVERAGE, MINIMUM, MAXIMUM, STDDEV, SAMPLE_COUNT.
-    if (s.has_average) {
-        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_AVERAGE, s.average));
-    }
-    if (s.has_minimum) {
-        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_MINIMUM, s.minimum));
-    }
-    if (s.has_maximum) {
-        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_MAXIMUM, s.maximum));
-    }
-    if (s.has_stddev) {
-        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_STDDEV, s.stddev));
-    }
-    m.statistics.push_back(
-        point(StatisticDataType::STATISTICS_DATA_TYPE_SAMPLE_COUNT, s.sample_count));
+    constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+    auto add = [&](std::uint8_t type, bool has, double value) {
+        if (has) {
+            m.statistics.push_back(point(type, value));
+        } else if (all_points) {
+            m.statistics.push_back(point(type, kNaN));
+        }
+    };
+    // libstatistics_collector's GenerateStatisticMessage order: AVERAGE, MAXIMUM, MINIMUM,
+    // SAMPLE_COUNT, STDDEV. Some consumers index the points by position.
+    add(StatisticDataType::STATISTICS_DATA_TYPE_AVERAGE, s.has_average, s.average);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_MAXIMUM, s.has_maximum, s.maximum);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_MINIMUM, s.has_minimum, s.minimum);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_SAMPLE_COUNT, true, s.sample_count);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_STDDEV, s.has_stddev, s.stddev);
     return m;
 }
 
@@ -186,7 +190,10 @@ private:
                 }
                 if (!f.jsonl) break;
                 for (const auto& win : parseLog(line + "\n")) {
-                    for (const auto& s : mapWindow(win, m_opts)) m_pub->publish(toMessage(s));
+                    const bool all = m_opts.metrics_source == eMetricsSource::Metric;
+                    for (const auto& s : mapWindow(win, m_opts)) {
+                        m_pub->publish(toMessage(s, all));
+                    }
                 }
             }
         }

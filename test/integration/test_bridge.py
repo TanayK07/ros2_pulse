@@ -8,6 +8,7 @@
 # message_age in the metrics_source:=metric layout), lines appended AFTER the bridge
 # started are picked up (tail-follow), and a text-format log is refused with a warning instead
 # of a crash. Distro-independent: no probe, no LD_PRELOAD, the log is written by hand.
+import math
 import os
 import subprocess
 import sys
@@ -42,6 +43,12 @@ WIN_PARITY = ('{"ts_ns":"1782887153899445923","window_s":5.000,"topics":[{"topic
               '"recv_age_avg_ms":1.250,"recv_age_min_ms":0.800,"recv_age_max_ms":3.100,'
               '"recv_age_stddev_ms":0.400,"recv_age_count":99}],'
               '"nodes":["/perception"],"warns":[]}\n')
+# libstatistics_collector's GenerateStatisticMessage order.
+ALL_FIVE = [StatisticDataType.STATISTICS_DATA_TYPE_AVERAGE,
+            StatisticDataType.STATISTICS_DATA_TYPE_MAXIMUM,
+            StatisticDataType.STATISTICS_DATA_TYPE_MINIMUM,
+            StatisticDataType.STATISTICS_DATA_TYPE_SAMPLE_COUNT,
+            StatisticDataType.STATISTICS_DATA_TYPE_STDDEV]
 TEXT_WINDOW = ("# ts_ns=1782887153899445923 window_s=5.000\n"
                "TOPIC /scan PUB 20.000000 RECV 20.000000\n")
 
@@ -143,11 +150,9 @@ def test_minimum_and_stddev_published_when_measured(ros):
             m = col.msgs[0]
             assert m.metrics_source == "/scan"
             T = StatisticDataType
-            # libstatistics_collector's order, which some consumers index by position.
-            assert [p.data_type for p in m.statistics] == [
-                T.STATISTICS_DATA_TYPE_AVERAGE, T.STATISTICS_DATA_TYPE_MINIMUM,
-                T.STATISTICS_DATA_TYPE_MAXIMUM, T.STATISTICS_DATA_TYPE_STDDEV,
-                T.STATISTICS_DATA_TYPE_SAMPLE_COUNT]
+            # libstatistics_collector's GenerateStatisticMessage order, which some consumers
+            # index by position.
+            assert [p.data_type for p in m.statistics] == ALL_FIVE
             st = stats_by_type(m)
             assert st[T.STATISTICS_DATA_TYPE_AVERAGE] == pytest.approx(50.0)
             assert st[T.STATISTICS_DATA_TYPE_MINIMUM] == pytest.approx(48.12)
@@ -172,6 +177,8 @@ def test_metric_layout_matches_rclcpp_and_adds_message_age(ros):
             assert set(by_name) == {"message_period", "message_age"}
             T = StatisticDataType
             period = by_name["message_period"]
+            assert [p.data_type for p in period.statistics] == ALL_FIVE
+            assert [p.data_type for p in by_name["message_age"].statistics] == ALL_FIVE
             assert period.measurement_source_name == "/perception"
             assert period.unit == "ms"
             assert stats_by_type(period)[T.STATISTICS_DATA_TYPE_MINIMUM] == pytest.approx(48.12)
@@ -186,6 +193,31 @@ def test_metric_layout_matches_rclcpp_and_adds_message_age(ros):
             assert st[T.STATISTICS_DATA_TYPE_MAXIMUM] == pytest.approx(3.1)
             assert st[T.STATISTICS_DATA_TYPE_STDDEV] == pytest.approx(0.4)
             assert st[T.STATISTICS_DATA_TYPE_SAMPLE_COUNT] == 99.0
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+def test_metric_layout_always_carries_all_five_points(ros):
+    # rclcpp's layout publishes every point, an unmeasured one as NaN (an empty
+    # libstatistics_collector window), so positional consumers never see a short message.
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(WIN1)  # MAXIMUM measured, no MINIMUM / STDDEV
+        proc = start_bridge(path, ("-p", "metrics_source:=metric"))
+        col = Collector("/statistics")
+        try:
+            assert col.wait_for(1, 10.0), "no MetricsMessage on /statistics within 10 s"
+            period = next(m for m in col.msgs if m.metrics_source == "message_period")
+            assert [p.data_type for p in period.statistics] == ALL_FIVE
+            st = stats_by_type(period)
+            T = StatisticDataType
+            assert st[T.STATISTICS_DATA_TYPE_AVERAGE] == pytest.approx(50.0)
+            assert st[T.STATISTICS_DATA_TYPE_MAXIMUM] == pytest.approx(21.284)
+            assert math.isnan(st[T.STATISTICS_DATA_TYPE_MINIMUM])
+            assert math.isnan(st[T.STATISTICS_DATA_TYPE_STDDEV])
+            assert st[T.STATISTICS_DATA_TYPE_SAMPLE_COUNT] == 100.0
         finally:
             col.destroy_node()
             stop(proc)
