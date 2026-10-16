@@ -177,7 +177,7 @@ set fleet-wide.
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a declared but silent topic (no traffic in the window). By default such topics are omitted so a large graph is not padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected: `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a stalled upstream stays visible) and omits never-active topics. |
 | `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting; they never crash the host. |
 | `ROS_TOPIC_STATS_QUIET` | `0` | When `1`, suppress the `[ros2_pulse] active` stderr banner, for deployments that parse the wrapped process's stderr. Only the informational banner is silenced. Error diagnostics (unreadable, malformed or zero-rule spec, unwritable output file) still print, because each of those disables something you configured, and silently disabled alerting is the 0.2.0 bug class this flag must not bring back. |
-| `ROS_TOPIC_STATS_ENDPOINTS` | `0` | When `1`, text windows also get one `EP` line per publisher / subscription (the [per-endpoint breakdown](#per-node-per-endpoint-breakdown)). jsonl always carries it as the `endpoints` key; text keeps it opt-in so the default text output stays byte-identical. |
+| `ROS_TOPIC_STATS_ENDPOINTS` | `0` | When `1`, text windows also get one `EP` line per publisher / subscription (the [per-endpoint breakdown](#per-node-per-endpoint-breakdown)). jsonl always carries it as the `endpoints` key; text keeps it opt-in so the default text output stays byte-identical. The released pulse-top / `pulse-export` 0.5.0 count `EP` lines as skipped lines; text `EP` needs the next pulse-top release. |
 | `ROS_TOPIC_STATS_FORMAT` | `text` | Output encoding: `text` (the block format above, byte-identical to previous releases) or `jsonl` (one JSON object per window per line, see below). Any other value warns once on stderr and falls back to `text`; it never crashes the host. `pulse-check` reads both. |
 
 ### JSON Lines output (`ROS_TOPIC_STATS_FORMAT=jsonl`)
@@ -251,6 +251,14 @@ EP /scan recv id=8 node=/local_costmap/local_costmap inter=20.000000 intra=0.000
 - Node liveness (`NODE` lines) now looks only at a node's own endpoints. In a component
   container, one node's log line on `/rosout` no longer keeps every other node in the process
   alive.
+- A destroyed publisher or subscription (`rcl_publisher_fini` / `rcl_subscription_fini`, or its
+  node's `rcl_node_fini`) is written once more if its last window carried traffic, then never
+  again.
+- Readers: `pulse-check` and `pulse_bridge` from this release read both encodings of the split.
+  The released pulse-top / `pulse-export` 0.5.0 ignore the jsonl key but do not know the text
+  `EP` line: with `ROS_TOPIC_STATS_ENDPOINTS=1` they count every `EP` line as a skipped line
+  (`ros2_pulse_lines_skipped_total` grows by the number of endpoints each window). Text `EP`
+  lines need the next pulse-top release; jsonl works with 0.5.0.
 
 ### Publishing on `/statistics` (`pulse_bridge`)
 
@@ -465,10 +473,16 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
   publish on an intra-process publisher, so loans and intra-process never mix. Before this, a
   loaned publisher on Humble had no `TOPIC` line at all: Humble's `rcl_publish_loaned_message`
   fires no tracepoint.
-- There is no destroy tracepoint for publishers, subscriptions or nodes. When a destroyed
-  handle's address is reused for a new one, the probe re-homes that endpoint (new topic, node and
-  `id`); counts the old endpoint took in the same window are reported under the new one. A
-  destroyed endpoint whose address is never reused stays known and simply goes silent.
+- There is no destroy tracepoint for publishers, subscriptions or nodes, so the probe also wraps
+  `rcl_publisher_fini`, `rcl_subscription_fini` and `rcl_node_fini` by name. A destroyed
+  endpoint is reported for its last window's traffic and then dropped, so a subscription removed
+  in a lifecycle `on_cleanup` or an unloaded component never lingers as a stalled `inter=0.0`
+  endpoint of a live node, and a node address reused by the next node never hands it the old
+  node's endpoints. When a destroyed handle's address is reused for a new one, the probe re-homes
+  that endpoint (new topic, node and `id`); counts the old endpoint took in the same window
+  before its fini are reported under the new one. The per-topic `RECV` line keeps its
+  KNOWN_ISSUES #12 meaning: a topic that delivered once in the process still reads 0.0 after its
+  last subscription is gone.
 - File output only; no live network export, by design.
 
 ## Compatibility

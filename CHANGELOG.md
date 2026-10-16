@@ -19,9 +19,20 @@ All notable changes to this project are documented here. Format follows
   flush time and are unchanged, and the per-topic `JITTER` gap keeps measuring the gap between
   any two messages of the topic. With gap tracking on, each arrival also updates its handle's
   own gap from the same clock read (one more atomic exchange). Node liveness now looks only at a
-  node's own endpoints. A publisher or subscription address reused after a destroy (there is no
-  destroy tracepoint) re-homes its endpoint, which also stops a recycled publisher handle from
-  counting into its previous topic.
+  node's own endpoints. A publisher or subscription address reused after a destroy re-homes its
+  endpoint, which also stops a recycled publisher handle from counting into its previous topic.
+- **Destroyed publishers, subscriptions and nodes are retired.** There is no destroy tracepoint,
+  so the probe now also wraps `rcl_publisher_fini`, `rcl_subscription_fini` and `rcl_node_fini`
+  by name (graph-rate calls, the per-message path is unchanged). A destroyed endpoint is written
+  once more if its last window carried traffic, then dropped; before, a subscription removed in a
+  lifecycle `on_cleanup` (or by unloading a component) stayed in every window as a stalled
+  `inter=0.0` endpoint of a live node, and a destroyed publisher's open gap grew without bound
+  with gap tracking on. A node address reused by the next node no longer hands that node the
+  destroyed node's endpoints: only the new node's own pre-init `/rosout` publisher is claimed.
+  A callback address reused by a re-created subscription is re-resolved (its endpoint is proven
+  again for KNOWN_ISSUES #12, and counts no longer go to the destroyed subscription), and the
+  thread-local cache is tagged by kind, so a publisher handle address reused as a subscription
+  handle (or the reverse) is never served the other one's endpoint (PR #72 review).
 
 ### Added
 - **Per-endpoint breakdown in the output, additive.** jsonl records gain an `endpoints` array
@@ -31,7 +42,10 @@ All notable changes to this project are documented here. Format follows
   lines with the new `ROS_TOPIC_STATS_ENDPOINTS=1`; without it the text output is unchanged.
   Same emit gates as the topic lines; filtered topics stay filtered. `pulse-check`'s reader
   (and so `pulse_bridge`) parses both into `sLogWindow::endpoints`; pulse-top parses them into
-  `Window.endpoints` and treats `EP` as a known line kind.
+  `Window.endpoints` and treats `EP` as a known line kind. One malformed `endpoints` element
+  costs pulse-top that element only, never the window. **Text `EP` lines need the next
+  pulse-top release:** the released pulse-top / `pulse-export` 0.5.0 count each `EP` line as a
+  skipped line (`ros2_pulse_lines_skipped_total`); jsonl works with 0.5.0, which ignores the key.
 
 ## [0.6.0] - 2026-10-14
 

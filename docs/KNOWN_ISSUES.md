@@ -26,4 +26,9 @@ planned work is in [ROADMAP.md](ROADMAP.md).
 | 17 | High | correctness | Counters were per topic per process: same-topic endpoints in one process shared one counter (interleaved gaps, summed rates per node, one node's `/rosout` kept every node alive) | [#72](https://github.com/TanayK07/ros2_pulse/pull/72) |
 
 Sub-items referenced from code: 8a is the timer first-fire off-by-one, 8b is the nominal
-window denominator (both fixed in #9).
+window denominator (both fixed in #9). 17a is endpoint teardown, found in the #72 review and
+fixed there: with no destroy tracepoint, a destroyed subscription stayed a stalled `inter=0.0`
+endpoint of a live node forever, a recycled node address handed the destroyed node's endpoints
+to the next node, and recycled callback or handle addresses could be served a dead endpoint
+from the thread-local cache. The probe now wraps `rcl_publisher_fini`, `rcl_subscription_fini`
+and `rcl_node_fini`, and the cache tag carries the key kind and the subscription epoch.
