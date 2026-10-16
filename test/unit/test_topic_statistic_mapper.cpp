@@ -339,3 +339,117 @@ TEST(TopicStatisticMapper, ParsedJsonlEndpointsMapEndToEnd) {
     EXPECT_EQ(b.statistics[1].node_name, "/b");
     EXPECT_EQ(b.statistics[1].max_ns, 201500000LL);
 }
+
+// ---- receive distributions and TAKE_AGE (per-subscription, gap tracking on) ----
+
+namespace {
+
+auto measuredRecv() -> sEndpointStat {
+    auto r = endpoint("/n", "/scan", eEndpointSide::kRecv, 20.0);
+    r.max_dt_ms = 61.0;
+    r.has_max_dt = true;
+    r.has_recv_dt = true;
+    r.recv_dt.count = 99;
+    r.recv_dt.mean_ms = 49.5;
+    r.recv_dt.min_ms = 45.25;
+    r.has_recv_age = true;
+    r.recv_age.count = 100;
+    r.recv_age.mean_ms = 1.5;
+    r.recv_age.min_ms = 0.75;
+    r.recv_age.max_ms = 4.0;
+    return r;
+}
+
+}  // namespace
+
+TEST(TopicStatisticMapper, ReceivedPeriodUsesTheIntervalDistribution) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    w.endpoints.push_back(measuredRecv());
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    const auto& p = b.statistics[0];
+    EXPECT_EQ(p.type, eTopicStatisticType::ReceivedPeriod);
+    EXPECT_EQ(p.window_count, 100);       // still messages in the window
+    EXPECT_EQ(p.mean_ns, 49500000LL);     // interval mean, not 1 / 20 Hz
+    EXPECT_TRUE(p.has_min);
+    EXPECT_EQ(p.min_ns, 45250000LL);
+    EXPECT_TRUE(p.has_max);
+    EXPECT_EQ(p.max_ns, 61000000LL);      // the gap, open interval included
+}
+
+TEST(TopicStatisticMapper, TakeAgeFollowsItsSubscription) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    w.endpoints.push_back(measuredRecv());
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    const auto& a = b.statistics[1];
+    EXPECT_EQ(a.type, eTopicStatisticType::TakeAge);
+    EXPECT_EQ(a.node_name, "/n");
+    EXPECT_EQ(a.topic_name, "/scan");
+    EXPECT_EQ(a.window_count, 100);
+    EXPECT_EQ(a.mean_ns, 1500000LL);
+    EXPECT_TRUE(a.has_min);
+    EXPECT_EQ(a.min_ns, 750000LL);
+    EXPECT_TRUE(a.has_max);
+    EXPECT_EQ(a.max_ns, 4000000LL);
+}
+
+TEST(TopicStatisticMapper, NegativeAgeStaysSignedInTheCore) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    auto r = measuredRecv();
+    r.recv_age.min_ms = -2.0;
+    w.endpoints.push_back(r);
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[1].min_ns, -2000000LL);  // the bridge clamps, the core does not
+}
+
+TEST(TopicStatisticMapper, PublishedPeriodHasNoMinimumOrAge) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    auto p = endpoint("/n", "/scan", eEndpointSide::kPub, 20.0);
+    p.has_recv_dt = true;  // never set by the probe on a publisher; ignored if it were
+    p.recv_dt.count = 5;
+    p.recv_dt.mean_ms = 1.0;
+    p.has_recv_age = true;
+    p.recv_age.count = 5;
+    w.endpoints.push_back(p);
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 1u);
+    EXPECT_EQ(b.statistics[0].type, eTopicStatisticType::PublishedPeriod);
+    EXPECT_EQ(b.statistics[0].mean_ns, 50000000LL);
+    EXPECT_FALSE(b.statistics[0].has_min);
+}
+
+TEST(TopicStatisticMapper, NoAgeMeasuredNoTakeAge) {
+    sLogWindow w;
+    w.window_s = 5.0;
+    auto r = measuredRecv();
+    r.has_recv_age = false;
+    r.has_recv_dt = false;
+    w.endpoints.push_back(r);
+    const auto b = mapWindowTopicStatistics(w);
+    ASSERT_EQ(b.statistics.size(), 1u);
+    EXPECT_EQ(b.statistics[0].mean_ns, 50000000LL);  // back to 1 / rate
+    EXPECT_FALSE(b.statistics[0].has_min);
+}
+
+TEST(TopicStatisticMapper, ParsedJsonlEndpointDistributionsMapEndToEnd) {
+    const std::string line =
+        "{\"ts_ns\":\"1\",\"window_s\":5.000,\"topics\":[],\"nodes\":[\"/n\"],\"warns\":[],"
+        "\"endpoints\":[{\"topic\":\"/scan\",\"side\":\"recv\",\"id\":4,\"node\":\"/n\","
+        "\"inter_hz\":20.000000,\"intra_hz\":0.000000,\"max_dt_ms\":61.000,"
+        "\"avg_dt_ms\":49.500,\"min_dt_ms\":45.250,\"stddev_dt_ms\":1.000,\"dt_count\":99,"
+        "\"age_avg_ms\":1.500,\"age_min_ms\":0.750,\"age_max_ms\":4.000,\"age_count\":100}]}\n";
+    const auto wins = ros2_pulse::core::parseLog(line);
+    ASSERT_EQ(wins.size(), 1u);
+    const auto b = mapWindowTopicStatistics(wins[0]);
+    ASSERT_EQ(b.statistics.size(), 2u);
+    EXPECT_EQ(b.statistics[0].mean_ns, 49500000LL);
+    EXPECT_EQ(b.statistics[0].min_ns, 45250000LL);
+    EXPECT_EQ(b.statistics[1].type, eTopicStatisticType::TakeAge);
+    EXPECT_EQ(b.statistics[1].mean_ns, 1500000LL);
+}

@@ -86,8 +86,10 @@ All notable changes to this project are documented here. Format follows
   ([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).** With
   `graph_monitor:=true` the bridge also publishes each window on `/topic_statistics`
   (`graph_monitor_topic`): `PUBLISHED_PERIOD` / `RECEIVED_PERIOD` per (node, topic), with
-  `window_count`, `mean` = 1 / rate and `max` = largest gap when jitter tracking is on. `min` stays
-  0 (not tracked) and `TAKE_AGE` is not sent. Each endpoint is reported under its owning node
+  `window_count`, `mean` = 1 / rate and `max` = largest gap when jitter tracking is on. With
+  jitter tracking on, `RECEIVED_PERIOD` takes `mean` / `min` from the subscription's own
+  interval distribution and `TAKE_AGE` carries its message age (mean / min / max, a negative
+  age sent as 0); `PUBLISHED_PERIOD` `min` stays 0 (not tracked). Each endpoint is reported under its owning node
   from the per-endpoint split, so a component container reports every node; two handles of one
   node on one topic and side report the slower one, not the sum (PR #68 review). A log without
   the split (an older probe) falls back to per-process sums, and a process with several active

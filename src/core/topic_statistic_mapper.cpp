@@ -37,6 +37,35 @@ auto sample(eTopicStatisticType type, const std::string& node, const std::string
     return s;
 }
 
+auto msToNs(double ms) -> long long { return std::llround(ms * 1e6); }
+
+// A subscription's own interval distribution, when the probe measured one: the mean of the
+// observed intervals (what graph-monitor's shim averages) and their minimum. max stays the
+// gap, which also folds the interval still open at the window's end.
+void fillReceived(const sEndpointStat& e, sTopicStatisticSample& s) {
+    if (!e.has_recv_dt || e.recv_dt.count == 0) return;
+    s.mean_ns = msToNs(e.recv_dt.mean_ms);
+    s.has_min = true;
+    s.min_ns = msToNs(e.recv_dt.min_ms);
+}
+
+auto takeAge(const sEndpointStat& e) -> sTopicStatisticSample {
+    sTopicStatisticSample s;
+    s.type = eTopicStatisticType::TakeAge;
+    s.node_name = e.node;
+    s.topic_name = e.topic;
+    const auto n = e.recv_age.count;
+    s.window_count = n >= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())
+                         ? std::numeric_limits<std::int32_t>::max()
+                         : static_cast<std::int32_t>(n);
+    s.mean_ns = msToNs(e.recv_age.mean_ms);
+    s.has_min = true;
+    s.min_ns = msToNs(e.recv_age.min_ms);
+    s.has_max = true;
+    s.max_ns = msToNs(e.recv_age.max_ms);
+    return s;
+}
+
 // One (node, topic, type) key while the window's endpoints are folded into it. Several handles
 // can share a key (one node subscribing twice, or publishing twice); graph-monitor keeps one
 // statistic per key, so the key carries its SLOWEST handle, and a stalled handle (0 Hz, a proven
@@ -79,6 +108,9 @@ void mapEndpoints(const sLogWindow& win, sTopicStatisticsBatch& out) {
                                                         : eTopicStatisticType::ReceivedPeriod;
         out.statistics.push_back(
             sample(type, e.node, e.topic, k.hz, win.window_s, e.has_max_dt, e.max_dt_ms));
+        if (e.side != eEndpointSide::kRecv) continue;
+        fillReceived(e, out.statistics.back());
+        if (e.has_recv_age && e.recv_age.count > 0) out.statistics.push_back(takeAge(e));
     }
 }
 

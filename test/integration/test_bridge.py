@@ -277,8 +277,24 @@ GM_WIN = ('{"ts_ns":"1782887153899445923","window_s":5.000,"topics":[{"topic":"/
           '"pub_inter_hz":20.000000,"pub_intra_hz":0.000000,"recv_inter_hz":10.000000,'
           '"recv_intra_hz":0.000000,"recv_endpoint_seen":true,"pub_max_dt_ms":60.000}],'
           '"nodes":["/perception"],"warns":[]}\n')
-# Same traffic, two nodes in the process: not attributable to one endpoint.
+# Same traffic, two nodes in the process, from a probe without the per-endpoint split: not
+# attributable to one endpoint.
 GM_WIN_TWO_NODES = GM_WIN.replace('["/perception"]', '["/perception","/planner"]')
+# A component container with the per-endpoint split: /driver publishes /scan, /filter receives
+# it (gap tracking on: its own interval distribution and message age), /planner only logged.
+GM_WIN_ENDPOINTS = (
+    '{"ts_ns":"1782887153899445923","window_s":5.000,"topics":[{"topic":"/scan",'
+    '"pub_inter_hz":20.000000,"pub_intra_hz":0.000000,"recv_inter_hz":20.000000,'
+    '"recv_intra_hz":0.000000,"recv_endpoint_seen":true}],'
+    '"nodes":["/driver","/filter","/planner"],"warns":[],"endpoints":['
+    '{"topic":"/scan","side":"pub","id":1,"node":"/driver","inter_hz":20.000000,'
+    '"intra_hz":0.000000},'
+    '{"topic":"/scan","side":"recv","id":2,"node":"/filter","inter_hz":20.000000,'
+    '"intra_hz":0.000000,"max_dt_ms":61.000,"avg_dt_ms":49.500,"min_dt_ms":45.250,'
+    '"stddev_dt_ms":1.000,"dt_count":99,"age_avg_ms":1.500,"age_min_ms":-0.250,'
+    '"age_max_ms":4.000,"age_count":100},'
+    '{"topic":"/rosout","side":"pub","id":3,"node":"/planner","inter_hz":0.200000,'
+    '"intra_hz":0.000000}]}\n')
 
 try:
     from rosgraph_monitor_msgs.msg import TopicStatistic, TopicStatistics
@@ -323,6 +339,41 @@ def test_graph_monitor_topic_statistics(ros):
         finally:
             col.destroy_node()
             stop(proc)
+
+
+@pytest.mark.skipif(not HAVE_GM, reason="rosgraph_monitor_msgs not installed")
+def test_graph_monitor_reports_every_node_of_a_container(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(GM_WIN_ENDPOINTS)
+        proc = start_bridge(path, ("-p", "graph_monitor:=true"))
+        col = GmCollector("/topic_statistics")
+        try:
+            assert col.wait_for(1, 10.0), "no TopicStatistics on /topic_statistics within 10 s"
+            m = col.msgs[0]
+            got = {(s.node_name, s.statistic_type): s for s in m.statistics}
+            assert sorted(got) == sorted([
+                ("/driver", TopicStatistic.PUBLISHED_PERIOD),
+                ("/filter", TopicStatistic.RECEIVED_PERIOD),
+                ("/filter", TopicStatistic.TAKE_AGE)])
+            pub = got[("/driver", TopicStatistic.PUBLISHED_PERIOD)]
+            assert (pub.mean.sec, pub.mean.nanosec) == (0, 50_000_000)
+            assert (pub.min.sec, pub.min.nanosec) == (0, 0)
+            recv = got[("/filter", TopicStatistic.RECEIVED_PERIOD)]
+            assert recv.window_count == 100
+            assert (recv.mean.sec, recv.mean.nanosec) == (0, 49_500_000)
+            assert (recv.min.sec, recv.min.nanosec) == (0, 45_250_000)
+            assert (recv.max.sec, recv.max.nanosec) == (0, 61_000_000)
+            age = got[("/filter", TopicStatistic.TAKE_AGE)]
+            assert age.window_count == 100
+            assert (age.mean.sec, age.mean.nanosec) == (0, 1_500_000)
+            assert (age.min.sec, age.min.nanosec) == (0, 0)  # -0.25 ms clamped
+            assert (age.max.sec, age.max.nanosec) == (0, 4_000_000)
+        finally:
+            col.destroy_node()
+            err = stop(proc)
+        assert "active nodes in this process" not in err, err
 
 
 @pytest.mark.skipif(not HAVE_GM, reason="rosgraph_monitor_msgs not installed")

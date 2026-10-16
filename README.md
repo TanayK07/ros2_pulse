@@ -358,12 +358,16 @@ ros2 run ros2_pulse pulse_bridge --ros-args -p graph_monitor:=true
 
 | `TopicStatistic` field | Filled with |
 |---|---|
-| `statistic_type` | `PUBLISHED_PERIOD` per publisher, `RECEIVED_PERIOD` per subscription. `TAKE_AGE` is not sent yet. |
+| `statistic_type` | `PUBLISHED_PERIOD` per publisher, `RECEIVED_PERIOD` per subscription, and `TAKE_AGE` per subscription when its message age was measured. |
 | `node_name`, `topic_name` | The endpoint's owning node (`/ns/name`) and the topic. |
-| `window_count` | Messages in the window (rate x window length). |
-| `mean` | 1 / rate, busier of the inter- and intra-process paths. |
-| `max` | The endpoint's largest inter-arrival gap when jitter tracking is on, else 0. |
-| `min` | Always 0: the probe does not track the smallest gap. |
+| `window_count` | Periods: messages in the window (rate x window length). `TAKE_AGE`: age samples. |
+| `mean` | `RECEIVED_PERIOD`: mean of the subscription's own inter-arrival intervals when jitter tracking is on (what graph-monitor's shim averages), else 1 / rate. `PUBLISHED_PERIOD`: 1 / rate. Busier of the inter- and intra-process paths. `TAKE_AGE`: mean age. |
+| `max` | Periods: the endpoint's largest inter-arrival gap when jitter tracking is on (a stall still open at the window's end included), else 0. `TAKE_AGE`: largest age. |
+| `min` | `RECEIVED_PERIOD`: smallest interval, `TAKE_AGE`: smallest age, when jitter tracking is on, else 0. `PUBLISHED_PERIOD`: always 0, not tracked. |
+
+`TAKE_AGE` is the probe's `message_age` (see above): jitter tracking on, inter-process takes
+with a DDS source timestamp. graph-monitor does not evaluate it today. A negative age (the
+publisher's clock ahead of this host's) is sent as 0, since `Duration` there is a span.
 
 Each publisher and subscription is reported under its own node, from the probe's per-endpoint
 split, so a component container reports every node it hosts. graph-monitor keeps one statistic

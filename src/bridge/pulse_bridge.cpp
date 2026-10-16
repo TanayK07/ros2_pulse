@@ -146,22 +146,34 @@ auto toDuration(long long ns) -> builtin_interfaces::msg::Duration {
     return d;
 }
 
-// Only fields the probe measures are set, see topic_statistic_mapper.hpp. `min` stays zero (the
-// probe does not track the smallest gap), `max` stays zero when gap tracking is off, and
-// TAKE_AGE is never sent (rmw_take's source_timestamp is not read yet).
+// Only fields the probe measures are set, see topic_statistic_mapper.hpp: `min` stays zero on
+// PUBLISHED_PERIOD (not tracked) and whenever the receive interval distribution was not measured,
+// `max` stays zero when gap tracking is off, and TAKE_AGE comes only with jitter tracking on. A
+// negative age (the publisher's clock ahead of ours) is clamped to zero: Duration here is the
+// non-negative span graph-monitor's shim fills.
 auto toMessage(const ros2_pulse::core::sTopicStatisticsBatch& b) -> TopicStatistics {
+    using ros2_pulse::core::eTopicStatisticType;
     TopicStatistics m;
     m.timestamp = toTime(b.timestamp_ns);
     m.statistics.reserve(b.statistics.size());
     for (const auto& s : b.statistics) {
         TopicStatistic t;
-        t.statistic_type = s.type == ros2_pulse::core::eTopicStatisticType::PublishedPeriod
-                               ? TopicStatistic::PUBLISHED_PERIOD
-                               : TopicStatistic::RECEIVED_PERIOD;
+        switch (s.type) {
+            case eTopicStatisticType::PublishedPeriod:
+                t.statistic_type = TopicStatistic::PUBLISHED_PERIOD;
+                break;
+            case eTopicStatisticType::ReceivedPeriod:
+                t.statistic_type = TopicStatistic::RECEIVED_PERIOD;
+                break;
+            case eTopicStatisticType::TakeAge:
+                t.statistic_type = TopicStatistic::TAKE_AGE;
+                break;
+        }
         t.node_name = s.node_name;
         t.topic_name = s.topic_name;
         t.window_count = s.window_count;
         t.mean = toDuration(s.mean_ns);
+        if (s.has_min) t.min = toDuration(s.min_ns);
         if (s.has_max) t.max = toDuration(s.max_ns);
         m.statistics.push_back(std::move(t));
     }

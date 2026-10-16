@@ -12,8 +12,9 @@
 // per publisher / subscription handle with its owning node) maps onto that directly, so a
 // component container or any multi-node process reports every node. Several handles of one
 // node on one topic and side (a node subscribing twice) share one key, and graph-monitor holds
-// one statistic per key: the key reports its SLOWEST handle, the one a deadline would catch
-// first, and is left out when any of them stalled to 0 Hz. Endpoints whose node the probe never
+// one statistic per key: the key reports its SLOWEST handle (every field, TAKE_AGE included,
+// from that one handle), the one a deadline would catch first, and is left out when any of
+// them stalled to 0 Hz. Endpoints whose node the probe never
 // saw initialize, and the probe's infrastructure topics (TopicRegistry::shouldFilter: /rosout,
 // /parameter_events, ...), are not sent.
 //
@@ -22,16 +23,26 @@
 // every node the process-wide rate, so the window is dropped instead (`ambiguous_node`).
 //
 // What is filled, and what is not:
-//   statistic_type  PUBLISHED_PERIOD for a publisher, RECEIVED_PERIOD for a subscription. TAKE_AGE
-//                   is never emitted: the probe does not read rmw_take's source_timestamp yet.
+//   statistic_type  PUBLISHED_PERIOD for a publisher, RECEIVED_PERIOD for a subscription, and
+//                   TAKE_AGE for a subscription whose message age the probe measured (gap
+//                   tracking on, inter-process takes with a DDS source timestamp).
 //   node_name       the endpoint's owning node, fully qualified (/ns/name), which is the form
 //                   graph-monitor builds from the graph.
 //   topic_name      the topic as the probe recorded it (resolved, fully qualified).
-//   window_count    messages in the window: rate * window length, rounded.
-//   mean            1 / rate. Inter and intra paths report the busier one, never the sum.
-//   max             the endpoint's largest inter-arrival gap, only when the probe's gap tracking
-//                   measured one (has_max); otherwise left at zero.
-//   min             never filled: the probe does not track the smallest gap.
+//   window_count    periods: messages in the window, rate * window length, rounded.
+//                   TAKE_AGE: the number of age samples.
+//   mean            RECEIVED_PERIOD: the mean of the subscription's observed inter-arrival
+//                   intervals when gap tracking measured them (what graph-monitor's own shim
+//                   averages), else 1 / rate. PUBLISHED_PERIOD: 1 / rate. Inter and intra paths
+//                   report the busier one, never the sum. TAKE_AGE: the mean age. The interval
+//                   mean does not include a stall still open at the window's end; max does, and a
+//                   subscription that saw nothing all window is left out (stale).
+//   min             RECEIVED_PERIOD: the smallest observed interval, TAKE_AGE: the smallest
+//                   age, both when measured (has_min). PUBLISHED_PERIOD: zero, not tracked.
+//   max             periods: the endpoint's largest inter-arrival gap, only when the probe's gap
+//                   tracking measured one (has_max); otherwise left at zero. TAKE_AGE: the
+//                   largest age.
+// The older-probe fallback below fills periods only: 1 / rate, max, no min, no TAKE_AGE.
 // A zero-rate endpoint is left out rather than reported as an infinite period: graph-monitor
 // treats a missing update as stale, which is the right verdict for a dead topic.
 
@@ -49,15 +60,20 @@ namespace ros2_pulse::core {
 enum class eTopicStatisticType {
     PublishedPeriod,  // rosgraph_monitor_msgs TopicStatistic::PUBLISHED_PERIOD
     ReceivedPeriod,   // rosgraph_monitor_msgs TopicStatistic::RECEIVED_PERIOD
+    TakeAge,          // rosgraph_monitor_msgs TopicStatistic::TAKE_AGE
 };
 
-/// One TopicStatistic, field for field. Durations in nanoseconds.
+/// One TopicStatistic, field for field. Durations in nanoseconds, signed: a TAKE_AGE can be
+/// negative (the publisher's clock ahead of ours), which builtin_interfaces/Duration in this
+/// message cannot carry; the bridge clamps it at zero.
 struct sTopicStatisticSample {
     eTopicStatisticType type{eTopicStatisticType::PublishedPeriod};
     std::string node_name;
     std::string topic_name;
     std::int32_t window_count{0};
     long long mean_ns{0};
+    bool has_min{false};
+    long long min_ns{0};
     bool has_max{false};
     long long max_ns{0};
 };
