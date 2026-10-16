@@ -20,6 +20,9 @@
 //   poll_period_s  double    how often the logs are read                        (default: 1.0)
 //   source_name    string    measurement_source_name override; empty means the window's single
 //                            node name, or "ros2_pulse" when that is ambiguous   (default: "")
+//   metrics_source string    "topic": metrics_source is the topic, message_period only;
+//                            "metric": rclcpp's layout, metrics_source is "message_period" /
+//                            "message_age" and the topic is not carried     (default: topic)
 //
 // Text-format logs are refused per file with one warning: their windows span several lines and
 // the bridge reads line by line. Set ROS_TOPIC_STATS_FORMAT=jsonl on the probed process.
@@ -29,6 +32,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -46,6 +50,7 @@
 
 namespace {
 
+using ros2_pulse::core::eMetricsSource;
 using ros2_pulse::core::eRateUnit;
 using ros2_pulse::core::LineFollower;
 using ros2_pulse::core::mapWindow;
@@ -88,21 +93,31 @@ auto point(std::uint8_t type, double value) -> StatisticDataPoint {
     return p;
 }
 
-auto toMessage(const sMetricSample& s) -> MetricsMessage {
+// @p all_points: rclcpp's layout (metrics_source:=metric) always carries all five points, an
+// unmeasured one as NaN, which is what libstatistics_collector publishes for an empty window.
+// The topic layout keeps its optional points (absent = not measured), in the same relative order.
+auto toMessage(const sMetricSample& s, bool all_points) -> MetricsMessage {
     MetricsMessage m;
     m.measurement_source_name = s.measurement_source_name;
     m.metrics_source = s.metrics_source;
     m.unit = s.unit;
     m.window_start = toTime(s.window_start_ns);
     m.window_stop = toTime(s.window_stop_ns);
-    if (s.has_average) {
-        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_AVERAGE, s.average));
-    }
-    if (s.has_maximum) {
-        m.statistics.push_back(point(StatisticDataType::STATISTICS_DATA_TYPE_MAXIMUM, s.maximum));
-    }
-    m.statistics.push_back(
-        point(StatisticDataType::STATISTICS_DATA_TYPE_SAMPLE_COUNT, s.sample_count));
+    constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+    auto add = [&](std::uint8_t type, bool has, double value) {
+        if (has) {
+            m.statistics.push_back(point(type, value));
+        } else if (all_points) {
+            m.statistics.push_back(point(type, kNaN));
+        }
+    };
+    // libstatistics_collector's GenerateStatisticMessage order: AVERAGE, MAXIMUM, MINIMUM,
+    // SAMPLE_COUNT, STDDEV. Some consumers index the points by position.
+    add(StatisticDataType::STATISTICS_DATA_TYPE_AVERAGE, s.has_average, s.average);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_MAXIMUM, s.has_maximum, s.maximum);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_MINIMUM, s.has_minimum, s.minimum);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_SAMPLE_COUNT, true, s.sample_count);
+    add(StatisticDataType::STATISTICS_DATA_TYPE_STDDEV, s.has_stddev, s.stddev);
     return m;
 }
 
@@ -121,11 +136,18 @@ public:
         const auto unit = declare_parameter<std::string>("unit", "ms");
         double period = declare_parameter<double>("poll_period_s", 1.0);
         m_opts.source_name = declare_parameter<std::string>("source_name", "");
+        const auto source = declare_parameter<std::string>("metrics_source", "topic");
 
         if (unit == "Hz") {
             m_opts.unit = eRateUnit::Rate_hz;
         } else if (unit != "ms") {
             RCLCPP_WARN(get_logger(), "unit '%s' is neither ms nor Hz, using ms", unit.c_str());
+        }
+        if (source == "metric") {
+            m_opts.metrics_source = eMetricsSource::Metric;
+        } else if (source != "topic") {
+            RCLCPP_WARN(get_logger(), "metrics_source '%s' is neither topic nor metric, using topic",
+                        source.c_str());
         }
         if (period <= 0.0) {
             RCLCPP_WARN(get_logger(), "poll_period_s %.3f is not positive, using 1.0", period);
@@ -168,7 +190,10 @@ private:
                 }
                 if (!f.jsonl) break;
                 for (const auto& win : parseLog(line + "\n")) {
-                    for (const auto& s : mapWindow(win, m_opts)) m_pub->publish(toMessage(s));
+                    const bool all = m_opts.metrics_source == eMetricsSource::Metric;
+                    for (const auto& s : mapWindow(win, m_opts)) {
+                        m_pub->publish(toMessage(s, all));
+                    }
                 }
             }
         }

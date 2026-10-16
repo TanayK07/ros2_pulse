@@ -235,7 +235,8 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
             TopicRegistry::shouldEmitTopic(s, emit_idle) || s.pub_intra_count > 0;
         const bool recv_side = TopicRegistry::shouldEmitRecv(s);
         const bool loaned = s.pub_loaned_count > 0 || s.recv_loaned_count > 0;
-        if (!pub_side && !recv_side && !s.has_pub_max_dt && !s.has_recv_max_dt && !loaned) {
+        if (!pub_side && !recv_side && !s.has_pub_max_dt && !s.has_recv_max_dt && !loaned &&
+            !s.has_recv_dt && !s.has_recv_age) {
             continue;
         }
         if (!first) {
@@ -276,6 +277,29 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
         if (s.has_recv_max_dt) {
             out += ",\"recv_max_dt_ms\":";
             out += sprintfStr("%.3f", s.recv_max_dt_ms);
+        }
+        // Receive-side distributions (jsonl only, the text JITTER line keeps its '$'-anchored
+        // shape): what pulse_bridge needs for the MINIMUM / STDDEV of message_period and for
+        // message_age. Same absence rule: no interval or no source timestamp, no key.
+        if (s.has_recv_dt) {
+            out += ",\"recv_min_dt_ms\":";
+            out += sprintfStr("%.3f", s.recv_dt.min_ms);
+            out += ",\"recv_stddev_dt_ms\":";
+            out += sprintfStr("%.3f", s.recv_dt.stddev_ms);
+        }
+        if (s.has_recv_age) {
+            out += ",\"recv_age_avg_ms\":";
+            out += sprintfStr("%.3f", s.recv_age.mean_ms);
+            out += ",\"recv_age_min_ms\":";
+            out += sprintfStr("%.3f", s.recv_age.min_ms);
+            out += ",\"recv_age_max_ms\":";
+            out += sprintfStr("%.3f", s.recv_age.max_ms);
+            if (s.recv_age.has_stddev) {  // absent, not 0, when the window's squares overflowed
+                out += ",\"recv_age_stddev_ms\":";
+                out += sprintfStr("%.3f", s.recv_age.stddev_ms);
+            }
+            out += ",\"recv_age_count\":";
+            out += sprintfStr("%llu", static_cast<unsigned long long>(s.recv_age.count));
         }
         // Loaned subsets (rclcpp#3153 follow-up): absent when zero, like the text LOAN lines.
         // A subset of pub_inter_hz / the recv total, never added to them.

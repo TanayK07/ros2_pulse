@@ -248,6 +248,7 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
     }
     sTopicStat tmp;
     bool have_name = false;
+    bool have_age_stddev = false;
     if (!consume(c, '}')) {
         while (true) {
             std::string key;
@@ -275,6 +276,26 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
             } else if (key == "recv_max_dt_ms") {
                 if (!parseJsonNumber(c, tmp.recv_max_dt_ms)) return false;
                 tmp.has_recv_max_dt = true;
+            } else if (key == "recv_min_dt_ms") {
+                if (!parseJsonNumber(c, tmp.recv_dt.min_ms)) return false;
+                tmp.has_recv_dt = true;
+            } else if (key == "recv_stddev_dt_ms") {
+                if (!parseJsonNumber(c, tmp.recv_dt.stddev_ms)) return false;
+                tmp.has_recv_dt = true;
+            } else if (key == "recv_age_avg_ms") {
+                if (!parseJsonNumber(c, tmp.recv_age.mean_ms)) return false;
+                tmp.has_recv_age = true;
+            } else if (key == "recv_age_min_ms") {
+                if (!parseJsonNumber(c, tmp.recv_age.min_ms)) return false;
+            } else if (key == "recv_age_max_ms") {
+                if (!parseJsonNumber(c, tmp.recv_age.max_ms)) return false;
+            } else if (key == "recv_age_stddev_ms") {
+                if (!parseJsonNumber(c, tmp.recv_age.stddev_ms)) return false;
+                have_age_stddev = true;
+            } else if (key == "recv_age_count") {
+                double n = 0.0;
+                if (!parseJsonNumber(c, n)) return false;
+                tmp.recv_age.count = n > 0.0 ? static_cast<uint64_t>(n) : 0;
             } else if (key == "pub_loaned_hz") {
                 if (!parseJsonNumber(c, tmp.pub_loaned_hz)) return false;
             } else if (key == "recv_loaned_hz") {
@@ -291,6 +312,8 @@ auto parseTopicObject(sCursor& c, sLogWindow& win) -> bool {
             break;
         }
     }
+    // An age group without its deviation is one whose squares overflowed: unknown, not 0.
+    tmp.recv_age.has_stddev = have_age_stddev;
     if (!have_name) {
         return false;  // a rates entry with no topic is not attributable to anything
     }

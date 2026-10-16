@@ -46,6 +46,37 @@ All notable changes to this project are documented here. Format follows
   costs pulse-top that element only, never the window. **Text `EP` lines need the next
   pulse-top release:** the released pulse-top / `pulse-export` 0.5.0 count each `EP` line as a
   skipped line (`ros2_pulse_lines_skipped_total`); jsonl works with 0.5.0, which ignores the key.
+- **`pulse_bridge` publishes the rest of what rclcpp's built-in topic statistics did.** Those
+  were removed from Rolling by [rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203). With
+  `ROS_TOPIC_STATS_JITTER=1`, `message_period` messages now carry `MINIMUM` and `STDDEV` of the
+  received inter-arrival period next to `AVERAGE`, `MAXIMUM` and `SAMPLE_COUNT`, in
+  libstatistics_collector's order (`AVERAGE`, `MAXIMUM`, `MINIMUM`, `SAMPLE_COUNT`, `STDDEV`).
+  With `metrics_source:=metric` every message carries all five points, NaN when unmeasured, as
+  upstream did; the default topic layout leaves an unmeasured point out. The probe keeps the
+  minimum and the running sums for these per subscription, next to that subscription's own gap
+  accumulator, and pools them per topic at flush time, so two subscriptions on one topic never
+  interleave their intervals: lock-free, about +3 ns per receive, and only while gap tracking is
+  on.
+- **`message_age`.** The `rmw_take` hook now also reads the DDS source timestamp it already
+  received, and with gap tracking on records local wall clock minus that timestamp per
+  inter-process take, for rclcpp subscriptions too (their receive is still counted at
+  `callback_start`). The new `metrics_source:=metric` bridge parameter publishes it as rclcpp
+  did: `metrics_source` is `message_age` / `message_period` (in that order, one pair per
+  receive-side topic, `message_age` empty with `SAMPLE_COUNT` 0 when unmeasured; publisher-only
+  topics are left out), `measurement_source_name` the node.
+  This matches rclcpp Jazzy+ (`now - message_info.source_timestamp`, negative ages from a
+  publisher whose clock runs ahead are kept); Humble / Iron rclcpp used `header.stamp`, which
+  needs the message type.
+  Intra-process deliveries never reach `rmw_take` and carry no age, with one exception: with
+  intra-process comms on and a remote subscriber present, the DDS copy that rclcpp takes and
+  discards in the same-process subscription is still age-sampled at `rmw_take` (counts and the
+  receive period are unaffected). Cost: one wall-clock read per take with a source timestamp,
+  about +26 ns on x86-64.
+- jsonl topic entries gain `recv_min_dt_ms`, `recv_stddev_dt_ms` and `recv_age_avg_ms` /
+  `recv_age_min_ms` / `recv_age_max_ms` / `recv_age_stddev_ms` / `recv_age_count`, each group
+  only when measured. The text format is unchanged. `recv_age_stddev_ms` (and the age `STDDEV`
+  point) is dropped for a window whose ages spread over more than ~71 min rather than reported
+  wrapped; a constant cross-host clock skew does not affect it.
 
 ## [0.6.0] - 2026-10-14
 

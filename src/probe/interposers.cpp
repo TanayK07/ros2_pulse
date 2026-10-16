@@ -580,10 +580,12 @@ ROS2_PULSE_EXPORT void ros_trace_rclcpp_intra_publish(const void* publisher_hand
 // Take-layer receive for every rcl client. Emitted by rmw_cyclonedds_cpp and rmw_fastrtps_*_cpp
 // on humble (typed takes; serialized and loaned takes emit nothing there), and by rmw_connextdds
 // and rmw_zenoh_cpp on newer distros. Fires on every take ATTEMPT; the registry returns on
-// taken=false before any lookup, and ignores rclcpp-owned subscriptions (see the file header).
+// taken=false before any lookup, and does not count rclcpp-owned subscriptions (see the file
+// header). With gap tracking on, source_timestamp (the DDS source timestamp, epoch ns) feeds the
+// topic's message age for every subscription, rclcpp's included.
 ROS2_PULSE_EXPORT void ros_trace_rmw_take(const void* rmw_subscription_handle, const void* message,
                                           int64_t source_timestamp, const bool taken) {
-    ProbeRuntime::instance().registry().onTake(rmw_subscription_handle, taken);
+    ProbeRuntime::instance().registry().onTake(rmw_subscription_handle, taken, source_timestamp);
     static auto fn =
         realFn<void (*)(const void*, const void*, int64_t, bool)>("ros_trace_rmw_take");
     if (fn) fn(rmw_subscription_handle, message, source_timestamp, taken);

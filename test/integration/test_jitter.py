@@ -7,6 +7,7 @@
 # more than half a second of dead time to fire, so the whole feature rests on max_dt_ms being
 # the window-length-independent detector. Distro-independent (inter-process publish rates only).
 
+import json
 import os
 import re
 import subprocess
@@ -170,6 +171,28 @@ def test_pulse_check_reports_measured_violations_alongside_exit_2():
         assert "WARN TOPIC /chatter hz=" in r.stdout, (
             f"the measured violation was swallowed by the exit-2 path\n{r.stdout}{r.stderr}")
         assert "no JITTER line" in r.stderr, r.stderr
+
+
+def test_receive_distribution_and_message_age_in_jsonl():
+    """Real probe, real DDS: an inter-process rclcpp listener with gap tracking on reports the
+    interval distribution (pulse_bridge MINIMUM / STDDEV) and the message age from the rmw_take
+    source timestamp (pulse_bridge message_age). Both processes on one host share one clock,
+    so the age is the local publish-to-take latency: small and never negative."""
+    with tempfile.TemporaryDirectory() as d:
+        env = {"ROS_TOPIC_STATS_FORMAT": "jsonl", "ROS_TOPIC_STATS_JITTER": "1"}
+        _, lt = ph.run_pair(os.path.join(d, "t.jsonl"), os.path.join(d, "l.jsonl"),
+                            run_s=5.0, period="1.0", extra_env=env)
+        topics = [t for line in lt.splitlines() if line.startswith("{")
+                  for t in json.loads(line)["topics"] if t["topic"] == "/chatter"]
+        measured = [t for t in topics if "recv_min_dt_ms" in t and "recv_age_count" in t]
+        assert measured, f"no window carried the distribution and the age\n{lt}"
+        for t in measured:
+            # 50 Hz talker: the minimum interval is positive and never above the maximum.
+            assert 0.0 < t["recv_min_dt_ms"] <= t["recv_max_dt_ms"], t
+            assert t["recv_stddev_dt_ms"] >= 0.0, t
+            assert 0.0 <= t["recv_age_min_ms"] <= t["recv_age_avg_ms"] <= t["recv_age_max_ms"], t
+            assert t["recv_age_max_ms"] < 1000.0, f"implausible same-host age {t}"
+            assert t["recv_age_count"] > 0, t
 
 
 if __name__ == "__main__":
