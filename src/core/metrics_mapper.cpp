@@ -80,8 +80,8 @@ auto mapWindow(const sLogWindow& win, const sMapperOptions& opts) -> std::vector
             a.minimum = s.recv_age.min_ms;
             a.has_maximum = true;
             a.maximum = s.recv_age.max_ms;
-            a.has_stddev = true;
-            a.stddev = s.recv_age.stddev_ms;
+            a.has_stddev = s.recv_age.has_stddev;
+            a.stddev = a.has_stddev ? s.recv_age.stddev_ms : 0.0;
             a.sample_count = static_cast<double>(s.recv_age.count);
             out.push_back(std::move(a));
         }

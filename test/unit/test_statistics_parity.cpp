@@ -245,6 +245,112 @@ TEST(StatisticsParity, MissingOrFutureSourceTimestampIgnored) {
     EXPECT_FALSE(s->has_recv_age);
 }
 
+// A constant clock skew between hosts (10 min here) lands in the age, and must not cost the
+// deviation: unshifted, 100 squares of 6e8 us wrap a uint64 (PR #70 review). Ages alternate
+// skew + 0 and skew + 10 ms, so the population stddev is 5 ms plus take-time slack.
+TEST(StatisticsParity, AgeStddevSurvivesLargeConstantSkew) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    constexpr int64_t kSkewNs = 600LL * 1000000000LL;
+    for (int i = 0; i < 100; ++i) {
+        reg.onTake(H(0x41), true, wallNowNs() - kSkewNs - (i % 2) * 10000000LL);
+    }
+    const auto snap = reg.snapshot(1.0, false);
+    const auto* s = statOf(snap, "/scan");
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->has_recv_age);
+    EXPECT_EQ(s->recv_age.count, 100u);
+    ASSERT_TRUE(s->recv_age.has_stddev);
+    EXPECT_NEAR(s->recv_age.stddev_ms, 5.0, 0.5);
+    EXPECT_GE(s->recv_age.mean_ms, 600000.0);
+    EXPECT_LT(s->recv_age.mean_ms, 600050.0);
+}
+
+// 1 h of skew: past the old 2^31 us per-sample clamp, which pinned the mean BELOW the minimum.
+TEST(StatisticsParity, AgeMeanNotClampedUnderHourOfSkew) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    constexpr int64_t kSkewNs = 3600LL * 1000000000LL;
+    for (int i = 0; i < 10; ++i) reg.onTake(H(0x41), true, wallNowNs() - kSkewNs);
+    const auto snap = reg.snapshot(1.0, false);
+    const auto* s = statOf(snap, "/scan");
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->has_recv_age);
+    EXPECT_GE(s->recv_age.mean_ms, s->recv_age.min_ms);
+    EXPECT_LE(s->recv_age.mean_ms, s->recv_age.max_ms);
+    EXPECT_GE(s->recv_age.min_ms, 3600000.0);
+    ASSERT_TRUE(s->recv_age.has_stddev);
+    EXPECT_LT(s->recv_age.stddev_ms, 1.0);
+}
+
+// Samples hours apart in one window overflow the squares even shifted: the deviation is then
+// unknown and dropped (no key, no STDDEV point), never reported as a wrapped or zero value.
+// The mean, min and max stay exact.
+TEST(StatisticsParity, AgeSumOfSquaresOverflowDropsStddev) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    reg.onTake(H(0x41), true, wallNowNs() - 1000000LL);                  // 1 ms
+    reg.onTake(H(0x41), true, wallNowNs() - 2LL * 3600LL * 1000000000LL);  // 2 h
+    auto snap = reg.snapshot(1.0, false);
+    const auto* s = statOf(snap, "/scan");
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->has_recv_age);
+    EXPECT_EQ(s->recv_age.count, 2u);
+    EXPECT_FALSE(s->recv_age.has_stddev);
+    EXPECT_NEAR(s->recv_age.mean_ms, 3600000.5, 1.0);
+    EXPECT_GE(s->recv_age.max_ms, 7200000.0);
+
+    const std::string line = formatWindowJsonl(snap, {}, 42LL, 1.0, false);
+    EXPECT_NE(line.find("\"recv_age_avg_ms\""), std::string::npos) << line;
+    EXPECT_EQ(line.find("recv_age_stddev_ms"), std::string::npos) << line;
+    const auto wins = parseLog(line);
+    ASSERT_EQ(wins.size(), 1u);
+    sMapperOptions o;
+    o.metrics_source = eMetricsSource::Metric;
+    bool saw_age = false;
+    for (const auto& m : mapWindow(wins[0], o)) {
+        if (m.metrics_source != "message_age") continue;
+        saw_age = true;
+        EXPECT_FALSE(m.has_stddev);
+        EXPECT_DOUBLE_EQ(m.sample_count, 2.0);
+    }
+    EXPECT_TRUE(saw_age);
+
+    // The flag is per window: the next window's samples get their deviation back.
+    reg.onTake(H(0x41), true, wallNowNs() - 1000000LL);
+    reg.onTake(H(0x41), true, wallNowNs() - 1000000LL);
+    snap = reg.snapshot(1.0, false);
+    ASSERT_TRUE(statOf(snap, "/scan")->has_recv_age);
+    EXPECT_TRUE(statOf(snap, "/scan")->recv_age.has_stddev);
+}
+
+// Two subscriptions with their own shifts (different skews) pool exactly: ages ~10 min on one,
+// ~10 min + 20 ms on the other, so the topic's stddev is ~10 ms and its mean sits between.
+TEST(StatisticsParity, AgePoolsAcrossSubscriptionsWithDifferentShifts) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    initRclpySub(reg, 0x60, 0x61, "/scan");
+    constexpr int64_t kSkewNs = 600LL * 1000000000LL;
+    for (int i = 0; i < 20; ++i) {
+        reg.onTake(H(0x41), true, wallNowNs() - kSkewNs);
+        reg.onTake(H(0x61), true, wallNowNs() - kSkewNs - 20000000LL);
+    }
+    const auto snap = reg.snapshot(1.0, false);
+    const auto* s = statOf(snap, "/scan");
+    ASSERT_NE(s, nullptr);
+    ASSERT_TRUE(s->has_recv_age);
+    EXPECT_EQ(s->recv_age.count, 40u);
+    ASSERT_TRUE(s->recv_age.has_stddev);
+    EXPECT_NEAR(s->recv_age.stddev_ms, 10.0, 0.5);
+    EXPECT_NEAR(s->recv_age.mean_ms, 600010.0, 1.0);
+    EXPECT_GE(s->recv_age.min_ms, 600000.0);
+    EXPECT_GE(s->recv_age.max_ms, 600020.0);
+}
+
 // jsonl: keys only when measured, %.3f like every other ms field, and the reader inverts them.
 TEST(StatisticsParity, JsonlKeysExactBytesAndRoundTrip) {
     sTopicStat s;

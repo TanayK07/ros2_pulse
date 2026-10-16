@@ -22,8 +22,9 @@ struct sTopicCounter;
 /// Which side of a topic an endpoint sits on: a publisher handle or a subscription handle.
 enum class eEndpointSide : uint8_t { kPub, kRecv };
 
-/// @brief Lock-free running moments of one per-message duration stream (inter-arrival period
-/// or message age), drained once per window. Only fed while gap tracking is on.
+/// @brief Lock-free running moments of one per-message duration stream (the inter-arrival
+/// period; the message age has its own signed sAgeAcc), drained once per window. Only fed while
+/// gap tracking is on.
 ///
 /// Sums are in whole MICROSECONDS so the sum of squares fits a uint64 for any realistic window
 /// (each sample is clamped to kMaxSampleUs, ~36 min); both sums use the same quantized value, so
@@ -35,6 +36,25 @@ struct sDurationAcc {
     std::atomic<uint64_t> sum_us{0};
     std::atomic<uint64_t> sumsq_us2{0};
     std::atomic<uint64_t> min_ns{UINT64_MAX};
+};
+
+/// @brief Lock-free running moments of the message age, which is SIGNED (a remote publisher's
+/// clock can run ahead of ours) and can sit far from zero (minutes of skew between two hosts).
+///
+/// The sums are of (x - shift_us), shift_us being the endpoint's first age sample, set once by
+/// CAS and never moved, so a large constant skew costs nothing: the squares only see the spread
+/// around it. Whole microseconds, as in sDurationAcc. A square that wraps the uint64 (a sample
+/// more than ~71 min from the shift, or a sum past 2^64 us^2) sets sumsq_overflow, which drops
+/// the window's STDDEV instead of reporting a wrapped one; the mean, min and max stay exact.
+struct sAgeAcc {
+    static constexpr int64_t kNoShift = INT64_MIN;
+    std::atomic<int64_t> shift_us{kNoShift};
+    std::atomic<uint64_t> n{0};
+    std::atomic<int64_t> sum_us{0};
+    std::atomic<uint64_t> sumsq_us2{0};
+    std::atomic<bool> sumsq_overflow{false};
+    std::atomic<int64_t> min_ns{INT64_MAX};
+    std::atomic<int64_t> max_ns{INT64_MIN};
 };
 
 /// @brief One publisher or subscription handle's running message counts (the hot-path target).
@@ -87,8 +107,7 @@ struct sEndpointCounter {
     sDurationAcc recv_dt;  // every interval that also feeds this handle's max_dt_ns
     // Message age at rmw_take: local CLOCK_REALTIME minus the DDS source timestamp, i.e. the
     // publish-to-take latency. Inter-process takes only (intra-process never reaches rmw_take).
-    sDurationAcc recv_age;
-    std::atomic<uint64_t> recv_age_max_ns{0};
+    sAgeAcc recv_age;
 };
 
 /// @brief One topic's process-wide record: its endpoints plus the merged-stream gap accumulators.
@@ -120,13 +139,16 @@ struct sTopicCounter {
     std::atomic<uint64_t> recv_max_dt_ns{0};  // reset per window by snapshot()
 };
 
-/// @brief Snapshot of one sDurationAcc window, in milliseconds.
+/// @brief Snapshot of one sDurationAcc / sAgeAcc window, in milliseconds.
 struct sDurationStats {
     uint64_t count{0};
     double mean_ms{0.0};
     double min_ms{0.0};
     double max_ms{0.0};
     double stddev_ms{0.0};  // population standard deviation, like libstatistics_collector
+    // False when the window's sum of squares overflowed (sAgeAcc): the deviation is unknown,
+    // which must not be reported as 0. The other fields stay valid.
+    bool has_stddev{true};
 };
 
 /// @brief Aggregated, windowed view of one topic (returned by snapshot()).

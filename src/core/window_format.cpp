@@ -294,8 +294,10 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
             out += sprintfStr("%.3f", s.recv_age.min_ms);
             out += ",\"recv_age_max_ms\":";
             out += sprintfStr("%.3f", s.recv_age.max_ms);
-            out += ",\"recv_age_stddev_ms\":";
-            out += sprintfStr("%.3f", s.recv_age.stddev_ms);
+            if (s.recv_age.has_stddev) {  // absent, not 0, when the window's squares overflowed
+                out += ",\"recv_age_stddev_ms\":";
+                out += sprintfStr("%.3f", s.recv_age.stddev_ms);
+            }
             out += ",\"recv_age_count\":";
             out += sprintfStr("%llu", static_cast<unsigned long long>(s.recv_age.count));
         }

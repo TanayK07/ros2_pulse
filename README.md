@@ -206,7 +206,9 @@ Schema rules, pinned by golden-byte unit tests:
   the same subscription, pooled over the topic's subscriptions in the process), and `recv_age_avg_ms`,
   `recv_age_min_ms`, `recv_age_max_ms`, `recv_age_stddev_ms`, `recv_age_count` for the message
   age (see [below](#publishing-on-statistics-pulse_bridge)). Each group is absent when it has no
-  sample.
+  sample. `recv_age_stddev_ms` alone is also absent when the window's ages spread over more than
+  ~71 min (the deviation is then unknown, not 0); a constant clock skew of any size does not
+  count toward that, only the spread does.
 - `pub_loaned_hz` / `recv_loaned_hz` appear only when the window saw a middleware loan
   (`rcl_publish_loaned_message` / `rcl_take_loaned_message` succeeding). They are subsets of
   `pub_inter_hz` and of the receive total, never added to them.

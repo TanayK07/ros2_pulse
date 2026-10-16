@@ -148,11 +148,126 @@ inline auto finishDuration(const sDurationSums& d, sDurationStats& out) -> bool 
     return true;
 }
 
+// Floor division: the age is quantized to the microsecond BELOW it on both sides of zero, so a
+// skewed (negative) age is not biased toward zero by truncation.
+inline auto floorDivUs(int64_t ns) -> int64_t {
+    int64_t q = ns / 1000;
+    if (ns % 1000 < 0) {
+        --q;
+    }
+    return q;
+}
+
+// Feed one (signed) age sample. The shift is the first sample this endpoint ever saw: one
+// relaxed load per sample, a CAS only on that first one (a racing first sample reads the
+// winner's). Overflow of the squares is detected from fetch_add's return, never wrapped into a
+// plausible-looking deviation.
+inline void addAge(sAgeAcc& a, int64_t v_ns) {
+    const int64_t us = floorDivUs(v_ns);
+    int64_t shift = a.shift_us.load(std::memory_order_relaxed);
+    if (shift == sAgeAcc::kNoShift &&
+        a.shift_us.compare_exchange_strong(shift, us, std::memory_order_relaxed)) {
+        shift = us;
+    }
+    const int64_t d = us - shift;  // both within int64 ns / 1000, cannot overflow
+    a.n.fetch_add(1, std::memory_order_relaxed);
+    a.sum_us.fetch_add(d, std::memory_order_relaxed);
+    const uint64_t ad = d < 0 ? static_cast<uint64_t>(-d) : static_cast<uint64_t>(d);
+    if (ad >= (uint64_t{1} << 32)) {
+        a.sumsq_overflow.store(true, std::memory_order_relaxed);  // ad * ad would wrap
+    } else {
+        const uint64_t sq = ad * ad;
+        const uint64_t old = a.sumsq_us2.fetch_add(sq, std::memory_order_relaxed);
+        if (old + sq < old) {
+            a.sumsq_overflow.store(true, std::memory_order_relaxed);
+        }
+    }
+    int64_t cur = a.min_ns.load(std::memory_order_relaxed);
+    while (v_ns < cur && !a.min_ns.compare_exchange_weak(cur, v_ns, std::memory_order_relaxed)) {
+    }
+    cur = a.max_ns.load(std::memory_order_relaxed);
+    while (v_ns > cur && !a.max_ns.compare_exchange_weak(cur, v_ns, std::memory_order_relaxed)) {
+    }
+}
+
+// One window of age samples as moments (count, mean, sum of squared deviations from the mean),
+// so endpoints with different shifts pool exactly (Chan et al.'s parallel update) without
+// re-centering their integer sums.
+struct sAgeMoments {
+    uint64_t n{0};
+    long double mean_us{0.0L};
+    long double m2_us2{0.0L};
+    bool overflow{false};
+    int64_t min_ns{INT64_MAX};
+    int64_t max_ns{INT64_MIN};
+    void add(const sAgeMoments& o) {
+        if (o.n == 0) {
+            return;
+        }
+        const uint64_t total = n + o.n;
+        const long double delta = o.mean_us - mean_us;
+        const long double nb = static_cast<long double>(o.n);
+        const long double na = static_cast<long double>(n);
+        mean_us += delta * nb / static_cast<long double>(total);
+        m2_us2 += o.m2_us2 + delta * delta * na * nb / static_cast<long double>(total);
+        n = total;
+        overflow = overflow || o.overflow;
+        min_ns = o.min_ns < min_ns ? o.min_ns : min_ns;
+        max_ns = o.max_ns > max_ns ? o.max_ns : max_ns;
+    }
+};
+
+// Drain an age accumulator for the window just ending (same field-by-field smear as
+// drainDuration; m2 is clamped at zero against it). The shift stays: it only centers the sums.
+inline auto drainAge(sAgeAcc& a) -> sAgeMoments {
+    const uint64_t n = a.n.exchange(0, std::memory_order_relaxed);
+    const int64_t sum = a.sum_us.exchange(0, std::memory_order_relaxed);
+    const uint64_t sumsq = a.sumsq_us2.exchange(0, std::memory_order_relaxed);
+    const bool overflow = a.sumsq_overflow.exchange(false, std::memory_order_relaxed);
+    const int64_t mn = a.min_ns.exchange(INT64_MAX, std::memory_order_relaxed);
+    const int64_t mx = a.max_ns.exchange(INT64_MIN, std::memory_order_relaxed);
+    sAgeMoments m;
+    if (n == 0) {
+        return m;  // no sample (any field a racing one left behind goes with it)
+    }
+    m.overflow = overflow;
+    m.min_ns = mn;
+    m.max_ns = mx;
+    const long double ln = static_cast<long double>(n);
+    const long double lsum = static_cast<long double>(sum);
+    const int64_t shift = a.shift_us.load(std::memory_order_relaxed);
+    m.n = n;
+    m.mean_us = static_cast<long double>(shift) + lsum / ln;
+    m.m2_us2 = static_cast<long double>(sumsq) - lsum * lsum / ln;
+    if (m.m2_us2 < 0.0L) {
+        m.m2_us2 = 0.0L;
+    }
+    return m;
+}
+
+inline auto finishAge(const sAgeMoments& m, sDurationStats& out) -> bool {
+    if (m.n == 0 || m.min_ns == INT64_MAX) {
+        return false;
+    }
+    out.count = m.n;
+    out.min_ms = static_cast<double>(m.min_ns) / 1e6;
+    out.max_ms = static_cast<double>(m.max_ns) / 1e6;
+    // The mean comes from microsecond sums, min and max are exact nanoseconds: keep the sub-us
+    // quantization from ever reporting a mean outside them (a constant age would read mean < min).
+    out.mean_ms = std::min(std::max(static_cast<double>(m.mean_us / 1000.0L), out.min_ms),
+                           out.max_ms);
+    out.has_stddev = !m.overflow;
+    out.stddev_ms = out.has_stddev
+                        ? static_cast<double>(
+                              std::sqrt(m.m2_us2 / static_cast<long double>(m.n)) / 1000.0L)
+                        : 0.0;
+    return true;
+}
+
 // Discard whatever an endpoint's distributions hold (re-home, fork child).
 inline void resetDistributions(sEndpointCounter* ep) {
     drainDuration(ep->recv_dt);
-    drainDuration(ep->recv_age);
-    ep->recv_age_max_ns.store(0, std::memory_order_relaxed);
+    drainAge(ep->recv_age);
 }
 
 // Message age at rmw_take: local wall clock minus the DDS source timestamp. Both are
@@ -168,9 +283,7 @@ inline void noteAge(sEndpointCounter& c, int64_t source_ns) {
     if (now <= source_ns) {
         return;
     }
-    const auto age = static_cast<uint64_t>(now - source_ns);
-    addDuration(c.recv_age, age);
-    atomicMax(c.recv_age_max_ns, age);
+    addAge(c.recv_age, now - source_ns);
 }
 
 // ROADMAP R5: record one arrival at @p now into a gap accumulator.
@@ -824,13 +937,10 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
         // pool the same way, from integer sums, and drain unconditionally (cheap, and a stale one
         // must never leak into the first window after gap tracking or a filter changes).
         sDurationSums recv_dt_sums;
-        sDurationSums recv_age_sums;
-        uint64_t age_max = 0;
+        sAgeMoments recv_age_moments;
         for (auto* ep : t->endpoints) {
             recv_dt_sums.add(drainDuration(ep->recv_dt));
-            recv_age_sums.add(drainDuration(ep->recv_age));
-            const uint64_t ep_age_max = ep->recv_age_max_ns.exchange(0, std::memory_order_relaxed);
-            age_max = ep_age_max > age_max ? ep_age_max : age_max;
+            recv_age_moments.add(drainAge(ep->recv_age));
             const uint64_t in = ep->inter.exchange(0, std::memory_order_relaxed);
             const uint64_t ix = ep->intra.exchange(0, std::memory_order_relaxed);
             const uint64_t lo = ep->loaned.exchange(0, std::memory_order_relaxed);
@@ -892,8 +1002,7 @@ auto TopicRegistry::snapshotWindow(double window_s, bool fold_open_gap) -> sWind
         sDurationStats recv_dt;
         sDurationStats recv_age;
         const bool has_recv_dt = finishDuration(recv_dt_sums, recv_dt);
-        const bool has_recv_age = finishDuration(recv_age_sums, recv_age);
-        recv_age.max_ms = static_cast<double>(age_max) / 1e6;
+        const bool has_recv_age = finishAge(recv_age_moments, recv_age);
         if (filtered) {
             continue;  // counts and gaps reset above, but the topic itself is never reported
         }
