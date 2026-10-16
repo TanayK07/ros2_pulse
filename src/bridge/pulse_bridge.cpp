@@ -23,6 +23,15 @@
 //   metrics_source string    "topic": metrics_source is the topic, message_period only;
 //                            "metric": rclcpp's layout, metrics_source is "message_period" /
 //                            "message_age" and the topic is not carried     (default: topic)
+//   graph_monitor  bool      also publish rosgraph_monitor_msgs/TopicStatistics, the input of
+//                            ros-tooling/graph-monitor (ros-tooling/graph-monitor#14). Only in
+//                            builds that found rosgraph_monitor_msgs, otherwise it warns
+//                                                                               (default: false)
+//   graph_monitor_topic  string  where to publish those          (default: /topic_statistics)
+//   graph_monitor_stale_timeout_ms  int  graph-monitor's topic_statistics.stale_timeout_ms;
+//                            a log whose window_s + poll_period_s reaches it is warned about
+//                            once, since every endpoint would read Stale between windows
+//                                                                                (default: 3000)
 //
 // Text-format logs are refused per file with one warning: their windows span several lines and
 // the bridge reads line by line. Set ROS_TOPIC_STATS_FORMAT=jsonl on the probed process.
@@ -47,6 +56,14 @@
 #include "ros2_pulse/core/line_follower.hpp"
 #include "ros2_pulse/core/log_reader.hpp"
 #include "ros2_pulse/core/metrics_mapper.hpp"
+#include "ros2_pulse/core/topic_statistic_mapper.hpp"
+
+// Set by CMake when rosgraph_monitor_msgs was found at build time. The dependency is optional so
+// a source build without it still gets the /statistics bridge.
+#ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
+#include "rosgraph_monitor_msgs/msg/topic_statistic.hpp"
+#include "rosgraph_monitor_msgs/msg/topic_statistics.hpp"
+#endif
 
 namespace {
 
@@ -121,11 +138,70 @@ auto toMessage(const sMetricSample& s, bool all_points) -> MetricsMessage {
     return m;
 }
 
+#ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
+using rosgraph_monitor_msgs::msg::TopicStatistic;
+using rosgraph_monitor_msgs::msg::TopicStatistics;
+
+auto toDuration(long long ns) -> builtin_interfaces::msg::Duration {
+    builtin_interfaces::msg::Duration d;
+    if (ns < 0) ns = 0;
+    d.sec = static_cast<std::int32_t>(ns / 1000000000LL);
+    d.nanosec = static_cast<std::uint32_t>(ns % 1000000000LL);
+    return d;
+}
+
+// Only fields the probe measures are set, see topic_statistic_mapper.hpp: `min` stays zero on
+// PUBLISHED_PERIOD (not tracked) and whenever the receive interval distribution was not measured,
+// `max` stays zero when gap tracking is off, and TAKE_AGE comes only with jitter tracking on. A
+// negative age (the publisher's clock ahead of ours) is clamped to zero: Duration here is the
+// non-negative span graph-monitor's shim fills.
+//
+// @p stamp is the publish time, not the window's end: graph-monitor marks an endpoint stale when
+// `now - timestamp` exceeds its stale timeout, and its own shim stamps with the system clock at
+// publish. The window's end would already be up to one poll period old on arrival.
+auto toMessage(const ros2_pulse::core::sTopicStatisticsBatch& b,
+               const builtin_interfaces::msg::Time& stamp) -> TopicStatistics {
+    using ros2_pulse::core::eTopicStatisticType;
+    TopicStatistics m;
+    m.timestamp = stamp;
+    m.statistics.reserve(b.statistics.size());
+    for (const auto& s : b.statistics) {
+        TopicStatistic t;
+        switch (s.type) {
+            case eTopicStatisticType::PublishedPeriod:
+                t.statistic_type = TopicStatistic::PUBLISHED_PERIOD;
+                break;
+            case eTopicStatisticType::ReceivedPeriod:
+                t.statistic_type = TopicStatistic::RECEIVED_PERIOD;
+                break;
+            case eTopicStatisticType::TakeAge:
+                t.statistic_type = TopicStatistic::TAKE_AGE;
+                break;
+        }
+        t.node_name = s.node_name;
+        t.topic_name = s.topic_name;
+        t.window_count = s.window_count;
+        t.mean = toDuration(s.mean_ns);
+        if (s.has_min) t.min = toDuration(s.min_ns);
+        if (s.has_max) t.max = toDuration(s.max_ns);
+        m.statistics.push_back(std::move(t));
+    }
+    return m;
+}
+#endif
+
 struct sFollowed {
     LineFollower follower;
     bool sniffed{false};  // first line seen, format decided
     bool jsonl{false};
+    // graph_monitor, older probe logs only: several active nodes in this process. Repeated at
+    // most once per kAmbiguousWarnEvery, so a log that keeps hitting it stays visible.
+    std::chrono::steady_clock::time_point warned_ambiguous_at{};
+    bool warned_ambiguous{false};
+    bool warned_stale{false};  // graph_monitor: window_s + poll_period_s >= stale timeout, once
 };
+
+constexpr auto kAmbiguousWarnEvery = std::chrono::minutes(1);
 
 class PulseBridge : public rclcpp::Node {
 public:
@@ -154,7 +230,28 @@ public:
             period = 1.0;
         }
 
+        const bool graph_monitor = declare_parameter<bool>("graph_monitor", false);
+        const auto gm_topic =
+            declare_parameter<std::string>("graph_monitor_topic", "/topic_statistics");
+        m_gm_stale_timeout_ms =
+            declare_parameter<std::int64_t>("graph_monitor_stale_timeout_ms", 3000);
+        m_poll_period_s = period;
+
         m_pub = create_publisher<MetricsMessage>(topic, rclcpp::QoS(10));
+        if (graph_monitor) {
+#ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
+            // QoS matches graph-monitor's subscription (reliable, keep last 10).
+            m_gm_pub = create_publisher<TopicStatistics>(gm_topic, rclcpp::QoS(10));
+            RCLCPP_INFO(get_logger(), "also publishing rosgraph_monitor_msgs on %s",
+                        gm_topic.c_str());
+#else
+            (void)gm_topic;
+            RCLCPP_WARN(get_logger(),
+                        "graph_monitor is set, but this pulse_bridge was built without "
+                        "rosgraph_monitor_msgs; only %s is published",
+                        topic.c_str());
+#endif
+        }
         m_timer = create_wall_timer(std::chrono::duration<double>(period), [this]() { tick(); });
         RCLCPP_INFO(get_logger(), "publishing %s from %zu file(s) + glob '%s', every %.2f s",
                     topic.c_str(), m_files.size(), m_glob.c_str(), period);
@@ -194,10 +291,54 @@ private:
                     for (const auto& s : mapWindow(win, m_opts)) {
                         m_pub->publish(toMessage(s, all));
                     }
+#ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
+                    if (m_gm_pub) publishGraphMonitor(path, f, win);
+#endif
                 }
             }
         }
     }
+
+#ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
+    void publishGraphMonitor(const std::string& path, sFollowed& f,
+                             const ros2_pulse::core::sLogWindow& win) {
+        // A partial window's length is the attach lead-in or the exit tail, not the period.
+        if (!f.warned_stale && !win.partial &&
+            (win.window_s + m_poll_period_s) * 1000.0 >=
+                static_cast<double>(m_gm_stale_timeout_ms)) {
+            f.warned_stale = true;
+            RCLCPP_WARN(get_logger(),
+                        "%s: window_s %.3f + poll_period_s %.3f reaches graph-monitor's stale "
+                        "timeout (%lld ms): its endpoints will read Stale between windows. Set "
+                        "ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=1 on the probed process, or raise "
+                        "topic_statistics.stale_timeout_ms (and graph_monitor_stale_timeout_ms)",
+                        path.c_str(), win.window_s, m_poll_period_s,
+                        static_cast<long long>(m_gm_stale_timeout_ms));
+        }
+        const auto batch = ros2_pulse::core::mapWindowTopicStatistics(win);
+        const auto now = std::chrono::steady_clock::now();
+        if (batch.ambiguous_node &&
+            (!f.warned_ambiguous || now - f.warned_ambiguous_at >= kAmbiguousWarnEvery)) {
+            f.warned_ambiguous = true;
+            f.warned_ambiguous_at = now;
+            RCLCPP_WARN(get_logger(),
+                        "%s: %zu active nodes in this process, and this log has no per-endpoint "
+                        "split (a probe older than 0.7), so its windows cannot be attributed to "
+                        "one node's endpoints and are not sent to graph-monitor",
+                        path.c_str(), win.nodes.size());
+        }
+        if (!batch.statistics.empty()) {
+            m_gm_pub->publish(toMessage(batch, m_system_clock.now()));
+        }
+    }
+
+    rclcpp::Publisher<TopicStatistics>::SharedPtr m_gm_pub;
+    // The clock graph-monitor's shim stamps with: system time, even when the bridge itself runs
+    // on sim time.
+    rclcpp::Clock m_system_clock{RCL_SYSTEM_TIME};
+#endif
+    std::int64_t m_gm_stale_timeout_ms{3000};
+    double m_poll_period_s{1.0};
 
     std::vector<std::string> m_files;
     std::string m_glob;

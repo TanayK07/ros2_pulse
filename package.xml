@@ -20,6 +20,10 @@
        /statistics. The probe .so itself links neither (interposed symbols resolve at run). -->
   <depend>rclcpp</depend>
   <depend>statistics_msgs</depend>
+  <!-- pulse_bridge's optional graph-monitor output (graph_monitor:=true). Released for humble,
+       jazzy, kilted, lyrical and rolling; CMake finds it QUIET, so a source build without it
+       still builds the /statistics bridge. -->
+  <depend>rosgraph_monitor_msgs</depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
   <test_depend>ament_cmake_pytest</test_depend>

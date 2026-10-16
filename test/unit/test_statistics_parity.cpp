@@ -540,3 +540,106 @@ TEST(StatisticsParity, MapperNoMinimumOnPubSideOrInHz) {
     EXPECT_FALSE(m[0].has_minimum);
     EXPECT_FALSE(m[0].has_stddev);
 }
+
+// ---- per-subscription distributions in the endpoint split (graph-monitor, PR #68 review) ----
+
+// Each subscription's endpoint carries its OWN interval distribution and age, the ones the
+// topic pools: a 20 ms and a 40 ms subscription on one topic read 20 and 40, not a blend.
+TEST(StatisticsParity, EndpointsCarryTheirOwnDistributions) {
+    TopicRegistry reg;
+    reg.setGapTracking(true);
+    initRclpySub(reg, 0x40, 0x41, "/scan");
+    initRclpySub(reg, 0x60, 0x61, "/scan");
+    for (int i = 0; i < 5; ++i) {
+        if (i > 0) sleepMs(20);
+        reg.onTake(H(0x41), true, wallNowNs() - 5000000);  // 5 ms old
+        if (i % 2 == 0) reg.onTake(H(0x61), true);         // every other one, no timestamp
+    }
+    const auto snap = reg.snapshotWindow(1.0, false);
+    const ros2_pulse::core::sEndpointStat* fast = nullptr;
+    const ros2_pulse::core::sEndpointStat* slow = nullptr;
+    for (const auto& e : snap.endpoints) {
+        if (e.topic != "/scan") continue;
+        (e.inter_count == 5u ? fast : slow) = &e;
+    }
+    ASSERT_NE(fast, nullptr);
+    ASSERT_NE(slow, nullptr);
+    ASSERT_TRUE(fast->has_recv_dt);
+    EXPECT_EQ(fast->recv_dt.count, 4u);
+    EXPECT_GE(fast->recv_dt.min_ms, 20.0);
+    ASSERT_TRUE(slow->has_recv_dt);
+    EXPECT_EQ(slow->recv_dt.count, 2u);
+    EXPECT_GE(slow->recv_dt.min_ms, 40.0);
+    EXPECT_GT(slow->recv_dt.mean_ms, fast->recv_dt.mean_ms);
+    ASSERT_TRUE(fast->has_recv_age);
+    EXPECT_EQ(fast->recv_age.count, 5u);
+    EXPECT_GE(fast->recv_age.min_ms, 5.0);
+    EXPECT_FALSE(slow->has_recv_age);
+    // The topic still pools both.
+    const auto* s = statOf(snap.topics, "/scan");
+    ASSERT_NE(s, nullptr);
+    EXPECT_EQ(s->recv_dt.count, 6u);
+    EXPECT_EQ(s->recv_age.count, 5u);
+}
+
+TEST(StatisticsParity, EndpointDistributionJsonlRoundTrip) {
+    ros2_pulse::core::sEndpointStat e;
+    e.topic = "/scan";
+    e.node = "/n";
+    e.side = ros2_pulse::core::eEndpointSide::kRecv;
+    e.id = 7;
+    e.inter_hz = 20.0;
+    e.inter_count = 100;
+    e.endpoint_seen = true;
+    e.has_recv_dt = true;
+    e.recv_dt.mean_ms = 50.0004;
+    e.recv_dt.min_ms = 48.7514;
+    e.recv_dt.stddev_ms = 0.8123;
+    e.recv_dt.count = 99;
+    e.has_recv_age = true;
+    e.recv_age.mean_ms = 1.25;
+    e.recv_age.min_ms = -0.5;
+    e.recv_age.max_ms = 3.1;
+    e.recv_age.stddev_ms = 0.4;
+    e.recv_age.count = 100;
+    const std::vector<ros2_pulse::core::sEndpointStat> eps{e};
+    const std::string got = formatWindowJsonl({}, {"/n"}, 42LL, 5.0, false, {}, &eps);
+    const std::string want =
+        "{\"ts_ns\":\"42\",\"window_s\":5.000,\"topics\":[],\"nodes\":[\"/n\"],\"warns\":[],"
+        "\"endpoints\":[{\"topic\":\"/scan\",\"side\":\"recv\",\"id\":7,\"node\":\"/n\","
+        "\"inter_hz\":20.000000,\"intra_hz\":0.000000,\"avg_dt_ms\":50.000,"
+        "\"min_dt_ms\":48.751,\"stddev_dt_ms\":0.812,\"dt_count\":99,\"age_avg_ms\":1.250,"
+        "\"age_min_ms\":-0.500,\"age_max_ms\":3.100,\"age_stddev_ms\":0.400,"
+        "\"age_count\":100}]}\n";
+    EXPECT_EQ(got, want);
+
+    const auto wins = parseLog(got);
+    ASSERT_EQ(wins.size(), 1u);
+    ASSERT_EQ(wins[0].endpoints.size(), 1u);
+    const auto& r = wins[0].endpoints[0];
+    ASSERT_TRUE(r.has_recv_dt);
+    EXPECT_DOUBLE_EQ(r.recv_dt.mean_ms, 50.0);
+    EXPECT_DOUBLE_EQ(r.recv_dt.min_ms, 48.751);
+    EXPECT_DOUBLE_EQ(r.recv_dt.stddev_ms, 0.812);
+    EXPECT_EQ(r.recv_dt.count, 99u);
+    ASSERT_TRUE(r.has_recv_age);
+    EXPECT_DOUBLE_EQ(r.recv_age.mean_ms, 1.25);
+    EXPECT_DOUBLE_EQ(r.recv_age.min_ms, -0.5);
+    EXPECT_DOUBLE_EQ(r.recv_age.max_ms, 3.1);
+    EXPECT_TRUE(r.recv_age.has_stddev);
+    EXPECT_EQ(r.recv_age.count, 100u);
+
+    // Not measured: no key, nothing parsed back, and an age without its deviation stays unknown.
+    e.has_recv_dt = false;
+    e.recv_age.has_stddev = false;
+    const std::vector<ros2_pulse::core::sEndpointStat> eps2{e};
+    const std::string got2 = formatWindowJsonl({}, {"/n"}, 42LL, 5.0, false, {}, &eps2);
+    EXPECT_EQ(got2.find("dt_count"), std::string::npos);
+    EXPECT_EQ(got2.find("age_stddev_ms"), std::string::npos);
+    const auto wins2 = parseLog(got2);
+    ASSERT_EQ(wins2.size(), 1u);
+    ASSERT_EQ(wins2[0].endpoints.size(), 1u);
+    EXPECT_FALSE(wins2[0].endpoints[0].has_recv_dt);
+    EXPECT_TRUE(wins2[0].endpoints[0].has_recv_age);
+    EXPECT_FALSE(wins2[0].endpoints[0].recv_age.has_stddev);
+}

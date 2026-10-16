@@ -23,6 +23,9 @@ struct sLogWindow {
     // Per-endpoint split (jsonl "endpoints", text EP lines), rates only like stats. Empty when
     // the log carries none (an older probe, or text without ROS_TOPIC_STATS_ENDPOINTS=1).
     std::vector<sEndpointStat> endpoints;
+    // jsonl "partial":true: the probe's attach or exit window, whose rates are not a full
+    // window's (see formatWindowJsonl). Always false for text, which does not carry it.
+    bool partial{false};
 };
 
 /// @brief Parse a probe log (any number of windows) back into structured form.

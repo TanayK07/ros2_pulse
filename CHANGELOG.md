@@ -77,6 +77,35 @@ All notable changes to this project are documented here. Format follows
   only when measured. The text format is unchanged. `recv_age_stddev_ms` (and the age `STDDEV`
   point) is dropped for a window whose ages spread over more than ~71 min rather than reported
   wrapped; a constant cross-host clock skew does not affect it.
+- jsonl `endpoints` entries of a subscription gain its own receive distributions, the
+  per-subscription twins of the topic keys above: `avg_dt_ms` / `min_dt_ms` / `stddev_dt_ms` /
+  `dt_count` and `age_avg_ms` / `age_min_ms` / `age_max_ms` / `age_stddev_ms` / `age_count`, each
+  group only when measured (gap tracking on). Drained from the accumulators the topic already
+  pools, at flush time; the hot path is unchanged. Text `EP` lines are unchanged.
+- jsonl windows gain `"partial":true` on the probe's first window after attach and its exit
+  window, the two it already grace-skips for alerts (absent otherwise, so existing records are
+  byte-identical). `pulse-check`'s reader parses it into `sLogWindow::partial`; pulse-top
+  ignores it. The text format is unchanged.
+- **pulse_bridge: `rosgraph_monitor_msgs/TopicStatistics` for graph-monitor
+  ([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).** With
+  `graph_monitor:=true` the bridge also publishes each window on `/topic_statistics`
+  (`graph_monitor_topic`): `PUBLISHED_PERIOD` / `RECEIVED_PERIOD` per (node, topic), with
+  `window_count`, `mean` = 1 / rate and `max` = largest gap when jitter tracking is on. With
+  jitter tracking on, `RECEIVED_PERIOD` takes `mean` / `min` from the subscription's own
+  interval distribution and `TAKE_AGE` carries its message age (mean / min / max, a negative
+  age sent as 0); `PUBLISHED_PERIOD` `min` stays 0 (not tracked). Each endpoint is reported
+  under its owning node from the per-endpoint split, so a component container reports every
+  node; two handles of one node on one topic and side report the slower one, not the sum. A
+  partial window sends no `PUBLISHED_PERIOD`, and `RECEIVED_PERIOD` only from a measured
+  interval mean. Messages are stamped with the bridge's system clock at publish, like
+  graph-monitor's shim, and the bridge warns once per log when `window_s` + `poll_period_s`
+  reaches graph-monitor's stale timeout (`graph_monitor_stale_timeout_ms`, 3000 by default);
+  the README example sets `ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=1`. A log without the split (an
+  older probe) falls back to per-process sums, and a process with several active nodes is then
+  skipped with a warning, repeated at most once a minute (PR #68 review). Off by default;
+  `rosgraph_monitor_msgs` is a new `<depend>` found `QUIET`, so a source build without it still
+  builds the bridge. Mapping in the pure core (`topic_statistic_mapper`), 30 unit tests, 6
+  bridge integration tests.
 
 ## [0.6.0] - 2026-10-14
 

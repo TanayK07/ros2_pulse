@@ -215,6 +215,10 @@ Schema rules, pinned by golden-byte unit tests:
 - `topics`, `nodes` and `warns` are always present (empty arrays when empty), so `.warns[]`
   needs no null guards. Probe 0.7 adds `endpoints` (also always present in probe output, see
   [below](#per-node-per-endpoint-breakdown)); a record without it comes from an older probe.
+- `"partial":true` marks the probe's first window after attach and the one written at exit,
+  the two it never judges alerts on: the first one's rates are diluted by the time before
+  traffic started, the exit one is cut short. Absent on every other window (and in older
+  probes). jsonl only; the text header is unchanged.
 - `warns` are structured (`kind` is `topic_rate`, `topic_gap` or `node_missing`, with the
   numbers as JSON numbers) rather than preformatted strings. An unbounded `max_hz` omits the
   key, since JSON has no `Infinity`. The text `WARN` line is a rendering of the same data.
@@ -254,6 +258,11 @@ EP /scan recv id=8 node=/local_costmap/local_costmap inter=20.000000 intra=0.000
   so a second subscription that stopped receiving shows its own stall. The per-topic `JITTER`
   line keeps measuring the gap between any two messages on the topic in the process.
   `loaned_hz` is this handle's loaned subset. Both are absent when not measured.
+- jsonl only, with gap tracking on: a subscription also carries its own receive distributions,
+  the per-subscription twins of the topic's `recv_*_dt_ms` / `recv_age_*` keys: `avg_dt_ms`,
+  `min_dt_ms`, `stddev_dt_ms`, `dt_count` over its observed intervals, and `age_avg_ms`,
+  `age_min_ms`, `age_max_ms`, `age_stddev_ms`, `age_count` for its message age. Each group is
+  absent when it has no sample. The text `EP` line does not carry them.
 - An entry is written under the same gates as the topic lines: traffic this window, a proven
   subscription at an explicit 0.0, a tracked gap, or `ROS_PULSE_EMIT_IDLE=1`. `/rosout`,
   `/parameter_events` and `/diagnostics` are filtered as before.
@@ -338,6 +347,71 @@ The rate is taken at the subscription when the process has one (what the built-i
 measure) and at the publisher otherwise. Inter- and intra-process paths report the busier of
 the two, not the sum: one publish can hit both tracepoints. A text-format log is refused with
 one warning per file.
+
+#### graph-monitor (`rosgraph_monitor_msgs/TopicStatistics`)
+
+With `graph_monitor:=true` the bridge also publishes one
+[`rosgraph_monitor_msgs/TopicStatistics`](https://github.com/ros-tooling/graph-monitor) per
+window on `/topic_statistics` (`graph_monitor_topic`), the input
+[graph-monitor](https://github.com/ros-tooling/graph-monitor) checks topic deadlines against
+([graph-monitor#14](https://github.com/ros-tooling/graph-monitor/issues/14)).
+
+```bash
+# A 1 s probe window: graph-monitor flags an endpoint Stale (ERROR) after 3 s without a statistic.
+export ROS_TOPIC_STATS_FORMAT=jsonl ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=1 ROS_TOPIC_STATS_JITTER=1
+LD_PRELOAD=$(ros2 pkg prefix ros2_pulse)/lib/libros2_pulse.so ros2 launch my_robot bringup.launch.py
+
+ros2 run ros2_pulse pulse_bridge --ros-args -p graph_monitor:=true
+```
+
+graph-monitor's `topic_statistics.stale_timeout_ms` (3000 by default) is the constraint: one
+statistic per endpoint arrives per probe window, up to `poll_period_s` late, so
+`ROS_TOPIC_STATISTICS_PUBLISH_PERIOD` (5 s by default) plus `poll_period_s` must stay under it, or
+every endpoint reads `Stale topic statistics` between windows. The bridge warns once per log
+when a window breaks that; if you raise graph-monitor's timeout instead, pass the same value as
+`graph_monitor_stale_timeout_ms`. `ROS_TOPIC_STATS_JITTER=1` is optional and adds `min`, the
+interval `mean`, `max` and `TAKE_AGE`.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `graph_monitor` | `false` | Also publish `rosgraph_monitor_msgs/TopicStatistics`. |
+| `graph_monitor_topic` | `/topic_statistics` | Where to publish those. |
+| `graph_monitor_stale_timeout_ms` | `3000` | graph-monitor's `topic_statistics.stale_timeout_ms`, only used for the warning above. |
+
+| `TopicStatistic` field | Filled with |
+|---|---|
+| `statistic_type` | `PUBLISHED_PERIOD` per publisher, `RECEIVED_PERIOD` per subscription, and `TAKE_AGE` per subscription when its message age was measured. |
+| `node_name`, `topic_name` | The endpoint's owning node (`/ns/name`) and the topic. |
+| `window_count` | Periods: messages in the window (rate x window length). `TAKE_AGE`: age samples. |
+| `mean` | `RECEIVED_PERIOD`: mean of the subscription's own inter-arrival intervals when jitter tracking is on (what graph-monitor's shim averages), else 1 / rate. `PUBLISHED_PERIOD`: 1 / rate. Busier of the inter- and intra-process paths. `TAKE_AGE`: mean age. |
+| `max` | Periods: the endpoint's largest inter-arrival gap when jitter tracking is on (a stall still open at the window's end included), else 0. `TAKE_AGE`: largest age. |
+| `min` | `RECEIVED_PERIOD`: smallest interval, `TAKE_AGE`: smallest age, when jitter tracking is on, else 0. `PUBLISHED_PERIOD`: always 0, not tracked. |
+
+`TAKE_AGE` is the probe's `message_age` (see above): jitter tracking on, inter-process takes
+with a DDS source timestamp. graph-monitor does not evaluate it today. A negative age (the
+publisher's clock ahead of this host's) is sent as 0, since `Duration` there is a span.
+
+Each publisher and subscription is reported under its own node, from the probe's per-endpoint
+split, so a component container reports every node it hosts. graph-monitor keeps one statistic
+per (node, topic): a node with two subscriptions (or two publishers) on one topic reports the
+slower one, never the sum, and nothing when one of them stalled. Endpoints of a node the probe
+never saw initialize, and `/rosout` / `/parameter_events`, are not sent. A log from a probe
+older than the per-endpoint split only carries per-process sums: there a process with several
+active nodes is skipped with a warning rather than credited to the wrong node. An endpoint with
+zero traffic is left out, so graph-monitor's stale timeout flags it.
+
+Partial windows (`"partial":true`, see the jsonl schema) send no `PUBLISHED_PERIOD`, and
+`RECEIVED_PERIOD` only when jitter tracking measured the subscription's interval mean, since
+1 / rate there reads slower than the topic is. The cost is at startup: graph-monitor starts an
+endpoint's stale clock when it discovers it, so a publisher's first statistic comes one window
+later, and it reads `Stale topic statistics` (ERROR) in between when two windows plus
+`poll_period_s` exceed `stale_timeout_ms`. The alternative was a wrong "sending too slowly" WARN
+on every start.
+
+`timestamp` is the bridge's system-clock time at publish, as graph-monitor's own shim stamps
+it (graph-monitor measures staleness from it), not the window's end. `rosgraph_monitor_msgs` is
+released for Humble through Rolling; a source build without it still builds the bridge, and the
+parameter then only warns.
 
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 

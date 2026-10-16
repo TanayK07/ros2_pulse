@@ -209,7 +209,7 @@ void appendJsonBound(std::string& out, double v) {
 auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
                        long long ts_ns, double window_s, bool emit_idle,
                        const std::vector<sRateWarning>& warnings,
-                       const std::vector<sEndpointStat>* endpoints) -> std::string {
+                       const std::vector<sEndpointStat>* endpoints, bool partial) -> std::string {
     std::string out;
     // Rough upper bound (fields are wider than their text twins), same single-write goal.
     out.reserve(96 + stats.size() * 192 + nodes.size() * 40 + warnings.size() * 112);
@@ -224,6 +224,11 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
     // golden-byte testable and a text↔jsonl diff differs in structure only, never in value.
     out += "\",\"window_s\":";
     out += sprintfStr("%.3f", window_s);
+    // Attach / exit window (see the header): absent, not false, on a full one, so every
+    // existing record stays byte-identical.
+    if (partial) {
+        out += ",\"partial\":true";
+    }
 
     out += ",\"topics\":[";
     bool first = true;
@@ -405,6 +410,32 @@ auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<s
             if (e.has_max_dt) {
                 out += ",\"max_dt_ms\":";
                 out += sprintfStr("%.3f", e.max_dt_ms);
+            }
+            // This subscription's own distributions, the per-handle twins of the topic's
+            // recv_*_dt / recv_age_* keys (jsonl only, like those). Same absence rule.
+            if (e.has_recv_dt) {
+                out += ",\"avg_dt_ms\":";
+                out += sprintfStr("%.3f", e.recv_dt.mean_ms);
+                out += ",\"min_dt_ms\":";
+                out += sprintfStr("%.3f", e.recv_dt.min_ms);
+                out += ",\"stddev_dt_ms\":";
+                out += sprintfStr("%.3f", e.recv_dt.stddev_ms);
+                out += ",\"dt_count\":";
+                out += sprintfStr("%llu", static_cast<unsigned long long>(e.recv_dt.count));
+            }
+            if (e.has_recv_age) {
+                out += ",\"age_avg_ms\":";
+                out += sprintfStr("%.3f", e.recv_age.mean_ms);
+                out += ",\"age_min_ms\":";
+                out += sprintfStr("%.3f", e.recv_age.min_ms);
+                out += ",\"age_max_ms\":";
+                out += sprintfStr("%.3f", e.recv_age.max_ms);
+                if (e.recv_age.has_stddev) {
+                    out += ",\"age_stddev_ms\":";
+                    out += sprintfStr("%.3f", e.recv_age.stddev_ms);
+                }
+                out += ",\"age_count\":";
+                out += sprintfStr("%llu", static_cast<unsigned long long>(e.recv_age.count));
             }
             if (e.loaned_count > 0) {
                 out += ",\"loaned_hz\":";

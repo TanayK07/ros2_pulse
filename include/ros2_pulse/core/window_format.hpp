@@ -56,7 +56,7 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 ///
 /// Shape (exact bytes pinned by test_window_format_jsonl.cpp golden tests):
 /// @code
-/// {"ts_ns":"<int64>","window_s":W.WWW,
+/// {"ts_ns":"<int64>","window_s":W.WWW,"partial":true,
 ///  "topics":[{"topic":"/x","pub_inter_hz":N,"pub_intra_hz":N,
 ///             "recv_inter_hz":N,"recv_intra_hz":N,"recv_endpoint_seen":true,
 ///             "pub_max_dt_ms":N,"recv_max_dt_ms":N,"recv_min_dt_ms":N,"recv_stddev_dt_ms":N,
@@ -68,16 +68,24 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 ///           {"kind":"topic_gap","topic":"/x","max_dt_ms":N,"max_gap_ms":N},
 ///           {"kind":"node_missing","node":"/a"}, ...],
 ///  "endpoints":[{"topic":"/x","side":"pub","id":3,"node":"/a","inter_hz":N,"intra_hz":N,
-///                "max_dt_ms":N,"loaned_hz":N}, ...]}
+///                "max_dt_ms":N,"avg_dt_ms":N,"min_dt_ms":N,"stddev_dt_ms":N,"dt_count":N,
+///                "age_avg_ms":N,"age_min_ms":N,"age_max_ms":N,"age_stddev_ms":N,
+///                "age_count":N,"loaned_hz":N}, ...]}
 /// @endcode
 ///
 /// `endpoints` is the per-publisher / per-subscription split of the `topics` sums, one element
 /// per endpoint passing TopicRegistry::shouldEmitEndpoint: `side` is "pub" or "recv", `id` is the
 /// probe's process-unique endpoint id, `node` the owning node (absent when unknown), and
-/// `max_dt_ms` / `loaned_hz` follow the same absence-means-unmeasured rule as the topic keys.
+/// `max_dt_ms` / `loaned_hz` follow the same absence-means-unmeasured rule as the topic keys, as
+/// do a subscription's own receive distributions (`*_dt_*` / `age_*`, gap tracking on only).
 /// The key is written only when @p endpoints is non-null (the probe always passes it, so the
 /// probe's records always carry it, empty or not); a reader must treat its absence as "older
 /// probe", never as "no endpoints".
+///
+/// `"partial":true` (only when @p partial) marks a lifecycle window the probe does not judge
+/// alerts on: the first one after attach, whose rates are diluted by the time before traffic
+/// started, and the one written at exit. Absent means a full window (or an older probe). jsonl
+/// only: the text header is sscanf'd by more readers than this repo's.
 ///
 /// Design decisions, each mirrored from the text format or from exporter prior art:
 ///  - `ts_ns` is a decimal STRING, not a JSON number: epoch nanoseconds (~1.8e18) exceed
@@ -106,7 +114,8 @@ auto formatWindow(const std::vector<sTopicStat>& stats, const std::vector<std::s
 auto formatWindowJsonl(const std::vector<sTopicStat>& stats, const std::vector<std::string>& nodes,
                        long long ts_ns, double window_s, bool emit_idle,
                        const std::vector<sRateWarning>& warnings = {},
-                       const std::vector<sEndpointStat>* endpoints = nullptr) -> std::string;
+                       const std::vector<sEndpointStat>* endpoints = nullptr,
+                       bool partial = false) -> std::string;
 
 /// "pub" / "recv": the side token both formats use for an endpoint (and JITTER / LOAN lines).
 auto endpointSideName(eEndpointSide side) -> const char*;

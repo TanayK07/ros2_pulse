@@ -1,0 +1,105 @@
+// Copyright 2026 ros2_pulse contributors
+//
+// Licensed under the Apache License, Version 2.0 (the "License").
+//
+// Maps one probe window onto rosgraph_monitor_msgs/TopicStatistics-shaped data for pulse_bridge,
+// so ros-tooling/graph-monitor can use the probe as its topic-rate source
+// (ros-tooling/graph-monitor#14). Pure core: no ROS types, unit-tested in the standalone lane.
+//
+// graph-monitor matches every TopicStatistic to one endpoint by (node_name, topic_name):
+// PUBLISHED_PERIOD to a publisher, RECEIVED_PERIOD to a subscription, and checks `mean` against
+// the endpoint's QoS deadline. The probe's per-endpoint split (sLogWindow::endpoints, one entry
+// per publisher / subscription handle with its owning node) maps onto that directly, so a
+// component container or any multi-node process reports every node. Several handles of one
+// node on one topic and side (a node subscribing twice) share one key, and graph-monitor holds
+// one statistic per key: the key reports its SLOWEST handle (every field, TAKE_AGE included,
+// from that one handle), the one a deadline would catch first, and is left out when any of
+// them stalled to 0 Hz. Endpoints whose node the probe never
+// saw initialize, and the probe's infrastructure topics (TopicRegistry::shouldFilter: /rosout,
+// /parameter_events, ...), are not sent.
+//
+// A log from an older probe has no per-endpoint split. Its per-process topic sums are then
+// attributed only when the process has exactly one active node; several active nodes would hand
+// every node the process-wide rate, so the window is dropped instead (`ambiguous_node`).
+//
+// What is filled, and what is not:
+//   statistic_type  PUBLISHED_PERIOD for a publisher, RECEIVED_PERIOD for a subscription, and
+//                   TAKE_AGE for a subscription whose message age the probe measured (gap
+//                   tracking on, inter-process takes with a DDS source timestamp).
+//   node_name       the endpoint's owning node, fully qualified (/ns/name), which is the form
+//                   graph-monitor builds from the graph.
+//   topic_name      the topic as the probe recorded it (resolved, fully qualified).
+//   window_count    periods: messages in the window, rate * window length, rounded.
+//                   TAKE_AGE: the number of age samples.
+//   mean            RECEIVED_PERIOD: the mean of the subscription's observed inter-arrival
+//                   intervals when gap tracking measured them (what graph-monitor's own shim
+//                   averages), else 1 / rate. PUBLISHED_PERIOD: 1 / rate. Inter and intra paths
+//                   report the busier one, never the sum. TAKE_AGE: the mean age. The interval
+//                   mean does not include a stall still open at the window's end; max does, and a
+//                   subscription that saw nothing all window is left out (stale).
+//   min             RECEIVED_PERIOD: the smallest observed interval, TAKE_AGE: the smallest
+//                   age, both when measured (has_min). PUBLISHED_PERIOD: zero, not tracked.
+//   max             periods: the endpoint's largest inter-arrival gap, only when the probe's gap
+//                   tracking measured one (has_max); otherwise left at zero. TAKE_AGE: the
+//                   largest age.
+// The older-probe fallback below fills periods only: 1 / rate, max, no min, no TAKE_AGE.
+//
+// Partial windows (sLogWindow::partial: the probe's first window after attach and its exit
+// window) carry a rate diluted by the lead-in before traffic started, or cut short at exit, so
+// PUBLISHED_PERIOD is not sent for them and RECEIVED_PERIOD only when its interval mean was
+// measured; TAKE_AGE is sent as usual. The trade-off: graph-monitor starts an endpoint's stale
+// clock when it discovers it, so at startup a publisher waits a second window for its first
+// statistic, and reads Stale (ERROR) meanwhile if two windows plus the bridge's poll exceed
+// stale_timeout_ms (3 s by default). A wrong "too slow" WARN on every start was the other choice.
+// A zero-rate endpoint is left out rather than reported as an infinite period: graph-monitor
+// treats a missing update as stale, which is the right verdict for a dead topic.
+
+#ifndef ROS2_PULSE__CORE__TOPIC_STATISTIC_MAPPER_HPP_
+#define ROS2_PULSE__CORE__TOPIC_STATISTIC_MAPPER_HPP_
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "ros2_pulse/core/log_reader.hpp"
+
+namespace ros2_pulse::core {
+
+enum class eTopicStatisticType {
+    PublishedPeriod,  // rosgraph_monitor_msgs TopicStatistic::PUBLISHED_PERIOD
+    ReceivedPeriod,   // rosgraph_monitor_msgs TopicStatistic::RECEIVED_PERIOD
+    TakeAge,          // rosgraph_monitor_msgs TopicStatistic::TAKE_AGE
+};
+
+/// One TopicStatistic, field for field. Durations in nanoseconds, signed: a TAKE_AGE can be
+/// negative (the publisher's clock ahead of ours), which builtin_interfaces/Duration in this
+/// message cannot carry; the bridge clamps it at zero.
+struct sTopicStatisticSample {
+    eTopicStatisticType type{eTopicStatisticType::PublishedPeriod};
+    std::string node_name;
+    std::string topic_name;
+    std::int32_t window_count{0};
+    long long mean_ns{0};
+    bool has_min{false};
+    long long min_ns{0};
+    bool has_max{false};
+    long long max_ns{0};
+};
+
+/// One TopicStatistics message: every endpoint of the window's process. timestamp_ns is the
+/// window's end (system time); pulse_bridge stamps the message with its own system-clock time at
+/// publish instead, as graph-monitor's shim does, since graph-monitor's stale check measures
+/// from the stamp.
+struct sTopicStatisticsBatch {
+    long long timestamp_ns{0};
+    std::vector<sTopicStatisticSample> statistics;
+    // True when the window carried traffic but the process had no single active node to
+    // attribute it to; statistics is then empty.
+    bool ambiguous_node{false};
+};
+
+auto mapWindowTopicStatistics(const sLogWindow& win) -> sTopicStatisticsBatch;
+
+}  // namespace ros2_pulse::core
+
+#endif  // ROS2_PULSE__CORE__TOPIC_STATISTIC_MAPPER_HPP_
