@@ -123,6 +123,12 @@ auto evaluateRateSpec(const sRateSpec& spec, const std::vector<sTopicStat>& stat
                       std::vector<std::string>* unmeasured_gaps = nullptr)
     -> std::vector<std::string>;
 
+/// @brief The rate @p rule constrains, read from @p s: the rule's side, and for transport any
+/// the sum of the two receive buckets or the larger publish bucket (see the definition). The
+/// value evaluateRateSpecWarnings compares against min_hz / max_hz, exposed so pulse_bridge's
+/// /diagnostics can report the same number per rule.
+auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double;
+
 /// What a single warning is about (ROADMAP R6: the jsonl emitter needs warnings as DATA, not
 /// preformatted strings, a sidecar exporter should never have to regex our own WARN lines).
 enum class eWarnKind {

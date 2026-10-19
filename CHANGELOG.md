@@ -35,6 +35,17 @@ All notable changes to this project are documented here. Format follows
   handle (or the reverse) is never served the other one's endpoint (PR #72 review).
 
 ### Added
+- **`pulse_bridge` publishes `/diagnostics` (`diagnostics:=true`).** One
+  `diagnostic_msgs/DiagnosticArray` per poll for `diagnostic_aggregator`: a status per
+  expected-rate rule (`ros2_pulse: /scan (recv)`, `WARN` while the probe warns `topic_rate` or
+  `topic_gap` for it, with `hz`, the rule's bounds and the measured gap as values), per spec node
+  (`ERROR` on `node_missing`), and per log (`ERROR` `stale` once no window arrived for two
+  window periods plus a poll). The levels come from the probe's `warns`; the bridge reads the
+  spec (`expected_file`, default `$ROS_TOPIC_STATS_EXPECTED`) only to know the rules, so a rule
+  that holds reports `OK`. New parameters: `diagnostics`, `diagnostics_topic`, `hardware_id`,
+  `diagnostics_all_topics` (also report topics without a rule), `expected_file`. `package.xml`
+  now declares `diagnostic_msgs`. The jsonl reader (`sLogWindow::warns`) now parses `warns`;
+  `pulse-check` still ignores them and judges the raw rates.
 - **Per-endpoint breakdown in the output, additive.** jsonl records gain an `endpoints` array
   (always present in probe output): one entry per publisher / subscription with `topic`,
   `side` (`pub` / `recv`), a process-unique `id`, `node` (absent when unknown), `inter_hz`,

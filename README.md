@@ -413,6 +413,51 @@ it (graph-monitor measures staleness from it), not the window's end. `rosgraph_m
 released for Humble through Rolling; a source build without it still builds the bridge, and the
 parameter then only warns.
 
+#### diagnostic_aggregator (`/diagnostics`)
+
+With `diagnostics:=true` the bridge also publishes a `diagnostic_msgs/DiagnosticArray` on
+`/diagnostics` every poll, so [expected-rate](#expected-rate-alerting) violations reach
+`diagnostic_aggregator` (and `rqt_robot_monitor`) without a `DiagnosedPublisher` in each driver.
+The verdict is the probe's: the bridge maps the `warns` of each process's latest window onto
+levels and does not re-judge the rates.
+
+```bash
+export ROS_TOPIC_STATS_FORMAT=jsonl ROS_TOPIC_STATS_EXPECTED=/etc/pulse/expected.yaml
+LD_PRELOAD=$(ros2 pkg prefix ros2_pulse)/lib/libros2_pulse.so ros2 launch my_robot bringup.launch.py
+
+ros2 run ros2_pulse pulse_bridge --ros-args -p diagnostics:=true -p hardware_id:=robot1 \
+  -p expected_file:=/etc/pulse/expected.yaml
+```
+
+| Status name | Level |
+|---|---|
+| `ros2_pulse: <topic> (<side>)` | One per spec rule (`, inter` / `, intra` appended for a transport rule). `OK`, or `WARN` while the probe reports a `topic_rate` or `topic_gap` warn for it. Values: `hz`, `min_hz` / `max_hz` / `max_gap_ms` when the rule sets them, `max_dt_ms` when gap tracking measured it. |
+| `ros2_pulse: node <name>` | One per spec node. `OK` while a window lists it, `ERROR` (`missing`) on a `node_missing` warn. |
+| `ros2_pulse: log <file>` | One per log. `ERROR` (`stale: no window for N s`) once no window has arrived for two window periods plus `poll_period_s`, the same rule `pulse-export` uses. Values: `path`, `age_s`, `window_s`, `nodes`. |
+| `ros2_pulse: <topic>` | A topic warn no spec rule accounts for (no spec given to the bridge, or the probe runs a different one): `WARN`, side unknown. |
+
+The spec is read for its rules and nodes, so a rule that holds still has an `OK` status rather
+than none. `expected_file` defaults to `$ROS_TOPIC_STATS_EXPECTED`; without either, only warns,
+`missing` nodes and log staleness are reported. Probe warns carry no side, so the bridge matches
+each one to a rule by topic, bounds and the observed value in the same window.
+
+Only rules and nodes some process hosts get a status: a rule on a topic no probed process has
+on that side, or a node no process knows, is left out, since it may belong to another machine's
+bridge. Several processes on one rule fold into one status with the worst level (and on a tie the
+slowest rate). A stale log's windows are not used, its status is the `ERROR`; after five minutes
+of silence the log is dropped. Staleness is measured from the file's modification time, so a log
+left over from an earlier run reads as stale at once. A process that exits cleanly also reads
+`ERROR` for those five minutes. With `diagnostics_all_topics:=true` every other topic and side in
+the logs is reported too, as `OK` with its `hz`.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `diagnostics` | `false` | Also publish `diagnostic_msgs/DiagnosticArray`. |
+| `diagnostics_topic` | `/diagnostics` | Where to publish it. |
+| `hardware_id` | `""` | `hardware_id` of every status. |
+| `diagnostics_all_topics` | `false` | Also report topics without a rule, as `OK`. |
+| `expected_file` | `""` | The expected-rate spec. Empty: `$ROS_TOPIC_STATS_EXPECTED` when set. |
+
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 
 `pulse-export` ships with pulse-top (`pip3 install ros2-pulse-top`) and serves the probe's logs

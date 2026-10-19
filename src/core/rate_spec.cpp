@@ -141,6 +141,28 @@ auto applyRuleItem(const std::string& item, sRateRule& rule, sSeenKeys& seen) ->
     return {};
 }
 
+// Bounds render compactly ("18", "22.5", "inf"), they echo the spec, unlike observed rates
+// which keep the window format's 6dp.
+auto formatBound(double v) -> std::string {
+    if (std::isinf(v)) {
+        return "inf";
+    }
+    char buf[32];
+    const int n = std::snprintf(buf, sizeof(buf), "%g", v);
+    return n > 0 ? std::string(buf, static_cast<size_t>(n)) : std::string();
+}
+
+auto contains(const std::vector<std::string>& v, const std::string& s) -> bool {
+    for (const auto& x : v) {
+        if (x == s) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
+
 // The rate field a rule constrains. kAny means "how fast is this topic, however it travels",
 // the split is a transport detail the operator usually doesn't spec. How the two buckets combine
 // differs by side, because only one of them counts disjoint events:
@@ -173,28 +195,6 @@ auto observedHz(const sRateRule& rule, const sTopicStat& s) -> double {
             return inter + intra;
     }
 }
-
-// Bounds render compactly ("18", "22.5", "inf"), they echo the spec, unlike observed rates
-// which keep the window format's 6dp.
-auto formatBound(double v) -> std::string {
-    if (std::isinf(v)) {
-        return "inf";
-    }
-    char buf[32];
-    const int n = std::snprintf(buf, sizeof(buf), "%g", v);
-    return n > 0 ? std::string(buf, static_cast<size_t>(n)) : std::string();
-}
-
-auto contains(const std::vector<std::string>& v, const std::string& s) -> bool {
-    for (const auto& x : v) {
-        if (x == s) {
-            return true;
-        }
-    }
-    return false;
-}
-
-}  // namespace
 
 auto readSpecFile(const char* path, std::string& out, std::string& error) -> bool {
     if (path == nullptr || *path == '\0') {

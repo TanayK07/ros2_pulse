@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "ros2_pulse/core/rate_spec.hpp"
 #include "ros2_pulse/core/topic_registry.hpp"
 
 namespace ros2_pulse::core {
@@ -26,6 +27,10 @@ struct sLogWindow {
     // jsonl "partial":true: the probe's attach or exit window, whose rates are not a full
     // window's (see formatWindowJsonl). Always false for text, which does not carry it.
     bool partial{false};
+    // jsonl "warns": the probe's own expected-rate verdict for this window, as written. Read for
+    // pulse_bridge's /diagnostics; pulse-check ignores it and re-derives verdicts from the rates.
+    // An element of an unknown kind is dropped. Always empty for text (WARN lines are skipped).
+    std::vector<sRateWarning> warns;
 };
 
 /// @brief Parse a probe log (any number of windows) back into structured form.
@@ -39,9 +44,10 @@ struct sLogWindow {
 ///    cannot misfire. pulse-check therefore gates jsonl logs identically: picking the
 ///    exporter-friendly format never costs CI/watchdog gating.
 ///
-/// Unknown text lines (e.g. WARN) and unknown jsonl keys (e.g. "warns") are ignored, so
-/// pulse-check re-evaluates from the raw rates rather than trusting probe-side warnings, and
-/// a newer probe's additive fields don't break an older reader. Malformed jsonl lines (a
+/// Unknown text lines (e.g. WARN) and unknown jsonl keys are ignored, so a newer probe's
+/// additive fields don't break an older reader. jsonl "warns" is parsed into
+/// sLogWindow::warns, but pulse-check never reads it: it re-evaluates from the raw rates rather
+/// than trusting probe-side warnings. Malformed jsonl lines (a
 /// truncated tail after a crash) are skipped, one torn record costs one window, like a torn
 /// text block. Pure; used by the pulse-check CLI and unit-tested round-trip against both
 /// emitters.

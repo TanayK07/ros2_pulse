@@ -107,9 +107,12 @@ else()
   # graph and free of rclcpp; this is the only target here that links it.
   find_package(rclcpp REQUIRED)
   find_package(statistics_msgs REQUIRED)
+  # diagnostics:=true output (/diagnostics for diagnostic_aggregator). common_interfaces, so
+  # always there where rclcpp is.
+  find_package(diagnostic_msgs REQUIRED)
   add_executable(pulse_bridge src/bridge/pulse_bridge.cpp)
   target_link_libraries(pulse_bridge PRIVATE
-    ${PROJECT_NAME}_core rclcpp::rclcpp ${statistics_msgs_TARGETS})
+    ${PROJECT_NAME}_core rclcpp::rclcpp ${statistics_msgs_TARGETS} ${diagnostic_msgs_TARGETS})
   # Optional graph-monitor output (rosgraph_monitor_msgs/TopicStatistics, ros-tooling/graph-monitor
   # #14). Declared in package.xml, so release builds have it; a source build without the package
   # still gets the /statistics bridge, and the graph_monitor parameter only warns.
@@ -208,7 +211,8 @@ else()
         TIMEOUT 120)
       # pulse_bridge: a hand-written jsonl log comes back on /statistics in the built-in
       # topic-statistics shape, appended windows are followed, text logs are refused, and
-      # graph_monitor:=true adds rosgraph_monitor_msgs/TopicStatistics (skipped when absent).
+      # graph_monitor:=true adds rosgraph_monitor_msgs/TopicStatistics (skipped when absent),
+      # diagnostics:=true maps the probe's warns and log staleness onto /diagnostics.
       ament_add_pytest_test(integration_bridge test/integration/test_bridge.py
         TIMEOUT 120)
     endif()
