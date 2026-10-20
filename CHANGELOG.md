@@ -40,7 +40,8 @@ All notable changes to this project are documented here. Format follows
   expected-rate rule (`ros2_pulse: /scan (recv)`, `WARN` while the probe warns `topic_rate` or
   `topic_gap` for it, with `hz`, the rule's bounds and the measured gap as values), per spec node
   (`ERROR` on `node_missing`), and per log (`ERROR` `stale` once no window arrived for two
-  window periods plus a poll). The levels come from the probe's `warns`; the bridge reads the
+  window periods plus a poll; a log whose latest window is the probe's exit window is dropped
+  instead, a clean exit is not a fault). The levels come from the probe's `warns`; the bridge reads the
   spec (`expected_file`, default `$ROS_TOPIC_STATS_EXPECTED`) only to know the rules, so a rule
   that holds reports `OK`. New parameters: `diagnostics`, `diagnostics_topic`, `hardware_id`,
   `diagnostics_all_topics` (also report topics without a rule), `expected_file`. `package.xml`

@@ -219,6 +219,24 @@ TEST(DiagnosticsMapper, UnknownPeriodUsesTheProbeDefault) {
     EXPECT_EQ(mapDiagnostics({log}, opts)[0].level, eDiagLevel::Ok);
 }
 
+// The exit window (partial, after a full one, so the period is known): a clean exit drops the
+// log and everything it reported, fresh or not, instead of going stale.
+TEST(DiagnosticsMapper, ExitWindowDropsTheLog) {
+    const auto sp = spec(kScanSpec);
+    sDiagOptions opts;
+    opts.spec = &sp;
+    auto log = scanLog(20.0);
+    log.window.partial = true;
+    log.window.window_s = 0.4;
+    EXPECT_TRUE(mapDiagnostics({log}, opts).empty());
+    log.age_s = 60.0;
+    EXPECT_TRUE(mapDiagnostics({log}, opts).empty());
+    // Another process still running keeps its statuses.
+    const auto out = mapDiagnostics({log, scanLog(20.0, "/tmp/topic_freq.2.log")}, opts);
+    ASSERT_EQ(out.size(), 3u);
+    EXPECT_EQ(out[0].name, "ros2_pulse: log topic_freq.2.log");
+}
+
 // No spec: a warn still surfaces, under the topic alone since its side is not known.
 TEST(DiagnosticsMapper, WarnWithoutSpecIsLooseWarn) {
     sDiagOptions opts;

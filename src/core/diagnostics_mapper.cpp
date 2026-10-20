@@ -134,6 +134,9 @@ auto mapDiagnostics(const std::vector<sDiagLog>& logs, const sDiagOptions& opts)
 
     for (const auto& log : logs) {
         if (log.age_s > kDiagForgetAfterS) continue;
+        // period_s is only known from a full window, so a partial window after one is the exit
+        // window: a clean exit, all of this log's statuses go away instead of reading stale.
+        if (log.window.partial && log.period_s > 0.0) continue;
         const double period = log.period_s > 0.0 ? log.period_s : kDiagDefaultPeriodS;
         const double limit = 2.0 * period + opts.poll_period_s;
         sDiagStatus st;

@@ -16,7 +16,10 @@
 //   log <file>          one per log with a window: OK, or ERROR "stale" once no window has
 //                       arrived for two window periods plus one poll (pulse-export's rule). A
 //                       log silent for kDiagForgetAfterS is dropped. A stale log's windows are
-//                       not used for the statuses below.
+//                       not used for the statuses below. A log whose latest window is the
+//                       probe's exit window (partial, after a full one) is dropped at once:
+//                       the process exited cleanly, which is not a fault. A partial window
+//                       with no full one before it is the attach window and reports as usual.
 //   node <name>         one per spec node: OK when a fresh window lists it, ERROR on a
 //                       node_missing warn, absent when no log knows it (another machine's).
 //   <topic> (<side>)    one per spec rule, ", intra" / ", inter" appended for a transport rule:

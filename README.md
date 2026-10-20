@@ -446,8 +446,9 @@ on that side, or a node no process knows, is left out, since it may belong to an
 bridge. Several processes on one rule fold into one status with the worst level (and on a tie the
 slowest rate). A stale log's windows are not used, its status is the `ERROR`; after five minutes
 of silence the log is dropped. Staleness is measured from the file's modification time, so a log
-left over from an earlier run reads as stale at once. A process that exits cleanly also reads
-`ERROR` for those five minutes. With `diagnostics_all_topics:=true` every other topic and side in
+left over from an earlier run reads as stale at once. A process that exits cleanly writes a
+final partial window; when that is a log's latest window, the log and all its statuses are dropped
+at once rather than read as stale. With `diagnostics_all_topics:=true` every other topic and side in
 the logs is reported too, as `OK` with its `hz`.
 
 | Parameter | Default | Meaning |

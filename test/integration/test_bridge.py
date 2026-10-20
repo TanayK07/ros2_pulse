@@ -587,6 +587,27 @@ def test_diagnostics_all_topics_without_spec(ros):
             stop(proc)
 
 
+def test_diagnostics_clean_exit_drops_the_log(ros):
+    exit_win = WIN1.replace('"window_s":5.000', '"window_s":0.400,"partial":true')
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "topic_freq.4242.log")
+        with open(path, "w") as f:
+            f.write(WIN1)
+        proc = start_bridge(path, ("-p", "diagnostics:=true",
+                                   "-p", "diagnostics_all_topics:=true"))
+        col = DiagCollector()
+        try:
+            assert col.wait_until(lambda s: "ros2_pulse: log topic_freq.4242.log" in s, 10.0)
+            # The probe's exit window: the process stopped cleanly, nothing to report.
+            with open(path, "a") as f:
+                f.write(exit_win)
+            assert col.wait_until(lambda s: not s, 10.0) is not None, \
+                [s.name for s in col.msgs[-1].status]
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
 def test_diagnostics_is_off_by_default(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
