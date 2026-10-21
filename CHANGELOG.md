@@ -118,6 +118,10 @@ All notable changes to this project are documented here. Format follows
   `rosgraph_monitor_msgs` is a new `<depend>` found `QUIET`, so a source build without it still
   builds the bridge. Mapping in the pure core (`topic_statistic_mapper`), 30 unit tests, 6
   bridge integration tests.
+- **A package guide on docs.ros.org.** `doc/` and `rosdoc2.yaml` replace the generated page of
+  internal C++ structs with a quickstart and reference pages, and `package.xml` declares the
+  `ros2_documentation_area` export so the ROS 2 docs can list the package on their
+  introspection pages (ros2_documentation#7240).
 
 ## [0.6.0] - 2026-10-14
 

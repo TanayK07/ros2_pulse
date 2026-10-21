@@ -11,6 +11,7 @@
   </description>
   <maintainer email="95276223+TanayK07@users.noreply.github.com">Tanay Kedia</maintainer>
   <license>Apache-2.0</license>
+  <url type="website">https://tanayk07.github.io/ros2_pulse/</url>
   <url type="repository">https://github.com/TanayK07/ros2_pulse</url>
   <url type="bugtracker">https://github.com/TanayK07/ros2_pulse/issues</url>
 
@@ -47,5 +48,10 @@
 
   <export>
     <build_type>ament_cmake</build_type>
+    <!-- docs.ros.org: the guide in doc/ (rosdoc2.yaml), and the "Related packages" lists on
+         the ROS 2 documentation pages with these areas (ros2_documentation#7240). -->
+    <rosdoc2>rosdoc2.yaml</rosdoc2>
+    <ros2_documentation_area>introspection, analysis, tools</ros2_documentation_area>
+    <ros2_documentation_related_scope>federation</ros2_documentation_related_scope>
   </export>
 </package>
