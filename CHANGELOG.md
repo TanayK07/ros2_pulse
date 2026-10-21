@@ -5,6 +5,10 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-21
+
+/diagnostics for diagnostic_aggregator, the rest of rclcpp's removed topic statistics (MINIMUM, STDDEV, message_age), graph-monitor messages, per-endpoint counts, and a package guide on docs.ros.org. pulse-top 0.6.0 reads the endpoint fields.
+
 ### Changed
 - **The probe counts per publisher and per subscription, attributed to the owning node.**
   Counters used to be keyed by topic per process, so every endpoint of a topic in one process
@@ -55,9 +59,9 @@ All notable changes to this project are documented here. Format follows
   Same emit gates as the topic lines; filtered topics stay filtered. `pulse-check`'s reader
   (and so `pulse_bridge`) parses both into `sLogWindow::endpoints`; pulse-top parses them into
   `Window.endpoints` and treats `EP` as a known line kind. One malformed `endpoints` element
-  costs pulse-top that element only, never the window. **Text `EP` lines need the next
-  pulse-top release:** the released pulse-top / `pulse-export` 0.5.0 count each `EP` line as a
-  skipped line (`ros2_pulse_lines_skipped_total`); jsonl works with 0.5.0, which ignores the key.
+  costs pulse-top that element only, never the window. Text `EP` lines need pulse-top
+  0.6.0: pulse-top / `pulse-export` 0.5.0 count each `EP` line as a skipped line
+  (`ros2_pulse_lines_skipped_total`); jsonl works with 0.5.0, which ignores the key.
 - **`pulse_bridge` publishes the rest of what rclcpp's built-in topic statistics did.** Those
   were removed from Rolling by [rclcpp#3203](https://github.com/ros2/rclcpp/pull/3203). With
   `ROS_TOPIC_STATS_JITTER=1`, `message_period` messages now carry `MINIMUM` and `STDDEV` of the

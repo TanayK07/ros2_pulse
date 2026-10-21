@@ -181,7 +181,7 @@ set fleet-wide.
 | `ROS_PULSE_EMIT_IDLE` | `0` | When `1`, also emit a `TOPIC /x 0.000000` line for a declared but silent topic (no traffic in the window). By default such topics are omitted so a large graph is not padded with a zero line per silent topic every window. Only the publish-side `TOPIC` line is affected: `RECV` emits an explicit `0.000000` line for topics that have delivered at least once (so a stalled upstream stays visible) and omits never-active topics. |
 | `ROS_TOPIC_STATS_EXPECTED` | unset | Path to an expected-rate spec (below). When set, each window is checked at flush time and violations are appended as `WARN` lines. Unreadable or malformed specs warn once on stderr and disable alerting; they never crash the host. |
 | `ROS_TOPIC_STATS_QUIET` | `0` | When `1`, suppress the `[ros2_pulse] active` stderr banner, for deployments that parse the wrapped process's stderr. Only the informational banner is silenced. Error diagnostics (unreadable, malformed or zero-rule spec, unwritable output file) still print, because each of those disables something you configured, and silently disabled alerting is the 0.2.0 bug class this flag must not bring back. |
-| `ROS_TOPIC_STATS_ENDPOINTS` | `0` | When `1`, text windows also get one `EP` line per publisher / subscription (the [per-endpoint breakdown](#per-node-per-endpoint-breakdown)). jsonl always carries it as the `endpoints` key; text keeps it opt-in so the default text output stays byte-identical. The released pulse-top / `pulse-export` 0.5.0 count `EP` lines as skipped lines; text `EP` needs the next pulse-top release. |
+| `ROS_TOPIC_STATS_ENDPOINTS` | `0` | When `1`, text windows also get one `EP` line per publisher / subscription (the [per-endpoint breakdown](#per-node-per-endpoint-breakdown)). jsonl always carries it as the `endpoints` key; text keeps it opt-in so the default text output stays byte-identical. Text `EP` lines need pulse-top / `pulse-export` 0.6.0; 0.5.0 counts them as skipped lines. |
 | `ROS_TOPIC_STATS_FORMAT` | `text` | Output encoding: `text` (the block format above, byte-identical to previous releases) or `jsonl` (one JSON object per window per line, see below). Any other value warns once on stderr and falls back to `text`; it never crashes the host. `pulse-check` reads both. |
 
 ### JSON Lines output (`ROS_TOPIC_STATS_FORMAT=jsonl`)
@@ -277,10 +277,9 @@ EP /scan recv id=8 node=/local_costmap/local_costmap inter=20.000000 intra=0.000
   node's `rcl_node_fini`) is written once more if its last window carried traffic, then never
   again.
 - Readers: `pulse-check` and `pulse_bridge` from this release read both encodings of the split.
-  The released pulse-top / `pulse-export` 0.5.0 ignore the jsonl key but do not know the text
-  `EP` line: with `ROS_TOPIC_STATS_ENDPOINTS=1` they count every `EP` line as a skipped line
-  (`ros2_pulse_lines_skipped_total` grows by the number of endpoints each window). Text `EP`
-  lines need the next pulse-top release; jsonl works with 0.5.0.
+  pulse-top / `pulse-export` 0.6.0 read both. 0.5.0 ignores the jsonl key but does not know the
+  text `EP` line: with `ROS_TOPIC_STATS_ENDPOINTS=1` it counts every `EP` line as a skipped line
+  (`ros2_pulse_lines_skipped_total` grows by the number of endpoints each window).
 
 ### Publishing on `/statistics` (`pulse_bridge`)
 
