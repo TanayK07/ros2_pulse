@@ -32,11 +32,23 @@
 //                            a log whose window_s + poll_period_s reaches it is warned about
 //                            once, since every endpoint would read Stale between windows
 //                                                                                (default: 3000)
+//   diagnostics    bool      also publish diagnostic_msgs/DiagnosticArray every poll, for
+//                            diagnostic_aggregator: the probe's expected-rate warns as levels,
+//                            plus one status per log that goes ERROR when it stops producing
+//                            windows                                            (default: false)
+//   diagnostics_topic  string  where to publish those                   (default: /diagnostics)
+//   hardware_id    string    DiagnosticStatus.hardware_id on every status             (default: "")
+//   diagnostics_all_topics  bool  also report every topic without a rule, as OK with its rate
+//                                                                               (default: false)
+//   expected_file  string    the expected-rate spec, read for its rules and nodes so they report
+//                            OK too, not only when warned; empty means $ROS_TOPIC_STATS_EXPECTED
+//                            when set                                              (default: "")
 //
 // Text-format logs are refused per file with one warning: their windows span several lines and
 // the bridge reads line by line. Set ROS_TOPIC_STATS_FORMAT=jsonl on the probed process.
 
 #include <glob.h>
+#include <sys/stat.h>
 
 #include <chrono>
 #include <cstdint>
@@ -44,18 +56,24 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "diagnostic_msgs/msg/diagnostic_array.hpp"
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "diagnostic_msgs/msg/key_value.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "statistics_msgs/msg/metrics_message.hpp"
 #include "statistics_msgs/msg/statistic_data_point.hpp"
 #include "statistics_msgs/msg/statistic_data_type.hpp"
 
+#include "ros2_pulse/core/diagnostics_mapper.hpp"
 #include "ros2_pulse/core/line_follower.hpp"
 #include "ros2_pulse/core/log_reader.hpp"
 #include "ros2_pulse/core/metrics_mapper.hpp"
+#include "ros2_pulse/core/rate_spec.hpp"
 #include "ros2_pulse/core/topic_statistic_mapper.hpp"
 
 // Set by CMake when rosgraph_monitor_msgs was found at build time. The dependency is optional so
@@ -74,6 +92,8 @@ using ros2_pulse::core::mapWindow;
 using ros2_pulse::core::parseLog;
 using ros2_pulse::core::sMapperOptions;
 using ros2_pulse::core::sMetricSample;
+using diagnostic_msgs::msg::DiagnosticArray;
+using diagnostic_msgs::msg::DiagnosticStatus;
 using statistics_msgs::msg::MetricsMessage;
 using statistics_msgs::msg::StatisticDataPoint;
 using statistics_msgs::msg::StatisticDataType;
@@ -199,7 +219,38 @@ struct sFollowed {
     std::chrono::steady_clock::time_point warned_ambiguous_at{};
     bool warned_ambiguous{false};
     bool warned_stale{false};  // graph_monitor: window_s + poll_period_s >= stale timeout, once
+    // diagnostics: the latest window, when the file was last written (its mtime, so a log left
+    // over from an earlier run reads as old, not as fresh at bridge start), and the probe's
+    // window period from the latest full window.
+    std::optional<ros2_pulse::core::sLogWindow> last{};
+    std::chrono::system_clock::time_point written_at{};
+    double period_s{0.0};
 };
+
+auto mtime(const std::string& path) -> std::chrono::system_clock::time_point {
+    struct stat st {};
+    if (::stat(path.c_str(), &st) != 0) return std::chrono::system_clock::now();
+    const auto since_epoch =
+        std::chrono::seconds(st.st_mtim.tv_sec) + std::chrono::nanoseconds(st.st_mtim.tv_nsec);
+    return std::chrono::system_clock::time_point(
+        std::chrono::duration_cast<std::chrono::system_clock::duration>(since_epoch));
+}
+
+auto toMessage(const ros2_pulse::core::sDiagStatus& s, const std::string& hardware_id)
+    -> DiagnosticStatus {
+    DiagnosticStatus m;
+    m.level = static_cast<DiagnosticStatus::_level_type>(s.level);
+    m.name = s.name;
+    m.message = s.message;
+    m.hardware_id = hardware_id;
+    for (const auto& kv : s.values) {
+        diagnostic_msgs::msg::KeyValue v;
+        v.key = kv.key;
+        v.value = kv.value;
+        m.values.push_back(std::move(v));
+    }
+    return m;
+}
 
 constexpr auto kAmbiguousWarnEvery = std::chrono::minutes(1);
 
@@ -237,6 +288,20 @@ public:
             declare_parameter<std::int64_t>("graph_monitor_stale_timeout_ms", 3000);
         m_poll_period_s = period;
 
+        const bool diagnostics = declare_parameter<bool>("diagnostics", false);
+        const auto diag_topic = declare_parameter<std::string>("diagnostics_topic", "/diagnostics");
+        m_hardware_id = declare_parameter<std::string>("hardware_id", "");
+        m_diag_all_topics = declare_parameter<bool>("diagnostics_all_topics", false);
+        auto expected = declare_parameter<std::string>("expected_file", "");
+        if (diagnostics) {
+            // diagnostic_updater's QoS: reliable, keep last 10 is what the aggregator matches.
+            m_diag_pub = create_publisher<DiagnosticArray>(diag_topic, rclcpp::QoS(10));
+            const char* env = std::getenv("ROS_TOPIC_STATS_EXPECTED");
+            if (expected.empty() && env != nullptr) expected = env;
+            loadSpec(expected);
+            RCLCPP_INFO(get_logger(), "also publishing diagnostic_msgs on %s", diag_topic.c_str());
+        }
+
         m_pub = create_publisher<MetricsMessage>(topic, rclcpp::QoS(10));
         if (graph_monitor) {
 #ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
@@ -258,6 +323,53 @@ public:
     }
 
 private:
+    // Without a spec the warns still map to statuses, but a rule that is not violated has no
+    // status and a warn's side is unknown.
+    void loadSpec(const std::string& path) {
+        if (path.empty()) {
+            RCLCPP_INFO(get_logger(),
+                        "diagnostics: no expected_file (or ROS_TOPIC_STATS_EXPECTED), only the "
+                        "probe's warns and log staleness are reported");
+            return;
+        }
+        std::string text;
+        std::string error;
+        if (ros2_pulse::core::readSpecFile(path.c_str(), text, error)) {
+            m_spec = ros2_pulse::core::parseRateSpec(text, error);
+        }
+        if (!m_spec) {
+            RCLCPP_WARN(get_logger(), "diagnostics: expected_file %s: %s; running without it",
+                        path.c_str(), error.c_str());
+            return;
+        }
+        RCLCPP_INFO(get_logger(), "diagnostics: %zu topic rule(s), %zu node(s) from %s",
+                    m_spec->topics.size(), m_spec->nodes.size(), path.c_str());
+    }
+
+    void publishDiagnostics() {
+        const auto now = std::chrono::system_clock::now();
+        std::vector<ros2_pulse::core::sDiagLog> logs;
+        for (const auto& [path, f] : m_followed) {
+            if (!f.last) continue;
+            ros2_pulse::core::sDiagLog log;
+            log.path = path;
+            log.window = *f.last;
+            log.age_s = std::chrono::duration<double>(now - f.written_at).count();
+            log.period_s = f.period_s;
+            logs.push_back(std::move(log));
+        }
+        ros2_pulse::core::sDiagOptions opts;
+        opts.spec = m_spec ? &*m_spec : nullptr;
+        opts.all_topics = m_diag_all_topics;
+        opts.poll_period_s = m_poll_period_s;
+        DiagnosticArray msg;
+        msg.header.stamp = this->now();
+        for (const auto& s : ros2_pulse::core::mapDiagnostics(logs, opts)) {
+            msg.status.push_back(toMessage(s, m_hardware_id));
+        }
+        m_diag_pub->publish(msg);
+    }
+
     void discover() {
         auto add = [this](const std::string& path) {
             if (m_followed.find(path) == m_followed.end()) {
@@ -272,6 +384,7 @@ private:
     void tick() {
         discover();
         for (auto& [path, f] : m_followed) {
+            bool got_window = false;
             for (const auto& line : f.follower.poll()) {
                 if (line.empty()) continue;
                 if (!f.sniffed) {
@@ -287,6 +400,11 @@ private:
                 }
                 if (!f.jsonl) break;
                 for (const auto& win : parseLog(line + "\n")) {
+                    got_window = true;
+                    if (m_diag_pub) {
+                        f.last = win;
+                        if (!win.partial) f.period_s = win.window_s;
+                    }
                     const bool all = m_opts.metrics_source == eMetricsSource::Metric;
                     for (const auto& s : mapWindow(win, m_opts)) {
                         m_pub->publish(toMessage(s, all));
@@ -296,7 +414,9 @@ private:
 #endif
                 }
             }
+            if (got_window && m_diag_pub) f.written_at = mtime(path);
         }
+        if (m_diag_pub) publishDiagnostics();
     }
 
 #ifdef ROS2_PULSE_HAVE_ROSGRAPH_MONITOR_MSGS
@@ -337,6 +457,10 @@ private:
     // on sim time.
     rclcpp::Clock m_system_clock{RCL_SYSTEM_TIME};
 #endif
+    rclcpp::Publisher<DiagnosticArray>::SharedPtr m_diag_pub;
+    std::optional<ros2_pulse::core::sRateSpec> m_spec;
+    std::string m_hardware_id;
+    bool m_diag_all_topics{false};
     std::int64_t m_gm_stale_timeout_ms{3000};
     double m_poll_period_s{1.0};
 

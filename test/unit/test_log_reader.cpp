@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -290,9 +292,9 @@ TEST(LogReader, JsonlMalformedSkippedAndUnknownKeysTolerated) {
     EXPECT_EQ(windows[0].nodes[0], "/n");
 }
 
-// jsonl warns are DATA for exporters; pulse-check re-derives verdicts from raw rates, so the
-// parser must skip the warns array without choking on its nested objects.
-TEST(LogReader, JsonlWarnsArraySkippedNotParsed) {
+// jsonl warns are DATA for exporters (and pulse_bridge's /diagnostics); pulse-check re-derives
+// verdicts from raw rates. The array must not cost the window its rates.
+TEST(LogReader, JsonlWarnsArrayKeepsRates) {
     const std::string rec =
         "{\"ts_ns\":\"9\",\"window_s\":1.000,\"topics\":[{\"topic\":\"/scan\","
         "\"pub_inter_hz\":1.200000,\"pub_intra_hz\":0.000000}],\"nodes\":[],"
@@ -303,4 +305,57 @@ TEST(LogReader, JsonlWarnsArraySkippedNotParsed) {
     const auto* s = findTopic(windows[0].stats, "/scan");
     ASSERT_NE(s, nullptr);
     EXPECT_DOUBLE_EQ(s->pub_inter_hz, 1.2);
+}
+
+// The warns round-trip through the real emitter, every kind; an unbounded max_hz (omitted key)
+// reads back as infinity.
+TEST(LogReader, JsonlWarnsRoundTrip) {
+    using ros2_pulse::core::eWarnKind;
+    using ros2_pulse::core::sRateWarning;
+    sRateWarning rate;
+    rate.kind = eWarnKind::kTopicRate;
+    rate.name = "/scan";
+    rate.hz = 1.2;
+    rate.min_hz = 18.0;
+    rate.max_hz = 22.0;
+    sRateWarning open_rate = rate;
+    open_rate.name = "/points";
+    open_rate.max_hz = std::numeric_limits<double>::infinity();
+    sRateWarning gap;
+    gap.kind = eWarnKind::kTopicGap;
+    gap.name = "/scan";
+    gap.max_dt_ms = 812.4;
+    gap.max_gap_ms = 60.0;
+    sRateWarning node;
+    node.kind = eWarnKind::kNodeMissing;
+    node.name = "/planner";
+    const std::string text = formatWindowJsonl({}, {}, 9LL, 1.0, /*emit_idle=*/false,
+                                               {rate, open_rate, gap, node});
+    auto windows = parseLog(text);
+    ASSERT_EQ(windows.size(), 1u);
+    const auto& w = windows[0].warns;
+    ASSERT_EQ(w.size(), 4u);
+    EXPECT_EQ(w[0].kind, eWarnKind::kTopicRate);
+    EXPECT_EQ(w[0].name, "/scan");
+    EXPECT_DOUBLE_EQ(w[0].hz, 1.2);
+    EXPECT_DOUBLE_EQ(w[0].min_hz, 18.0);
+    EXPECT_DOUBLE_EQ(w[0].max_hz, 22.0);
+    EXPECT_TRUE(std::isinf(w[1].max_hz));
+    EXPECT_EQ(w[2].kind, eWarnKind::kTopicGap);
+    EXPECT_DOUBLE_EQ(w[2].max_dt_ms, 812.4);
+    EXPECT_DOUBLE_EQ(w[2].max_gap_ms, 60.0);
+    EXPECT_EQ(w[3].kind, eWarnKind::kNodeMissing);
+    EXPECT_EQ(w[3].name, "/planner");
+}
+
+// A warn of a kind this reader does not know is dropped; the window and its other warns stay.
+TEST(LogReader, JsonlUnknownWarnKindDropped) {
+    const std::string rec =
+        "{\"ts_ns\":\"9\",\"window_s\":1.000,\"topics\":[],\"nodes\":[],"
+        "\"warns\":[{\"kind\":\"topic_future\",\"topic\":\"/scan\",\"x\":[1,{}]},"
+        "{\"kind\":\"node_missing\",\"node\":\"/planner\"}]}\n";
+    auto windows = parseLog(rec);
+    ASSERT_EQ(windows.size(), 1u);
+    ASSERT_EQ(windows[0].warns.size(), 1u);
+    EXPECT_EQ(windows[0].warns[0].name, "/planner");
 }

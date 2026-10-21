@@ -425,6 +425,62 @@ auto parseEndpointObject(sCursor& c, sLogWindow& win) -> bool {
     return true;
 }
 
+// One element of "warns", the inverse of formatWindowJsonl's warn objects. An absent max_hz is
+// unbounded (the emitter omits it, JSON has no Infinity). An element of an unknown kind is
+// dropped, not fatal, like an endpoint of an unknown side.
+auto parseWarnObject(sCursor& c, sLogWindow& win) -> bool {
+    if (!consume(c, '{')) {
+        return false;
+    }
+    sRateWarning w;
+    std::string kind;
+    if (!consume(c, '}')) {
+        while (true) {
+            std::string key;
+            if (!parseJsonString(c, key) || !consume(c, ':')) {
+                return false;
+            }
+            if (key == "kind") {
+                if (!parseJsonString(c, kind)) return false;
+            } else if (key == "topic" || key == "node") {
+                if (!parseJsonString(c, w.name)) return false;
+            } else if (key == "hz") {
+                if (!parseJsonNumber(c, w.hz)) return false;
+            } else if (key == "min_hz") {
+                if (!parseJsonNumber(c, w.min_hz)) return false;
+            } else if (key == "max_hz") {
+                if (!parseJsonNumber(c, w.max_hz)) return false;
+            } else if (key == "max_dt_ms") {
+                if (!parseJsonNumber(c, w.max_dt_ms)) return false;
+            } else if (key == "max_gap_ms") {
+                if (!parseJsonNumber(c, w.max_gap_ms)) return false;
+            } else if (!skipJsonValue(c)) {
+                return false;
+            }
+            if (consume(c, ',')) {
+                continue;
+            }
+            if (!consume(c, '}')) {
+                return false;
+            }
+            break;
+        }
+    }
+    if (kind == "topic_rate") {
+        w.kind = eWarnKind::kTopicRate;
+    } else if (kind == "topic_gap") {
+        w.kind = eWarnKind::kTopicGap;
+    } else if (kind == "node_missing") {
+        w.kind = eWarnKind::kNodeMissing;
+    } else {
+        return true;
+    }
+    if (!w.name.empty()) {
+        win.warns.push_back(std::move(w));
+    }
+    return true;
+}
+
 // Text EP line: "EP <topic> <side> id=<n> [node=<node>] inter=<hz> intra=<hz> [max_dt_ms=<ms>]
 // [loaned_hz=<hz>]". key=value after the side, unknown keys ignored, so later additions parse.
 // Returns false (line ignored) when the fixed part or a known value is malformed.
@@ -572,6 +628,24 @@ auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
                         break;
                     }
                 }
+            } else if (key == "warns") {
+                if (!consume(c, '[')) {
+                    return false;
+                }
+                if (!consume(c, ']')) {
+                    while (true) {
+                        if (!parseWarnObject(c, win)) {
+                            return false;
+                        }
+                        if (consume(c, ',')) {
+                            continue;
+                        }
+                        if (!consume(c, ']')) {
+                            return false;
+                        }
+                        break;
+                    }
+                }
             } else if (key == "nodes") {
                 if (!consume(c, '[')) {
                     return false;
@@ -593,9 +667,9 @@ auto parseJsonlWindow(const std::string& line, sLogWindow& win) -> bool {
                     }
                 }
             } else {
-                // Every other top-level key, "warns" included, BY DESIGN, is skipped whole:
-                // pulse-check re-derives verdicts from the raw rates, it never trusts
-                // probe-side warnings (same stance as the text parser skipping WARN lines).
+                // Every other top-level key is skipped whole. ("warns" is read above for
+                // pulse_bridge only: pulse-check re-derives verdicts from the raw rates, it never
+                // trusts probe-side warnings, same stance as the text parser skipping WARN lines.)
                 if (!skipJsonValue(c)) {
                     return false;
                 }

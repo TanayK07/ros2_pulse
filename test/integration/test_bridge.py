@@ -4,6 +4,8 @@
 #
 # The graph-monitor cases (rosgraph_monitor_msgs/TopicStatistics on /topic_statistics) skip when
 # rosgraph_monitor_msgs is not installed; the flag-never-breaks-/statistics case runs either way.
+# The diagnostics cases check the probe's warns arriving as DiagnosticStatus levels on
+# /diagnostics, and a log that stopped producing windows reading ERROR.
 #
 # pulse_bridge integration:a jsonl probe log is republished on /statistics as
 # statistics_msgs/MetricsMessage in the shape rclcpp's built-in topic statistics use (unit "ms",
@@ -24,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe_harness as ph  # noqa: E402  # pyright: ignore[reportMissingImports]
 from ament_index_python.packages import get_package_prefix  # noqa: E402
 
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus  # noqa: E402
 import rclpy  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from statistics_msgs.msg import MetricsMessage, StatisticDataType  # noqa: E402
@@ -452,3 +455,169 @@ def test_graph_monitor_flag_never_breaks_statistics(ros):
             err = stop(proc)
         if not HAVE_GM:
             assert "built without rosgraph_monitor_msgs" in err, err
+
+
+# --- /diagnostics (diagnostic_aggregator) ----------------------------------------------------
+SPEC = ("topics:\n"
+        "  /scan: {min_hz: 18, max_hz: 22}\n"
+        "nodes: [/perception, /planner]\n")
+# /scan received at 1.2 Hz, and the probe's verdict on it: a rate warn and /planner missing.
+DIAG_WIN = ('{"ts_ns":"1782887153899445923","window_s":5.000,"topics":[{"topic":"/scan",'
+            '"pub_inter_hz":1.200000,"pub_intra_hz":0.000000,"recv_inter_hz":1.200000,'
+            '"recv_intra_hz":0.000000,"recv_endpoint_seen":true,"recv_max_dt_ms":812.400}],'
+            '"nodes":["/perception"],"warns":[{"kind":"topic_rate","topic":"/scan",'
+            '"hz":1.200000,"min_hz":18,"max_hz":22},{"kind":"node_missing","node":"/planner"}]}\n')
+
+
+class DiagCollector(Node):
+    def __init__(self, topic="/diagnostics"):
+        super().__init__("pulse_bridge_test_diag_collector")
+        self.msgs = []
+        self.create_subscription(DiagnosticArray, topic, self.msgs.append, 10)
+
+    def wait_until(self, pred, timeout_s):
+        """The latest array's statuses by name, once pred(them) holds, else None."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self.msgs:
+                by_name = {s.name: s for s in self.msgs[-1].status}
+                if pred(by_name):
+                    return by_name
+        return None
+
+
+def kv(status):
+    return {v.key: v.value for v in status.values}
+
+
+def test_diagnostics_maps_probe_warns_to_levels(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "topic_freq.4242.log")
+        spec = os.path.join(d, "expected.yaml")
+        with open(path, "w") as f:
+            f.write(DIAG_WIN)
+        with open(spec, "w") as f:
+            f.write(SPEC)
+        proc = start_bridge(path, ("-p", "diagnostics:=true", "-p", f"expected_file:={spec}",
+                                   "-p", "hardware_id:=robot1"))
+        col = DiagCollector()
+        try:
+            st = col.wait_until(lambda s: "ros2_pulse: /scan (recv)" in s, 10.0)
+            assert st is not None, [m.status for m in col.msgs[-1:]]
+            scan = st["ros2_pulse: /scan (recv)"]
+            assert scan.level == DiagnosticStatus.WARN
+            assert scan.message == "rate 1.200 Hz outside [18, 22]"
+            assert scan.hardware_id == "robot1"
+            assert kv(scan) == {"hz": "1.200", "min_hz": "18", "max_hz": "22",
+                                "max_dt_ms": "812.400"}
+            assert st["ros2_pulse: node /perception"].level == DiagnosticStatus.OK
+            planner = st["ros2_pulse: node /planner"]
+            assert planner.level == DiagnosticStatus.ERROR
+            assert planner.message == "missing"
+            log = st["ros2_pulse: log topic_freq.4242.log"]
+            assert log.level == DiagnosticStatus.OK
+            assert kv(log)["nodes"] == "/perception"
+            assert len(st) == 4, sorted(st)
+
+            # Back in range: the probe stops warning about /scan, its status goes OK.
+            ok = (DIAG_WIN.replace("1.200000", "20.000000")
+                  .replace('"warns":[{"kind":"topic_rate","topic":"/scan","hz":20.000000,'
+                           '"min_hz":18,"max_hz":22},', '"warns":['))
+            with open(path, "a") as f:
+                f.write(ok)
+            st = col.wait_until(
+                lambda s: s.get("ros2_pulse: /scan (recv)", scan).level == DiagnosticStatus.OK,
+                10.0)
+            assert st is not None, "rule did not return to OK"
+            assert kv(st["ros2_pulse: /scan (recv)"])["hz"] == "20.000"
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+def test_diagnostics_stale_log_is_error(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "topic_freq.4242.log")
+        with open(path, "w") as f:
+            f.write(DIAG_WIN)
+        # Last written a minute ago: past two 5 s windows plus a poll.
+        old = time.time() - 60
+        os.utime(path, (old, old))
+        proc = start_bridge(path, ("-p", "diagnostics:=true"))
+        col = DiagCollector()
+        try:
+            st = col.wait_until(lambda s: "ros2_pulse: log topic_freq.4242.log" in s, 10.0)
+            assert st is not None
+            log = st["ros2_pulse: log topic_freq.4242.log"]
+            assert log.level == DiagnosticStatus.ERROR
+            assert log.message.startswith("stale: no window for 6"), log.message
+            # A stale log's window is not judged: no topic or node statuses from it.
+            assert len(st) == 1, sorted(st)
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+def test_diagnostics_all_topics_without_spec(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "topic_freq.4242.log")
+        with open(path, "w") as f:
+            f.write(WIN1)
+        env_spec = os.environ.pop("ROS_TOPIC_STATS_EXPECTED", None)
+        try:
+            proc = start_bridge(path, ("-p", "diagnostics:=true",
+                                       "-p", "diagnostics_all_topics:=true",
+                                       "-p", "diagnostics_topic:=/pulse_diag"))
+        finally:
+            if env_spec is not None:
+                os.environ["ROS_TOPIC_STATS_EXPECTED"] = env_spec
+        col = DiagCollector("/pulse_diag")
+        try:
+            st = col.wait_until(lambda s: "ros2_pulse: /scan (recv)" in s, 10.0)
+            assert st is not None
+            assert sorted(st) == ["ros2_pulse: /scan (pub)", "ros2_pulse: /scan (recv)",
+                                  "ros2_pulse: log topic_freq.4242.log"]
+            recv = st["ros2_pulse: /scan (recv)"]
+            assert recv.level == DiagnosticStatus.OK
+            assert kv(recv) == {"hz": "20.000", "max_dt_ms": "21.284"}
+            assert kv(st["ros2_pulse: /scan (pub)"]) == {"hz": "20.000"}
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+def test_diagnostics_clean_exit_drops_the_log(ros):
+    exit_win = WIN1.replace('"window_s":5.000', '"window_s":0.400,"partial":true')
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "topic_freq.4242.log")
+        with open(path, "w") as f:
+            f.write(WIN1)
+        proc = start_bridge(path, ("-p", "diagnostics:=true",
+                                   "-p", "diagnostics_all_topics:=true"))
+        col = DiagCollector()
+        try:
+            assert col.wait_until(lambda s: "ros2_pulse: log topic_freq.4242.log" in s, 10.0)
+            # The probe's exit window: the process stopped cleanly, nothing to report.
+            with open(path, "a") as f:
+                f.write(exit_win)
+            assert col.wait_until(lambda s: not s, 10.0) is not None, \
+                [s.name for s in col.msgs[-1].status]
+        finally:
+            col.destroy_node()
+            stop(proc)
+
+
+def test_diagnostics_is_off_by_default(ros):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "pulse.jsonl")
+        with open(path, "w") as f:
+            f.write(DIAG_WIN)
+        proc = start_bridge(path)
+        col = Collector("/statistics")
+        try:
+            assert col.wait_for(1, 10.0)
+            assert col.count_publishers("/diagnostics") == 0
+        finally:
+            col.destroy_node()
+            stop(proc)
