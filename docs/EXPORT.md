@@ -34,7 +34,7 @@ default. For an existing Prometheus, skip compose and point a scrape job at the 
 ## Running the exporter directly
 
 ```bash
-pip3 install ros2-pulse-top
+pipx install ros2-pulse-top    # other ways: tools/pulse-top/README.md#install
 pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log, port 9464
 pulse-export '/var/log/topic_freq.*.log'       # a quoted glob; new files are picked up as nodes start
 pulse-export --otlp http://localhost:4318      # also push OTLP/HTTP JSON every 15 s

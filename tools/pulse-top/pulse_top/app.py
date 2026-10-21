@@ -59,6 +59,18 @@ _PULSE_THEMES = (
           variables={"border-blurred": "#d0d7de", "text-muted": "#57606a"}),
 )
 
+# Textual 8.2.5 renamed its ANSI theme from textual-ansi to ansi-dark. Older Textual
+# (down to the 2.0 floor, issue #71) only has the old name.
+_THEME_ALIASES = {"ansi-dark": "textual-ansi"}
+
+
+def builtin_theme(name: str, available) -> str:
+    """`name` as this Textual registers it, or its pre-rename alias."""
+    alias = _THEME_ALIASES.get(name)
+    if alias is not None and name not in available and alias in available:
+        return alias
+    return name
+
 
 def resolve_theme(flag: str | None) -> str:
     """--theme wins, then $PULSE_TOP_THEME (so it can live in .bashrc), then dark."""
@@ -120,7 +132,7 @@ class PulseTopApp(App):
         self._pal = PALETTES[theme]
         for t in _PULSE_THEMES:
             self.register_theme(t)
-        self.theme = self._pal.textual_theme
+        self.theme = builtin_theme(self._pal.textual_theme, self.available_themes)
         self._path = path
         self._poll_s = poll_s
         self._follower = MultiFollower(path)

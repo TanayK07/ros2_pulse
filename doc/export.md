@@ -5,7 +5,7 @@ OpenTelemetry collector. Like pulse-top it only reads files: no ROS dependency, 
 presence, Python standard library only. It ships in the same pip package.
 
 ```bash
-pip3 install ros2-pulse-top
+pipx install ros2-pulse-top   # see the pulse-top page for other ways
 
 pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log on :9464/metrics
 pulse-export '/var/log/topic_freq.*.log'       # a quoted glob, re-read as processes start

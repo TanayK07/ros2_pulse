@@ -41,18 +41,37 @@ jobs:
           AGGREGATE_TEST_RESULTS: 'true'
 
   # pulse-top is a pure log consumer (no ROS dep), so its suite runs on a stock python.
+  # Three Textual sets (issue #71): the newest, the declared floor, and what installs over
+  # Ubuntu 24.04's own python3-pygments 2.17.2 / python3-rich 13.7.1 without replacing them.
   pulse-top:
-    name: pulse-top (pytest)
-    runs-on: ubuntu-22.04
+    name: pulse-top (pytest, ${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: textual latest
+            os: ubuntu-22.04
+            python: '3.10'
+            pins: ''
+          - name: textual floor
+            os: ubuntu-22.04
+            python: '3.10'
+            pins: 'textual==2.0.0'
+          - name: noble system pygments/rich
+            os: ubuntu-24.04
+            python: '3.12'
+            pins: "pygments==2.17.2 rich==13.7.1 'textual<4.1'"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ matrix.python }}
       - name: Install + test
         run: |
           cd tools/pulse-top
-          pip install -e ".[dev]"
+          pip install -e ".[dev]" ${{ matrix.pins }}
+          python -c "import importlib.metadata as m; print({p: m.version(p) for p in ('textual', 'rich', 'pygments')})"
           python -m pytest tests/ -q
 
   # Standalone (no-ROS) lanes on a plain ubuntu image: the pure-C++ core + the gtest suite,

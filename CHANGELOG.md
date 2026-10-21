@@ -5,6 +5,18 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- **pulse-top 0.6.1: Textual floor lowered from 8.2.7 to 2.0 (issue #71).** Every Textual from 4.1
+  on requires pygments>=2.19.2, so on Ubuntu 24.04 `pip install --break-system-packages`
+  replaced Debian's python3-pygments (2.17.2). Textual 2.0 to 4.0 need only rich>=13.3.3, which
+  Debian's python3-rich (13.7.1) satisfies; install with `"textual<4.1"` there to keep both. The
+  terminal theme falls back to Textual's pre-8.2.5 name for it (`textual-ansi`). CI runs the
+  suite on the floor and on the Ubuntu 24.04 set as well as on the latest Textual.
+- **pulse-top installs with pipx in the docs.** pulse-top imports nothing from ROS, so the README,
+  the docs.ros.org guide and docs/EXPORT.md now lead with `pipx install ros2-pulse-top` (in apt on
+  22.04 and 24.04), with `uv tool install`, a `ros:<distro>` container recipe and the capped
+  system-pip line as alternatives, instead of a bare `pip3 install`.
+
 ## [0.7.0] - 2026-10-21
 
 /diagnostics for diagnostic_aggregator, the rest of rclcpp's removed topic statistics (MINIMUM, STDDEV, message_age), graph-monitor messages, per-endpoint counts, and a package guide on docs.ros.org. pulse-top 0.6.0 reads the endpoint fields.
