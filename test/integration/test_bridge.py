@@ -98,6 +98,21 @@ def start_bridge(log_path, extra_params=()):
         env=dict(os.environ), stderr=subprocess.PIPE, text=True)
 
 
+def feed(path, text, node, topic, timeout_s=10.0):
+    """Append text to the log once node sees the bridge's publisher on topic.
+
+    The bridge republishes a window once, on a volatile topic, like rclcpp's own statistics.
+    A window already in the log at startup goes out on the first poll, which can beat
+    discovery on a loaded runner, and a subscriber that matches late never sees it.
+    """
+    deadline = time.monotonic() + timeout_s
+    while node.count_publishers(topic) < 1 and time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.1)
+    assert node.count_publishers(topic) >= 1, f"pulse_bridge never advertised {topic}"
+    with open(path, "a") as f:
+        f.write(text)
+
+
 def stop(proc):
     proc.terminate()
     try:
@@ -110,11 +125,11 @@ def stop(proc):
 def test_jsonl_window_becomes_builtin_shaped_statistics(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(WIN1)
+        open(path, "w").close()
         proc = start_bridge(path)
         col = Collector("/statistics")
         try:
+            feed(path, WIN1, col, "/statistics")
             assert col.wait_for(1, 10.0), "no MetricsMessage on /statistics within 10 s"
             m = col.msgs[0]
             assert m.metrics_source == "/scan"
@@ -145,11 +160,11 @@ def test_jsonl_window_becomes_builtin_shaped_statistics(ros):
 def test_minimum_and_stddev_published_when_measured(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(WIN_PARITY)
+        open(path, "w").close()
         proc = start_bridge(path)
         col = Collector("/statistics")
         try:
+            feed(path, WIN_PARITY, col, "/statistics")
             assert col.wait_for(1, 10.0), "no MetricsMessage on /statistics within 10 s"
             # The topic layout has one message per topic: no message_age beside it.
             assert not col.wait_for(2, 1.0), [m.metrics_source for m in col.msgs]
@@ -173,11 +188,11 @@ def test_minimum_and_stddev_published_when_measured(ros):
 def test_metric_layout_matches_rclcpp_and_adds_message_age(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(WIN_PARITY)
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "metrics_source:=metric"))
         col = Collector("/statistics")
         try:
+            feed(path, WIN_PARITY, col, "/statistics")
             assert col.wait_for(2, 10.0), "expected message_period and message_age"
             by_name = {m.metrics_source: m for m in col.msgs}
             assert set(by_name) == {"message_period", "message_age"}
@@ -209,11 +224,11 @@ def test_metric_layout_always_carries_all_five_points(ros):
     # libstatistics_collector window), so positional consumers never see a short message.
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(WIN1)  # MAXIMUM measured, no MINIMUM / STDDEV
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "metrics_source:=metric"))
         col = Collector("/statistics")
         try:
+            feed(path, WIN1, col, "/statistics")  # MAXIMUM measured, no MINIMUM / STDDEV
             # message_age comes first, so wait for the pair (no age in this window: it is
             # still published, empty, like upstream's collector).
             assert col.wait_for(2, 10.0), "expected message_age and message_period"
@@ -242,11 +257,11 @@ def test_metric_layout_always_carries_all_five_points(ros):
 def test_unit_hz_publishes_rate_directly(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(WIN1)
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "unit:=Hz", "-p", "topic:=/pulse_rates"))
         col = Collector("/pulse_rates")
         try:
+            feed(path, WIN1, col, "/pulse_rates")
             assert col.wait_for(1, 10.0)
             m = col.msgs[0]
             assert m.unit == "Hz"
@@ -319,11 +334,11 @@ class GmCollector(Node):
 def test_graph_monitor_topic_statistics(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(GM_WIN)
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "graph_monitor:=true"))
         col = GmCollector("/topic_statistics")
         try:
+            feed(path, GM_WIN, col, "/topic_statistics")
             assert col.wait_for(1, 10.0), "no TopicStatistics on /topic_statistics within 10 s"
             m = col.msgs[0]
             # Stamped at publish with the system clock, like graph-monitor's shim, not with the
@@ -358,11 +373,11 @@ def test_graph_monitor_stale_warning_follows_window_and_timeout(ros):
             (one_s, ("-p", "graph_monitor_stale_timeout_ms:=1000"), 1)):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "pulse.jsonl")
-            with open(path, "w") as f:
-                f.write(win * 2)
+            open(path, "w").close()
             proc = start_bridge(path, ("-p", "graph_monitor:=true", *params))
             col = GmCollector("/topic_statistics")
             try:
+                feed(path, win * 2, col, "/topic_statistics")
                 assert col.wait_for(1, 10.0)
             finally:
                 col.destroy_node()
@@ -374,11 +389,11 @@ def test_graph_monitor_stale_warning_follows_window_and_timeout(ros):
 def test_graph_monitor_reports_every_node_of_a_container(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(GM_WIN_ENDPOINTS)
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "graph_monitor:=true"))
         col = GmCollector("/topic_statistics")
         try:
+            feed(path, GM_WIN_ENDPOINTS, col, "/topic_statistics")
             assert col.wait_for(1, 10.0), "no TopicStatistics on /topic_statistics within 10 s"
             m = col.msgs[0]
             got = {(s.node_name, s.statistic_type): s for s in m.statistics}
@@ -409,12 +424,12 @@ def test_graph_monitor_reports_every_node_of_a_container(ros):
 def test_graph_monitor_skips_multi_node_process_with_one_warning(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(GM_WIN_TWO_NODES * 2)
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "graph_monitor:=true"))
         gm = GmCollector("/topic_statistics")
         col = Collector("/statistics")
         try:
+            feed(path, GM_WIN_TWO_NODES * 2, col, "/statistics")
             # /statistics still flows; graph-monitor gets nothing it would misattribute.
             assert col.wait_for(2, 10.0)
             assert not gm.wait_for(1, 1.0)
@@ -428,11 +443,11 @@ def test_graph_monitor_skips_multi_node_process_with_one_warning(ros):
 def test_graph_monitor_is_off_by_default(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(GM_WIN)
+        open(path, "w").close()
         proc = start_bridge(path)
         col = Collector("/statistics")
         try:
+            feed(path, GM_WIN, col, "/statistics")
             assert col.wait_for(1, 10.0)
             assert col.count_publishers("/topic_statistics") == 0
         finally:
@@ -444,11 +459,11 @@ def test_graph_monitor_flag_never_breaks_statistics(ros):
     # Runs in both builds. Without rosgraph_monitor_msgs the parameter warns instead of failing.
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(GM_WIN)
+        open(path, "w").close()
         proc = start_bridge(path, ("-p", "graph_monitor:=true"))
         col = Collector("/statistics")
         try:
+            feed(path, GM_WIN, col, "/statistics")
             assert col.wait_for(1, 10.0), "/statistics must flow with graph_monitor set"
         finally:
             col.destroy_node()
@@ -611,11 +626,11 @@ def test_diagnostics_clean_exit_drops_the_log(ros):
 def test_diagnostics_is_off_by_default(ros):
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pulse.jsonl")
-        with open(path, "w") as f:
-            f.write(DIAG_WIN)
+        open(path, "w").close()
         proc = start_bridge(path)
         col = Collector("/statistics")
         try:
+            feed(path, DIAG_WIN, col, "/statistics")
             assert col.wait_for(1, 10.0)
             assert col.count_publishers("/diagnostics") == 0
         finally:
