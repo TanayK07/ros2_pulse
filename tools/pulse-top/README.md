@@ -68,8 +68,9 @@ A ready Prometheus + Grafana stack is in
 
 | Key | Action |
 |-----|--------|
-| `↑`/`↓` | select topic (detail sidebar follows) |
-| `tab` | switch view: Topics · Tree · Nodes · Warns |
+| `←`/`→` | switch view: Topics · Tree · Nodes · Warns (while the tab bar has focus, as at start) |
+| `tab` | move focus between the tab bar and the topic table |
+| `↑`/`↓` | select topic once the table has focus (detail sidebar follows) |
 | `s` | cycle sort: topic / rate / gap |
 | `w` | toggle warns-only filter |
 | `q` | quit |

@@ -125,10 +125,14 @@ Humble and Kilted are in `ros2-testing` and reach the main repository at their n
 install them before that, add the testing repository first:
 
 ```bash
-echo "deb http://packages.ros.org/ros2-testing/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+echo "deb [signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] http://packages.ros.org/ros2-testing/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
   | sudo tee /etc/apt/sources.list.d/ros2-testing.list
 sudo apt update
 ```
+
+On a machine set up before the `ros2-apt-source` package the key is
+`/usr/share/keyrings/ros-archive-keyring.gpg`; use whichever keyring your
+`/etc/apt/sources.list.d/ros2.*` file names.
 
 ### From source
 

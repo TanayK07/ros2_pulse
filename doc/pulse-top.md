@@ -24,8 +24,9 @@ Text and jsonl logs can be mixed. `PULSE_TOP_THEME` sets the default theme.
 
 | Key | Action |
 |---|---|
-| `↑` / `↓` | Select a topic; the detail panel follows. |
-| `tab` | Switch view: Topics, Tree, Nodes, Warns. |
+| `←` / `→` | Switch view: Topics, Tree, Nodes, Warns. Works while the tab bar has focus, as it does at start. |
+| `tab` | Move focus between the tab bar and the topic table. |
+| `↑` / `↓` | Select a topic once the table has focus; the detail panel follows. |
 | `s` | Sort by topic, rate or gap. |
 | `w` | Show only topics with warns. |
 | `q` | Quit. |

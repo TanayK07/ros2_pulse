@@ -27,7 +27,7 @@ event.
   also wraps `rcl_publish_loaned_message` and `rcl_take_loaned_message`.
 - **Destroyed endpoints** have no tracepoint either; `rcl_publisher_fini`,
   `rcl_subscription_fini` and `rcl_node_fini` are wrapped so a removed subscription does not
-  linger as a stalled one.
+  linger as a stalled one. Since 0.7.0.
 
 ## Writing
 

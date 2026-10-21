@@ -5,6 +5,8 @@ Per-topic message rates and node liveness for a running ROS 2 system, inter-proc
 intra-process, measured inside each process on stock binaries. No rebuild, no subscriber, no
 privileges and no network traffic.
 
+This guide describes 0.7.0. Parts marked "Added in version 0.7.0" are not in the 0.6.0 binaries.
+
 .. image:: images/pulse-top-demo.gif
    :alt: pulse-top reading the probe's log, catching a /scan stall and a /cmd_vel rate sag
 

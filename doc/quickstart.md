@@ -13,10 +13,14 @@ Packages are built for Humble, Jazzy and Kilted. If apt cannot find the package 
 still in the `ros2-testing` repository for your distro; add it and retry:
 
 ```bash
-echo "deb http://packages.ros.org/ros2-testing/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
+echo "deb [signed-by=/usr/share/keyrings/ros2-archive-keyring.gpg] http://packages.ros.org/ros2-testing/ubuntu $(. /etc/os-release && echo $UBUNTU_CODENAME) main" \
   | sudo tee /etc/apt/sources.list.d/ros2-testing.list
 sudo apt update
 ```
+
+On a machine set up before the `ros2-apt-source` package the key is
+`/usr/share/keyrings/ros-archive-keyring.gpg`; use whichever keyring your
+`/etc/apt/sources.list.d/ros2.*` file names.
 
 From source instead:
 
@@ -78,7 +82,8 @@ ros2 launch my_robot bringup.launch.py
 ```
 
 A topic out of range, a gap longer than allowed or a missing node now adds a `WARN` line to that
-window, which pulse-top, pulse-export and pulse_bridge all pick up:
+window. pulse-top and pulse-export show it. With jsonl output, pulse_bridge can turn it into
+`/diagnostics` levels (`diagnostics:=true`, since 0.7.0):
 
 ```text
 WARN TOPIC /scan hz=1.200000 expected=[18,22]
