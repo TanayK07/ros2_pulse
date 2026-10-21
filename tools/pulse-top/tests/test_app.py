@@ -98,17 +98,17 @@ class TestRecvLag:
         app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
         async with app.run_test(size=(140, 30)) as pilot:
             await settle(pilot)
-            tab = app.query_one("#warns-list", Static).content.plain
+            tab = static_text(app, "#warns-list")
             assert tab.startswith("recv_lag") and "ago" not in tab
             table = app.query_one("#table", DataTable)
             assert WARN in str(table.get_cell("/scan", "RECV").style)
-            sidebar = app.query_one("#sidebar", Static).content.plain
+            sidebar = static_text(app, "#sidebar")
             assert "recv lag" in sidebar and "-40% over 3w" in sidebar
             with open(pub, "a") as fp, open(sub, "a") as fs:
                 fp.write(window(103.0, [("/scan", 20.0)], window_s=1.0))
                 fs.write(recv_window(103.1, "/scan", 19.8))     # recovered
             await settle(pilot)
-            tab = app.query_one("#warns-list", Static).content.plain
+            tab = static_text(app, "#warns-list")
             assert tab.startswith("recv_lag") and tab.endswith("ago")
             assert WARN not in str(table.get_cell("/scan", "RECV").style)
 
@@ -127,7 +127,7 @@ class TestRecvLag:
         app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
         async with app.run_test(size=(140, 30)) as pilot:
             await settle(pilot)
-            lines = [ln for ln in app.query_one("#warns-list", Static).content.plain.splitlines()
+            lines = [ln for ln in static_text(app, "#warns-list").splitlines()
                      if ln.startswith("recv_lag")]
             assert len(lines) == 2
             assert not lines[0].endswith("ago") and lines[1].endswith("ago")
@@ -143,7 +143,7 @@ class TestRecvLag:
         app = PulseTopApp(str(tmp_path / "topic_freq.*.log"), poll_s=0.05)
         async with app.run_test(size=(140, 30)) as pilot:
             await settle(pilot)
-            sidebar = app.query_one("#sidebar", Static).content.plain
+            sidebar = static_text(app, "#sidebar")
             assert "-40% over 3w (2 sources)" in sidebar
             assert "topic_freq.3.log" in sidebar
 
@@ -156,8 +156,14 @@ def test_window_title_is_the_product_name():
     assert PulseTopApp.TITLE == "pulse-top"
 
 
+def static_text(app, selector) -> str:
+    # str(render()), not Static.content: .content is Textual 6+ and the suite also
+    # runs on the Textual floor (issue #71).
+    return str(app.query_one(selector, Static).render())
+
+
 def topbar(app) -> str:
-    return str(app.query_one("#topbar", Static).render())
+    return static_text(app, "#topbar")
 
 
 def notice(app) -> str:
@@ -249,6 +255,13 @@ class TestIssue59Theme:
                 assert bg.brightness < 0.1
             else:  # terminal: the terminal's own default background, never painted over
                 assert bg.ansi == -1 or app.current_theme.background == "ansi_default"
+
+    def test_ansi_theme_falls_back_to_its_pre_8_2_5_name(self):
+        # Issue #71: Textual before 8.2.5 calls the ANSI theme textual-ansi.
+        from pulse_top.app import builtin_theme
+        assert builtin_theme("ansi-dark", {"ansi-dark": 1, "textual-ansi": 1}) == "ansi-dark"
+        assert builtin_theme("ansi-dark", {"textual-ansi": 1}) == "textual-ansi"
+        assert builtin_theme("pulse-dark", {"pulse-dark": 1}) == "pulse-dark"
 
     def test_light_theme_colours_are_dark_enough_for_white(self):
         # WCAG-ish: every text colour of the light palette must contrast with white.

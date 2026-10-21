@@ -54,7 +54,7 @@ variable is safe to set fleet-wide.
 ## 3. Watch it
 
 ```bash
-pip3 install ros2-pulse-top
+pipx install ros2-pulse-top   # sudo apt install pipx first; see pulse-top for other ways
 pulse-top
 ```
 

@@ -13,7 +13,7 @@ under a nanosecond per message; the whole probe costs about 2 % of workload CPU 
 
 ![pulse-top: live terminal dashboard over the probe's jsonl log, catching a /scan stall and a /cmd_vel rate sag as they happen](docs/assets/pulse-top-demo.gif)
 
-*`pulse-top --demo`: the probe's log, live. Sparklines per topic, intra-process rates, structured warnings with ages. Install: `pip3 install ros2-pulse-top` ([details](tools/pulse-top/)).*
+*`pulse-top --demo`: the probe's log, live. Sparklines per topic, intra-process rates, structured warnings with ages. Install: `pipx install ros2-pulse-top` ([details](tools/pulse-top/#install)).*
 
 [![40-second launch video: the cost of ros2 topic hz and echo, the one-line probe, pulse-top catching a stall, the measured numbers](docs/assets/launch-video-poster.jpg)](https://www.youtube.com/watch?v=kxVW-43J12M)
 
@@ -146,8 +146,11 @@ cd ~/ros2_ws && colcon build --packages-select ros2_pulse && source install/setu
 The [`pulse-top`](tools/pulse-top/) dashboard installs separately, no ROS environment needed:
 
 ```bash
-pip3 install ros2-pulse-top
+sudo apt install pipx && pipx ensurepath   # once
+pipx install ros2-pulse-top
 ```
+
+Or `uv tool install ros2-pulse-top`. Containers and the system-pip route: [pulse-top install](tools/pulse-top/#install).
 
 Requires ROS 2 Humble, Jazzy or Kilted (all three are CI-tested on stock `ros:<distro>` images,
 see [Compatibility](#compatibility)) and a `libtracetools.so` with instrumentation compiled in,
@@ -464,7 +467,7 @@ the logs is reported too, as `OK` with its `hz`.
 
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 
-`pulse-export` ships with pulse-top (`pip3 install ros2-pulse-top`) and serves the probe's logs
+`pulse-export` ships with pulse-top (`pipx install ros2-pulse-top`) and serves the probe's logs
 (text or jsonl) as Prometheus metrics on `:9464/metrics` (per-topic publish and callback rates, gaps,
 `recv_lag`, warns, node liveness, per-process window age), optionally pushing the same series
 over OTLP/HTTP (`--otlp http://collector:4318`). Standard library only, no ROS dependency, no

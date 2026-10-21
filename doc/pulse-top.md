@@ -6,11 +6,39 @@ and works just as well on logs copied off a robot after an incident.
 
 ![pulse-top demo: per-topic rates and sparklines, a /scan stall and a /cmd_vel rate sag](images/pulse-top-demo.gif)
 
+## Install
+
+pulse-top only reads the probe's log files and imports nothing from ROS, so it is happiest in its
+own virtual environment. [pipx](https://pipx.pypa.io/) does that for you and is in apt on Ubuntu
+22.04 and 24.04:
+
+```bash
+sudo apt install pipx && pipx ensurepath   # once, then open a new shell
+pipx install ros2-pulse-top                # pulse-top and pulse-export on your PATH
+```
+
+Or with [uv](https://docs.astral.sh/uv/): `uv tool install ros2-pulse-top`.
+
+In a `ros:<distro>` container (no pip there) install it system-wide:
+
+```bash
+apt-get update && apt-get install -y pipx
+PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install ros2-pulse-top
+```
+
+If you really want the system Python on Ubuntu 24.04, cap Textual so pip keeps Debian's own
+python3-pygments and python3-rich (Textual 4.1 and later need a newer pygments; pulse-top runs
+on Textual 2.0 and later):
+
+```bash
+sudo pip3 install --break-system-packages ros2-pulse-top "textual<4.1"
+```
+
+Debian and Ubuntu's own `python3-textual` (0.1.13 on 22.04 and 24.04) is too old.
+
 ## Run
 
 ```bash
-pip3 install ros2-pulse-top
-
 pulse-top                               # every $TMPDIR/topic_freq.<pid>.log
 pulse-top /path/to/shared.log           # one file
 pulse-top '/var/log/topic_freq.*.log'   # a quoted glob, re-read as processes start

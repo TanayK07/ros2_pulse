@@ -30,7 +30,7 @@ Install
 .. code-block:: bash
 
    sudo apt install ros-$ROS_DISTRO-ros2-pulse   # Humble, Jazzy, Kilted
-   pip3 install ros2-pulse-top                   # optional: pulse-top and pulse-export
+   pipx install ros2-pulse-top                   # optional: pulse-top and pulse-export
 
 Try it
 ------
