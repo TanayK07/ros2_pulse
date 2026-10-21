@@ -1,0 +1,13 @@
+/* sphinx_rtd_theme keeps table cells on one line and scrolls the table sideways. The
+   reference tables here have a sentence per cell, so let them wrap. */
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.rst-content img.diagram {
+  display: block;
+  margin: 1em auto 1.5em;
+  max-width: 100%;
+}

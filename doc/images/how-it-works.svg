@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 320" width="760" height="320" font-family="Lato, 'Helvetica Neue', Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">How ros2_pulse works</title>
+  <desc id="desc">The probe library is preloaded into each ROS 2 process, sits between rclcpp and libtracetools, counts every publish and callback and writes a small log file. pulse-top, pulse-export, pulse_bridge and pulse-check read that file.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7682"/>
+    </marker>
+  </defs>
+
+  <!-- the probed process -->
+  <rect x="16" y="16" width="290" height="252" rx="8" fill="#f7f9fb" stroke="#a9b3bd" stroke-dasharray="5 4"/>
+  <text x="32" y="40" font-size="13" font-weight="bold" fill="#2b2b2b">your ROS 2 process</text>
+  <text x="32" y="57" font-size="11.5" fill="#5b6670">stock binary, no rebuild</text>
+
+  <rect x="46" y="72" width="230" height="44" rx="5" fill="#ffffff" stroke="#8a96a3"/>
+  <text x="161" y="92" font-size="13" text-anchor="middle" fill="#2b2b2b">your nodes</text>
+  <text x="161" y="108" font-size="11.5" text-anchor="middle" fill="#5b6670">rclcpp, rclpy, rcl</text>
+
+  <line x1="161" y1="116" x2="161" y2="138" stroke="#6b7682" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="46" y="140" width="230" height="50" rx="5" fill="#e8f1fa" stroke="#2980b9" stroke-width="1.6"/>
+  <text x="161" y="161" font-size="13" font-weight="bold" text-anchor="middle" fill="#1f5f8b">libros2_pulse.so</text>
+  <text x="161" y="178" font-size="11.5" text-anchor="middle" fill="#3d6f92">LD_PRELOAD: count, then forward</text>
+
+  <line x1="161" y1="190" x2="161" y2="212" stroke="#6b7682" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="46" y="214" width="230" height="44" rx="5" fill="#ffffff" stroke="#8a96a3"/>
+  <text x="161" y="234" font-size="13" text-anchor="middle" fill="#2b2b2b">libtracetools.so</text>
+  <text x="161" y="250" font-size="11.5" text-anchor="middle" fill="#5b6670">ros_trace_* (LTTng still works)</text>
+
+  <text x="161" y="296" font-size="11.5" text-anchor="middle" fill="#5b6670">no subscriber, no DDS traffic, no privileges</text>
+
+  <!-- the log file -->
+  <line x1="276" y1="165" x2="334" y2="165" stroke="#6b7682" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M336,134 h120 l16,16 v46 h-136 z" fill="#fdf6e3" stroke="#c9a227"/>
+  <path d="M456,134 v16 h16" fill="none" stroke="#c9a227"/>
+  <text x="404" y="163" font-size="12.5" text-anchor="middle" fill="#2b2b2b">topic_freq.&lt;pid&gt;.log</text>
+  <text x="404" y="180" font-size="11.5" text-anchor="middle" fill="#7a6420">text or jsonl, per window</text>
+
+  <!-- readers -->
+  <g stroke="#6b7682" stroke-width="1.5" fill="none" marker-end="url(#arrow)">
+    <path d="M472,165 C500,165 500,47 526,47"/>
+    <path d="M472,165 C505,165 505,117 526,117"/>
+    <path d="M472,165 C505,165 505,187 526,187"/>
+    <path d="M472,165 C500,165 500,257 526,257"/>
+  </g>
+
+  <rect x="528" y="24" width="216" height="46" rx="5" fill="#ffffff" stroke="#8a96a3"/>
+  <text x="544" y="44" font-size="13" font-weight="bold" fill="#2b2b2b">pulse-top</text>
+  <text x="544" y="61" font-size="11.5" fill="#5b6670">live terminal dashboard</text>
+
+  <rect x="528" y="94" width="216" height="46" rx="5" fill="#ffffff" stroke="#8a96a3"/>
+  <text x="544" y="114" font-size="13" font-weight="bold" fill="#2b2b2b">pulse-export</text>
+  <text x="544" y="131" font-size="11.5" fill="#5b6670">Prometheus, OTLP, Grafana</text>
+
+  <rect x="528" y="164" width="216" height="46" rx="5" fill="#ffffff" stroke="#8a96a3"/>
+  <text x="544" y="184" font-size="13" font-weight="bold" fill="#2b2b2b">pulse_bridge</text>
+  <text x="544" y="201" font-size="11.5" fill="#5b6670">/statistics and /diagnostics</text>
+
+  <rect x="528" y="234" width="216" height="46" rx="5" fill="#ffffff" stroke="#8a96a3"/>
+  <text x="544" y="254" font-size="13" font-weight="bold" fill="#2b2b2b">pulse-check</text>
+  <text x="544" y="271" font-size="11.5" fill="#5b6670">exit code for CI and watchdogs</text>
+</svg>
