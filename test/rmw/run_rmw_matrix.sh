@@ -18,6 +18,12 @@
 #   zenoh          ros-<distro>-rmw-zenoh-cpp, no DDS at all. Needs the zenoh router
 #                  (rmw_zenohd) up first: rmw_zenoh sessions reach the router at
 #                  tcp/localhost:7447 for discovery by default (multicast scouting off).
+#   zenoh_shm      rmw_zenoh with Zenoh shared memory on for the router and every session
+#                  (ZENOH_CONFIG_OVERRIDE). The SHM message-size threshold drops from 512 to
+#                  8 bytes, otherwise the test messages are too small and the leg would
+#                  silently measure the network path. Proof SHM engaged: the default "lazy"
+#                  mode only creates a segment in /dev/shm on the first SHM send or receive,
+#                  so the leg fails if no new /dev/shm entry appears while it runs.
 #
 # Host usage:      test/rmw/run_rmw_matrix.sh [distro ...]        (default: jazzy)
 # Evidence lands in test/rmw/out/<distro>/<leg>/ (pulse logs, process stderr, daemon logs,
@@ -128,6 +134,38 @@ EOF
     FAILED=1
   fi
   kill "$ROUTER_PID" 2>/dev/null; wait "$ROUTER_PID" 2>/dev/null
+
+  # --- rmw_zenoh + Zenoh shared memory ---
+  mkdir -p "$OUT/zenoh_shm"
+  export ZENOH_CONFIG_OVERRIDE='transport/shared_memory/enabled=true;transport/shared_memory/transport_optimization/message_size_threshold=8'
+  ls -1 /dev/shm | sort > "$OUT/zenoh_shm/dev_shm_before.txt"
+  ros2 run rmw_zenoh_cpp rmw_zenohd > "$OUT/zenoh_shm/router.log" 2>&1 &
+  ROUTER_PID=$!
+  ROUTER_UP=0
+  for _ in $(seq 1 40); do
+    if (exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null; then ROUTER_UP=1; break; fi
+    sleep 0.5
+  done
+  if [ "$ROUTER_UP" = 1 ]; then
+    # Segments can go away when the processes exit, so sample /dev/shm while the leg runs.
+    ( while :; do ls -1 /dev/shm; sleep 1; done ) > "$OUT/zenoh_shm/dev_shm_during.txt" 2>&1 &
+    SAMPLER_PID=$!
+    run_leg zenoh_shm rmw_zenoh_cpp --fixed
+    kill "$SAMPLER_PID" 2>/dev/null; wait "$SAMPLER_PID" 2>/dev/null
+    sort -u "$OUT/zenoh_shm/dev_shm_during.txt" \
+      | comm -13 "$OUT/zenoh_shm/dev_shm_before.txt" - > "$OUT/zenoh_shm/dev_shm_new.txt"
+    echo "---- new /dev/shm entries during the leg (SHM data-path evidence) ----"
+    head -8 "$OUT/zenoh_shm/dev_shm_new.txt"
+    if [ ! -s "$OUT/zenoh_shm/dev_shm_new.txt" ]; then
+      echo "FAIL zenoh_shm: no /dev/shm segment appeared, SHM never engaged"
+      FAILED=1
+    fi
+  else
+    echo "FAIL zenoh_shm: router (rmw_zenohd) never opened tcp/7447, see zenoh_shm/router.log"
+    FAILED=1
+  fi
+  kill "$ROUTER_PID" 2>/dev/null; wait "$ROUTER_PID" 2>/dev/null
+  unset ZENOH_CONFIG_OVERRIDE
 
   # Evidence must belong to the host user, not root, otherwise the next run cannot clean up
   # its own out/ dir. /pulse_src is the host checkout, so its owner IS the host user.
