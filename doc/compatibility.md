@@ -25,7 +25,6 @@ plus an intra-process node, every rate checked at 50 Hz.
 | `rmw_cyclonedds_cpp` | validated |
 | Cyclone DDS with iceoryx shared memory | validated |
 | `rmw_zenoh_cpp` | validated |
-| `rmw_zenoh_cpp` with Zenoh shared memory | validated |
 
 ## Limitations
 
