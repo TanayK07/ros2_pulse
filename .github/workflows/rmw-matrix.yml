@@ -1,0 +1,54 @@
+name: RMW matrix
+
+# test/rmw/run_rmw_matrix.sh on GitHub runners: the probe under Fast DDS, Cyclone DDS (plain and
+# iceoryx SHM), rmw_zenoh and rmw_zenoh with Zenoh shared memory, per distro. It used to be a
+# host-only script; running it here keeps the README matrix re-checked without a local docker
+# run. Only runs when something that can change the outcome changes.
+# Also on main: the rmw packages come from apt, so a distro sync can move them after merge.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'test/rmw/**'
+      - 'test/integration/test_nodes.cpp'
+      - 'test/integration/probe_harness.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/rmw-matrix.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'test/rmw/**'
+      - 'test/integration/test_nodes.cpp'
+      - 'test/integration/probe_harness.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/rmw-matrix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rmw-matrix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rmw-matrix:
+    name: rmw matrix (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [humble, jazzy, kilted]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the matrix
+        run: bash test/rmw/run_rmw_matrix.sh ${{ matrix.distro }}
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmw-matrix-${{ matrix.distro }}
+          path: test/rmw/out/${{ matrix.distro }}
