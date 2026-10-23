@@ -681,6 +681,7 @@ logs under `test/rmw/out/`):
 | `rmw_cyclonedds_cpp` | validated | rmw 1.3.4 (humble) / 2.2.3 (jazzy) / 4.0.2 (kilted), cyclonedds 0.10.5. TOPIC 50.022 / RECV inter 50.020 / RECV intra 50.019 Hz |
 | CycloneDDS + iceoryx SHM | validated¹ | iceoryx-posh 2.0.5 to 2.0.6: `iox-roudi` up, `<SharedMemory><Enable>true</>`, fixed-size UInt64 pair (String is not SHM-eligible). TOPIC 50.002 / RECV inter 50.002 Hz |
 | `rmw_zenoh_cpp` (no DDS in the process at all) | validated | rmw-zenoh-cpp 0.1.9 (humble) / 0.2.9 (jazzy) / 0.6.6 (kilted, [Tier 1 there](https://github.com/ros2/rmw_zenoh/issues/265); the default RMW everywhere is still FastDDS), `rmw_zenohd` router up for discovery. TOPIC 50.000 / RECV inter 50.001 / RECV intra 50.055 Hz |
+| `rmw_zenoh_cpp` + Zenoh shared memory | validated | `transport/shared_memory/enabled=true` on the router and every session, SHM threshold lowered to 8 bytes so the test messages take the SHM path; new `*.zenoh` segments appear in `/dev/shm` during the run. TOPIC 50.002 / RECV inter 50.002 / RECV intra 50.001 Hz |
 
 ¹ What the SHM run proves: both processes attach to RouDi (`roudi.log`), CycloneDDS creates
 iceoryx endpoints for the measured topic in both processes (`Writer's/Reader's topic name will
