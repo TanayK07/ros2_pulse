@@ -21,9 +21,14 @@
 #   zenoh_shm      rmw_zenoh with Zenoh shared memory on for the router and every session
 #                  (ZENOH_CONFIG_OVERRIDE). The SHM message-size threshold drops from 512 to
 #                  8 bytes, otherwise the test messages are too small and the leg would
-#                  silently measure the network path. Proof SHM engaged: the default "lazy"
-#                  mode only creates a segment in /dev/shm on the first SHM send or receive,
-#                  so the leg fails if no new /dev/shm entry appears while it runs.
+#                  silently measure the network path. Zenoh mlock()s every SHM segment it
+#                  creates or opens, so the 48 MiB default pool needs RLIMIT_MEMLOCK above
+#                  docker's inherited 8 MiB (the host side passes --ulimit memlock=-1:-1);
+#                  without it the ShmProvider fails with ENOMEM and rmw_zenoh quietly falls
+#                  back to the network. Proof SHM engaged: no process logs a ShmProvider
+#                  error, and a pool-sized segment shows up in /dev/shm. Zenoh also creates
+#                  small control segments that appear whether or not data uses SHM (an
+#                  intra-only node gets one), so "any new segment" is not evidence.
 #
 # Host usage:      test/rmw/run_rmw_matrix.sh [distro ...]        (default: jazzy)
 # Evidence lands in test/rmw/out/<distro>/<leg>/ (pulse logs, process stderr, daemon logs,
@@ -119,52 +124,76 @@ EOF
   fi
 
   # --- rmw_zenoh: bring the router up first ---
+  # Run rmw_zenohd itself, not through `ros2 run`: before kilted, ros2run does not forward
+  # SIGTERM (ros2/ros2cli#899), so killing the wrapper orphaned the router with 7447 still
+  # bound, and the next leg's router died with EADDRINUSE while the port probe below happily
+  # found the old one.
+  ZENOHD="$(ros2 pkg prefix rmw_zenoh_cpp)/lib/rmw_zenoh_cpp/rmw_zenohd"
+  start_router() { # <log>; sets ROUTER_PID, returns 0 once OUR router accepts on tcp/7447
+    "$ZENOHD" > "$1" 2>&1 &
+    ROUTER_PID=$!
+    for _ in $(seq 1 40); do
+      kill -0 "$ROUTER_PID" 2>/dev/null || return 1
+      if (exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null; then return 0; fi
+      sleep 0.5
+    done
+    return 1
+  }
+  stop_router() { # and wait until 7447 is free, so the next leg cannot reach a stale router
+    kill "$ROUTER_PID" 2>/dev/null; wait "$ROUTER_PID" 2>/dev/null
+    for _ in $(seq 1 20); do
+      (exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null || return 0
+      sleep 0.25
+    done
+    echo "WARN: tcp/7447 still open after the router exited"
+  }
+
   mkdir -p "$OUT/zenoh"
-  ros2 run rmw_zenoh_cpp rmw_zenohd > "$OUT/zenoh/router.log" 2>&1 &
-  ROUTER_PID=$!
-  ROUTER_UP=0
-  for _ in $(seq 1 40); do
-    if (exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null; then ROUTER_UP=1; break; fi
-    sleep 0.5
-  done
-  if [ "$ROUTER_UP" = 1 ]; then
+  if start_router "$OUT/zenoh/router.log"; then
     run_leg zenoh rmw_zenoh_cpp
   else
     echo "FAIL zenoh: router (rmw_zenohd) never opened tcp/7447, see zenoh/router.log"
     FAILED=1
   fi
-  kill "$ROUTER_PID" 2>/dev/null; wait "$ROUTER_PID" 2>/dev/null
+  stop_router
 
   # --- rmw_zenoh + Zenoh shared memory ---
   mkdir -p "$OUT/zenoh_shm"
-  export ZENOH_CONFIG_OVERRIDE='transport/shared_memory/enabled=true;transport/shared_memory/transport_optimization/message_size_threshold=8'
-  ls -1 /dev/shm | sort > "$OUT/zenoh_shm/dev_shm_before.txt"
-  ros2 run rmw_zenoh_cpp rmw_zenohd > "$OUT/zenoh_shm/router.log" 2>&1 &
-  ROUTER_PID=$!
-  ROUTER_UP=0
-  for _ in $(seq 1 40); do
-    if (exec 3<>/dev/tcp/127.0.0.1/7447) 2>/dev/null; then ROUTER_UP=1; break; fi
-    sleep 0.5
-  done
-  if [ "$ROUTER_UP" = 1 ]; then
-    # Segments can go away when the processes exit, so sample /dev/shm while the leg runs.
-    ( while :; do ls -1 /dev/shm; sleep 1; done ) > "$OUT/zenoh_shm/dev_shm_during.txt" 2>&1 &
+  ZENOH_SHM_POOL=50331648 # rmw_zenoh's default transport_optimization/pool_size (48 MiB)
+  SHM_OPT=transport/shared_memory/transport_optimization
+  export ZENOH_CONFIG_OVERRIDE="transport/shared_memory/enabled=true;${SHM_OPT}/message_size_threshold=8;${SHM_OPT}/pool_size=${ZENOH_SHM_POOL}"
+  echo "RLIMIT_MEMLOCK: $(ulimit -l)" | tee "$OUT/zenoh_shm/memlock.txt"
+  if start_router "$OUT/zenoh_shm/router.log"; then
+    # Snapshot after the router is up, so its own segments are not counted as evidence.
+    find /dev/shm -maxdepth 1 -name '*.zenoh' -printf '%f\n' | sort \
+      > "$OUT/zenoh_shm/dev_shm_before.txt"
+    # Segments can go away when the processes exit, so sample /dev/shm (with sizes) while
+    # the leg runs.
+    ( while :; do find /dev/shm -maxdepth 1 -name '*.zenoh' -printf '%s %f\n'; sleep 0.5; done ) \
+      > "$OUT/zenoh_shm/dev_shm_during.txt" 2>&1 &
     SAMPLER_PID=$!
     run_leg zenoh_shm rmw_zenoh_cpp --fixed
     kill "$SAMPLER_PID" 2>/dev/null; wait "$SAMPLER_PID" 2>/dev/null
-    sort -u "$OUT/zenoh_shm/dev_shm_during.txt" \
-      | comm -13 "$OUT/zenoh_shm/dev_shm_before.txt" - > "$OUT/zenoh_shm/dev_shm_new.txt"
-    echo "---- new /dev/shm entries during the leg (SHM data-path evidence) ----"
+    awk 'NR == FNR { before[$1]; next } !($2 in before)' \
+      "$OUT/zenoh_shm/dev_shm_before.txt" "$OUT/zenoh_shm/dev_shm_during.txt" \
+      | sort -u -k2,2 > "$OUT/zenoh_shm/dev_shm_new.txt"
+    echo "---- new /dev/shm segments during the leg (bytes name) ----"
     head -8 "$OUT/zenoh_shm/dev_shm_new.txt"
-    if [ ! -s "$OUT/zenoh_shm/dev_shm_new.txt" ]; then
-      echo "FAIL zenoh_shm: no /dev/shm segment appeared, SHM never engaged"
+    if grep -lE "Error creating (lazy )?ShmProvider" "$OUT"/zenoh_shm/*.stderr.txt; then
+      echo "FAIL zenoh_shm: ShmProvider creation failed in the processes above, data went" \
+           "over the network (see memlock.txt; zenoh mlock()s the whole pool)"
+      FAILED=1
+    elif ! awk -v p="$ZENOH_SHM_POOL" '$1 >= p { f = 1 } END { exit !f }' \
+        "$OUT/zenoh_shm/dev_shm_new.txt"; then
+      echo "FAIL zenoh_shm: no pool-sized (${ZENOH_SHM_POOL} B) segment appeared, the SHM" \
+           "data path never engaged"
       FAILED=1
     fi
   else
     echo "FAIL zenoh_shm: router (rmw_zenohd) never opened tcp/7447, see zenoh_shm/router.log"
     FAILED=1
   fi
-  kill "$ROUTER_PID" 2>/dev/null; wait "$ROUTER_PID" 2>/dev/null
+  stop_router
   unset ZENOH_CONFIG_OVERRIDE
 
   # Evidence must belong to the host user, not root, otherwise the next run cannot clean up
@@ -191,7 +220,8 @@ for d in "${DISTROS[@]}"; do
   # (humble=66 jazzy=22 kilted=79 rolling=42) so evidence stays reproducible.
   DOM=$(( ( $(printf '%s' "$d" | cksum | cut -d' ' -f1) % 90 ) + 10 ))
   # --shm-size: iceoryx RouDi's default mempool layout does not fit docker's 64 MB /dev/shm.
-  docker run --rm --shm-size=1g -e ROS_DOMAIN_ID="$DOM" \
+  # --ulimit memlock: Zenoh mlock()s its 48 MiB SHM pool, docker's inherited limit is 8 MiB.
+  docker run --rm --shm-size=1g --ulimit memlock=-1:-1 -e ROS_DOMAIN_ID="$DOM" \
     -v "$REPO_DIR:/pulse_src:ro" -v "$OUT_DIR:/pulse_out" \
     "ros:$d" bash /pulse_src/test/rmw/run_rmw_matrix.sh --inside "$d" || RC=1
 done
