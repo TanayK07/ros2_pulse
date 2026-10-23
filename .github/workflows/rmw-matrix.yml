@@ -4,7 +4,18 @@ name: RMW matrix
 # iceoryx SHM), rmw_zenoh and rmw_zenoh with Zenoh shared memory, per distro. It used to be a
 # host-only script; running it here keeps the README matrix re-checked without a local docker
 # run. Only runs when something that can change the outcome changes.
+# Also on main: the rmw packages come from apt, so a distro sync can move them after merge.
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'test/rmw/**'
+      - 'test/integration/test_nodes.cpp'
+      - 'test/integration/probe_harness.py'
+      - 'CMakeLists.txt'
+      - '.github/workflows/rmw-matrix.yml'
   pull_request:
     paths:
       - 'src/**'
@@ -15,6 +26,13 @@ on:
       - 'CMakeLists.txt'
       - '.github/workflows/rmw-matrix.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rmw-matrix-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rmw-matrix:
