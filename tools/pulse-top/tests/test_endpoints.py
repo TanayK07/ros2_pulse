@@ -105,12 +105,24 @@ def test_logparser_counts_record_with_bad_endpoint_as_window():
     assert len(wins) == 1 and p.unrecognised == 0
 
 
-def test_partial_flag_and_endpoint_distributions_are_ignored():
-    # Probe additions pulse-top does not use: the window's "partial" flag and a subscription's
-    # own receive distributions. The record must parse exactly as without them.
+def test_endpoint_distributions_are_ignored():
+    # A probe addition pulse-top does not use: a subscription's own receive distributions.
+    # The record must parse exactly as without them.
     rec = json.loads(JSONL)
-    rec["partial"] = True
     rec["endpoints"][1].update({"avg_dt_ms": 100.0, "min_dt_ms": 98.5, "stddev_dt_ms": 0.5,
                                 "dt_count": 49, "age_avg_ms": 1.25, "age_min_ms": -0.5,
                                 "age_max_ms": 3.0, "age_stddev_ms": 0.4, "age_count": 50})
     assert parse_jsonl_line(json.dumps(rec)) == parse_jsonl_line(JSONL)
+
+
+def test_partial_flag_is_parsed_and_changes_nothing_else():
+    # The probe flags its attach and atexit windows "partial", absent on a full one.
+    # pulse-export forgets a process on its exit window. The text format has no flag.
+    rec = json.loads(JSONL)
+    rec["partial"] = True
+    w = parse_jsonl_line(json.dumps(rec))
+    assert w.partial is True
+    w.partial = False
+    assert w == parse_jsonl_line(JSONL)
+    rec["partial"] = "true"  # only a JSON true counts
+    assert parse_jsonl_line(json.dumps(rec)).partial is False

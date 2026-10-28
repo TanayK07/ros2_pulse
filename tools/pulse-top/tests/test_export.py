@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
+import time
 import urllib.request
 from contextlib import redirect_stdout
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -190,6 +192,61 @@ class TestPrometheus:
         assert pid_label(path) == pid
 
 
+def partial(line):
+    r = json.loads(line)
+    r["partial"] = True
+    return json.dumps(r)
+
+
+class TestProcessLifecycle:
+    # ROS2PulseProcessStale reads ros2_pulse_process_last_window_age_seconds as "this process
+    # crashed or hung", so a clean exit and an earlier run's log must not look like one.
+
+    def test_attach_window_starts_the_process(self):
+        ex = Exporter(poll_s=1.0, clock=Clock())
+        ex.ingest(PUB_LOG, partial(PUB_LINE))
+        assert 'ros2_pulse_windows_total{pid="4242"} 1' in render_prometheus(ex.collect())
+
+    def test_exit_window_forgets_the_process(self):
+        ex, clock = two_process_exporter()
+        ex.ingest(PUB_LOG, partial(rec(TS0 + 1_000_000_000, [], nodes=["/lidar"],
+                                       window_s=0.2)))
+        text = render_prometheus(ex.collect())
+        assert 'pid="4242"' not in text
+        assert 'ros2_pulse_process_last_window_age_seconds{pid="5151"}' in text
+        ex.ingest(PUB_LOG, partial(PUB_LINE))  # pid reused: a new process attaches
+        assert 'ros2_pulse_windows_total{pid="4242"} 1' in render_prometheus(ex.collect())
+
+    def test_slow_window_outlives_three_periods(self):
+        # ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=120: the alert needs the age past 360 s, so
+        # the series has to outlive a fixed 300 s.
+        clock = Clock()
+        ex = Exporter(poll_s=1.0, clock=clock)
+        ex.ingest(PUB_LOG, rec(TS0, [], nodes=["/lidar"], window_s=120.0))
+        clock.t += 3 * 120 + 30
+        assert 'ros2_pulse_process_last_window_age_seconds{pid="4242"} 390' in \
+            render_prometheus(ex.collect())
+        clock.t += 120
+        assert 'pid="4242"' not in render_prometheus(ex.collect())
+
+    def test_log_idle_past_the_forget_horizon_is_skipped(self, tmp_path):
+        old, fresh = tmp_path / "topic_freq.1.log", tmp_path / "topic_freq.2.log"
+        for f in (old, fresh):
+            f.write_text(PUB_LINE + "\n")
+        hour_ago = time.time() - 3600
+        os.utime(old, (hour_ago, hour_ago))
+        ex = Exporter(poll_s=1.0, clock=Clock(), skip_idle=True)
+        for f in (old, fresh):
+            ex.ingest(str(f), PUB_LINE)
+        text = render_prometheus(ex.collect())
+        assert 'pid="1"' not in text
+        assert 'ros2_pulse_windows_total{pid="2"} 1' in text
+        with old.open("a") as f:  # the pid is reused and writes again
+            f.write(PUB_LINE + "\n")
+        ex.ingest(str(old), PUB_LINE)
+        assert 'ros2_pulse_windows_total{pid="1"} 1' in render_prometheus(ex.collect())
+
+
 class TestOtlp:
     def test_payload_shape(self):
         ex, _ = two_process_exporter()
@@ -310,6 +367,33 @@ class TestCli:
         monkeypatch.setattr(export.time, "sleep", stop)
         assert export.main([str(log), *argv]) == 0
         assert bound == [("0.0.0.0", port)]
+
+    def test_once_prints_a_log_however_old(self, tmp_path):
+        log = tmp_path / "topic_freq.99.log"
+        log.write_text(PUB_LINE + "\n")
+        os.utime(log, (0, 0))
+        out = io.StringIO()
+        with redirect_stdout(out):
+            assert export.main(["--once", str(log)]) == 0
+        assert 'publish_rate_hertz{pid="99",topic="/scan",path="inter"} 20' in out.getvalue()
+
+    def test_server_skips_logs_left_by_an_earlier_run(self, tmp_path, monkeypatch):
+        # The probe never deletes its log; the follower replays each one on attach.
+        (tmp_path / "topic_freq.1.log").write_text(PUB_LINE + "\n")
+        (tmp_path / "topic_freq.2.log").write_text(PUB_LINE + "\n")
+        os.utime(tmp_path / "topic_freq.1.log", (0, 0))
+        exporters = []
+        monkeypatch.setattr(export, "start_server",
+                            lambda ex, lock, host, p: exporters.append(ex))
+
+        def stop(_s):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(export.time, "sleep", stop)
+        assert export.main([str(tmp_path / "topic_freq.*.log")]) == 0
+        text = render_prometheus(exporters[0].collect())
+        assert 'pid="1"' not in text
+        assert 'ros2_pulse_windows_total{pid="2"} 1' in text
 
 
 class TestTextFormat:

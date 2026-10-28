@@ -11,7 +11,8 @@ What a scrape shows is each process's LATEST window. The probe omits a silent to
 from a window and an absent key means "not measured", so both become an absent
 series here, never a 0 sample. A process that stops flushing keeps only its
 process-level series (age, counters) until it is forgotten, so a dead publisher's
-last rate is never scraped as if it were current.
+last rate is never scraped as if it were current. A jsonl exit window forgets it at
+once, and a log left idle by an earlier run is not read as a live process.
 """
 
 from __future__ import annotations
@@ -42,10 +43,16 @@ DEFAULT_PORT = 10060
 DEFAULT_OTLP_INTERVAL_S = 15.0
 # A process whose last window is older than this (exporter clock) is forgotten
 # entirely, so a stack restarted every few minutes does not grow the scrape forever.
+# A slow window gets four of its periods, so ROS2PulseProcessStale (three periods) can
+# fire before the series goes (pulse_bridge's /diagnostics forgets at the same 300 s).
 FORGET_S = 300.0
 PROM_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 _PID = re.compile(r"topic_freq\.(\d+)\.log")
+
+
+def forget_after_s(window_s: float) -> float:
+    return max(FORGET_S, 4.0 * window_s)
 
 
 def pid_label(path: str) -> str:
@@ -132,12 +139,17 @@ class Exporter:
     `clock` is monotonic seconds (injectable for tests). Ages are measured on the
     exporter's clock, when a window was READ, not from the probe's ts_ns: the two
     may sit on different machines, and a replayed log must not read as hours stale.
+    With `skip_idle`, a log whose mtime is older than the forget horizon is not
+    news: the follower replays every matching file on attach, and the probe never
+    deletes its log, so $TMPDIR holds one per process of every earlier run.
     """
 
     def __init__(self, poll_s: float = 1.0, lag_tol: float = LAG_TOL_DEFAULT,
-                 lag_windows: int = LAG_WINDOWS_DEFAULT, clock=time.monotonic):
+                 lag_windows: int = LAG_WINDOWS_DEFAULT, clock=time.monotonic,
+                 skip_idle: bool = False):
         self.poll_s = poll_s
         self._clock = clock
+        self._skip_idle = skip_idle
         self._procs: dict[str, _Proc] = {}
         self._node_seen: dict[str, float] = {}
         self._skipped = 0
@@ -161,7 +173,14 @@ class Exporter:
     def _ingest_window(self, path: str, window: Window) -> None:
         now = self._clock()
         proc = self._procs.get(path)
+        if proc is not None and window.partial:
+            # A partial window after another window is the probe's atexit flush: a clean
+            # exit, not a stale process. pulse_bridge's /diagnostics drops it the same way.
+            self._forget(path)
+            return
         if proc is None:
+            if self._skip_idle and self._idle_s(path) > forget_after_s(window.window_s):
+                return
             proc = self._procs[path] = _Proc(pid_label(path), window, now)
         proc.window, proc.read_at = window, now
         proc.windows_total += 1
@@ -172,6 +191,18 @@ class Exporter:
         # retained, which would leak one process's receive side into another's series.
         self._state.apply(copy.deepcopy(window), source=path)
 
+    @staticmethod
+    def _idle_s(path: str) -> float:
+        """Wall seconds since the log was last written, as pulse_bridge's diagnostics age it."""
+        try:
+            return time.time() - os.path.getmtime(path)
+        except OSError:
+            return 0.0
+
+    def _forget(self, path: str) -> None:
+        del self._procs[path]
+        self._parsers.pop(path, None)
+
     def _live(self, proc: _Proc, now: float) -> bool:
         """Latest window still current: two of its periods plus one poll of slack,
         so a scrape that lands just before the next flush does not blink the series."""
@@ -179,9 +210,9 @@ class Exporter:
 
     def collect(self) -> list[Metric]:
         now = self._clock()
-        for path in [p for p, pr in self._procs.items() if now - pr.read_at > FORGET_S]:
-            del self._procs[path]
-            self._parsers.pop(path, None)
+        for path in [p for p, pr in self._procs.items()
+                     if now - pr.read_at > forget_after_s(pr.window.window_s)]:
+            self._forget(path)
         for n in [n for n, t in self._node_seen.items() if now - t > FORGET_S]:
             del self._node_seen[n]
 
@@ -421,7 +452,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     follower = MultiFollower(path)
-    exporter = Exporter(poll_s=args.poll, lag_tol=args.lag_tol, lag_windows=args.lag_windows)
+    # --once prints whatever the log holds, however old.
+    exporter = Exporter(poll_s=args.poll, lag_tol=args.lag_tol, lag_windows=args.lag_windows,
+                        skip_idle=not args.once)
     lock = threading.Lock()
 
     def poll() -> None:

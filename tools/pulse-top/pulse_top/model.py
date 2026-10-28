@@ -86,6 +86,9 @@ class Window:
     # Additive (probe 0.7+): empty for older probes and for text logs written without
     # ROS_TOPIC_STATS_ENDPOINTS=1.
     endpoints: list[EndpointWindow] = field(default_factory=list)
+    # jsonl only: the probe's first window after attach and its atexit window. The text
+    # format has no such marker.
+    partial: bool = False
 
 
 def _warn_detail(w: dict) -> str:
@@ -153,7 +156,8 @@ def parse_jsonl_line(line: str) -> Window | None:
             for w in rec.get("warns", [])
         ]
         endpoints = _jsonl_endpoints(rec.get("endpoints"))
-        return Window(ts_ns, window_s, topics, list(rec.get("nodes", [])), warns, endpoints)
+        return Window(ts_ns, window_s, topics, list(rec.get("nodes", [])), warns, endpoints,
+                      partial=rec.get("partial") is True)
     except (KeyError, ValueError, TypeError):
         return None
 
