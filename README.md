@@ -468,7 +468,7 @@ the logs is reported too, as `OK` with its `hz`.
 ### Prometheus, OTLP and Grafana (`pulse-export`)
 
 `pulse-export` ships with pulse-top (`pipx install ros2-pulse-top`) and serves the probe's logs
-(text or jsonl) as Prometheus metrics on `:9464/metrics` (per-topic publish and callback rates, gaps,
+(text or jsonl) as Prometheus metrics on `:10060/metrics` (per-topic publish and callback rates, gaps,
 `recv_lag`, warns, node liveness, per-process window age), optionally pushing the same series
 over OTLP/HTTP (`--otlp http://collector:4318`). Standard library only, no ROS dependency, no
 graph presence. To see a probed robot on a Grafana dashboard:
@@ -477,7 +477,8 @@ graph presence. To see a probed robot on a Grafana dashboard:
 docker compose -f examples/grafana/docker-compose.yml up --build   # then open http://localhost:3000
 ```
 
-Metric names, labels and staleness rules: [docs/EXPORT.md](docs/EXPORT.md).
+Metric names, labels and staleness rules: [docs/EXPORT.md](docs/EXPORT.md). Prometheus alerting
+rules, with promtool unit tests: [examples/prometheus/](examples/prometheus/ros2_pulse_alerts.yml).
 
 ### Expected-rate alerting
 

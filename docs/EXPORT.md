@@ -35,7 +35,7 @@ default. For an existing Prometheus, skip compose and point a scrape job at the 
 
 ```bash
 pipx install ros2-pulse-top    # other ways: tools/pulse-top/README.md#install
-pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log, port 9464
+pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log, port 10060
 pulse-export '/var/log/topic_freq.*.log'       # a quoted glob; new files are picked up as nodes start
 pulse-export --otlp http://localhost:4318      # also push OTLP/HTTP JSON every 15 s
 pulse-export --once /tmp/topic_freq.4242.log   # print the /metrics text once and exit
@@ -44,7 +44,7 @@ pulse-export --once /tmp/topic_freq.4242.log   # print the /metrics text once an
 | Flag | Default | Meaning |
 |---|---|---|
 | `file` | every `$TMPDIR/topic_freq.*.log` | Log path or quoted glob, re-expanded on every poll. |
-| `--port` | `9464` | Prometheus port; `0` disables the HTTP server (OTLP only). |
+| `--port` | `10060` | Prometheus port; `0` disables the HTTP server (OTLP only). 9464 before pulse-top 0.7.0. |
 | `--bind` | `0.0.0.0` | Listen address. Use `127.0.0.1` to keep topic names off the network. |
 | `--poll` | `1.0` | Seconds between log reads. |
 | `--otlp URL` | off | Push OTLP/HTTP JSON here. A bare `http://host:4318` gets `/v1/metrics` appended. |
@@ -80,7 +80,8 @@ records carry no pid). A log with any other name, such as a shared
 Useful queries: `max by (topic) (ros2_pulse_topic_publish_rate_hertz)` is the probe's own
 headline rate (one publish can fire both paths, so the busier one, not the sum);
 `sum by (topic, pid) (ros2_pulse_topic_receive_rate_hertz)` is callbacks per subscribing
-process; `increase(ros2_pulse_warns_total[5m]) > 0` alerts on any probe warn.
+process; `increase(ros2_pulse_warns_total[5m]) > 0` alerts on any probe warn. Ready-made
+rules are under [Alerting](#alerting).
 
 ## What a scrape means
 
@@ -98,6 +99,41 @@ zero:
   another machine or replayed after the fact does not read as hours stale.
 - Scrape at or under the window period (`ROS_TOPIC_STATISTICS_PUBLISH_PERIOD`, 5 s by default).
   A slower scrape skips windows; the counters still count them.
+
+## Alerting
+
+[`examples/prometheus/ros2_pulse_alerts.yml`](../examples/prometheus/ros2_pulse_alerts.yml)
+holds Prometheus alerting rules over these metrics. Add it to `rule_files:` in your
+`prometheus.yml`. CI runs `promtool check rules` on it and `promtool test rules` on
+[`ros2_pulse_alerts_test.yml`](../examples/prometheus/ros2_pulse_alerts_test.yml).
+
+| Alert | Fires when | `for` |
+|---|---|---|
+| `ROS2PulseTopicRate` | The probe reports a `topic_rate` warn. | 15s |
+| `ROS2PulseTopicGap` | The probe reports a `topic_gap` warn. | 15s |
+| `ROS2PulseNodeMissing` | The probe reports a `node_missing` warn. | 15s |
+| `ROS2PulseRecvLag` | A `recv_lag` deficit is exported for a topic. | 15s |
+| `ROS2PulseTopicSilent` | A topic that published in the last 15 minutes has no publish series, or only `0`, while its process still writes windows. | 1m |
+| `ROS2PulseProcessStale` | A process has written no window for three of its window periods. | 15s |
+| `ROS2PulseExporterDown` | `up{job="ros2_pulse"} == 0`. Change the job name to yours. | 1m |
+
+- The three warn alerts need an [expected-rate spec](../README.md#expected-rate-alerting).
+- The `for` durations assume the default 5 s window and a scrape and rule evaluation interval
+  at or under it. A warn shorter than `for` does not fire; `increase(ros2_pulse_warns_total[5m]) > 0`
+  catches it.
+- A stopped publisher has no series to compare with `0`, so `ROS2PulseTopicSilent` compares with
+  the last 15 minutes. It resolves 15 minutes after the topic stops, and it fires for a topic
+  that publishes less than once a minute. Exclude such topics with a `topic!~` matcher.
+- `ROS2PulseProcessStale` also fires on a clean exit. It resolves when pulse-export forgets the
+  process, after five minutes.
+
+Two other ways to get alerted without watching a terminal:
+
+- `pulse_bridge` with `diagnostics:=true` publishes the probe's warns on
+  [`/diagnostics`](../README.md#diagnostic_aggregator-diagnostics), for `diagnostic_aggregator`
+  and `rqt_robot_monitor`.
+- [`pulse-check`](../README.md#expected-rate-alerting) turns the last window into an exit code
+  for a watchdog, systemd or CI.
 
 ## OTLP
 

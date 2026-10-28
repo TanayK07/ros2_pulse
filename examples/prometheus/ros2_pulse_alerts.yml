@@ -1,0 +1,111 @@
+# Prometheus alerting rules for pulse-export. Metric reference: docs/EXPORT.md.
+#
+# Load with `rule_files: [ros2_pulse_alerts.yml]` in prometheus.yml. Checked in CI with
+#   promtool check rules ros2_pulse_alerts.yml
+#   promtool test rules ros2_pulse_alerts_test.yml
+#
+# The `for:` durations assume the probe's default 5 s window and a scrape and evaluation
+# interval at or under it. ROS2PulseExporterDown matches job="ros2_pulse"; change it to the
+# job name in your scrape config.
+
+groups:
+  - name: ros2_pulse
+    rules:
+      # Probe warns. These need an expected-rate spec (ROS_TOPIC_STATS_EXPECTED). The series
+      # holds the latest window's warns, so a warn shorter than `for:` does not fire;
+      # increase(ros2_pulse_warns_total[5m]) > 0 catches those.
+      - alert: ROS2PulseTopicRate
+        expr: ros2_pulse_warn_active{kind="topic_rate"} == 1
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.topic }} rate is outside its expected range (pid {{ $labels.pid }})"
+          description: >-
+            The probe in pid {{ $labels.pid }} reports a topic_rate warn for {{ $labels.topic }}:
+            its rate in the latest window is outside the min_hz or max_hz of the expected-rate
+            spec.
+
+      - alert: ROS2PulseTopicGap
+        expr: ros2_pulse_warn_active{kind="topic_gap"} == 1
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.topic }} has a gap over max_gap_ms (pid {{ $labels.pid }})"
+          description: >-
+            The probe in pid {{ $labels.pid }} reports a topic_gap warn for {{ $labels.topic }}:
+            the largest gap between two messages is over the spec's max_gap_ms. A topic that
+            stopped keeps this warn until it comes back.
+
+      - alert: ROS2PulseNodeMissing
+        expr: ros2_pulse_warn_active{kind="node_missing"} == 1
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.node }} is missing (pid {{ $labels.pid }})"
+          description: >-
+            The probe in pid {{ $labels.pid }} reports {{ $labels.node }} as missing: the node
+            is in the spec's nodes list and none of its endpoints carried traffic recently.
+
+      # recv_lag is derived by pulse-export, not the probe, and needs the publishing and the
+      # subscribing process both probed. The series exists only while the warn is active.
+      - alert: ROS2PulseRecvLag
+        expr: ros2_pulse_topic_recv_lag_deficit_ratio > 0
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.topic }} callbacks lag the publish rate (pid {{ $labels.pid }})"
+          description: >-
+            Subscription callbacks for {{ $labels.topic }} in pid {{ $labels.pid }} run
+            {{ $value | humanizePercentage }} under the topic's publish rate.
+
+      # Absent is not zero: a publisher that stops drops out of the window, so there is no
+      # series to compare with 0. This compares with the last 15 minutes instead, and only
+      # while the process still writes windows (a dead process is ROS2PulseProcessStale).
+      # A topic that publishes less than once a minute trips it; exclude it with topic!~.
+      - alert: ROS2PulseTopicSilent
+        expr: |
+          (
+              max without (path) (max_over_time(ros2_pulse_topic_publish_rate_hertz[15m])) > 0
+            unless
+              max without (path) (ros2_pulse_topic_publish_rate_hertz) > 0
+          )
+          and ignoring (topic)
+            ros2_pulse_process_last_window_age_seconds < 3 * ros2_pulse_process_window_seconds
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.topic }} stopped publishing (pid {{ $labels.pid }})"
+          description: >-
+            Process {{ $labels.pid }} published {{ $labels.topic }} at up to
+            {{ $value | printf "%.3g" }} Hz in the last 15 minutes and has published nothing
+            for at least a minute, while it still writes windows.
+
+      # A crash, a hang or a clean exit. pulse-export forgets a process after five minutes of
+      # silence, which drops these series and resolves the alert.
+      - alert: ROS2PulseProcessStale
+        expr: ros2_pulse_process_last_window_age_seconds > 3 * ros2_pulse_process_window_seconds
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "pid {{ $labels.pid }} stopped writing probe windows"
+          description: >-
+            pulse-export has read no window from pid {{ $labels.pid }} for
+            {{ $value | printf "%.0f" }} s, more than three of its window periods. The process
+            crashed, hung or exited.
+
+      - alert: ROS2PulseExporterDown
+        expr: up{job="ros2_pulse"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "pulse-export at {{ $labels.instance }} is down"
+          description: >-
+            Prometheus has not scraped pulse-export at {{ $labels.instance }} for a minute, so
+            none of the ros2_pulse alerts for it can fire.

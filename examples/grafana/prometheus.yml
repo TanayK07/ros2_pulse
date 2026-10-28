@@ -8,5 +8,5 @@ scrape_configs:
   - job_name: ros2_pulse
     static_configs:
       # the compose service; for pulse-export running on the host instead, use
-      # host.docker.internal:9464 and add extra_hosts: ["host.docker.internal:host-gateway"]
-      - targets: ["pulse-export:9464"]
+      # host.docker.internal:10060 and add extra_hosts: ["host.docker.internal:host-gateway"]
+      - targets: ["pulse-export:10060"]
