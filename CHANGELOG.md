@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Changed
+- **pulse-export listens on port 10060 by default, not 9464.** The
+  [Prometheus default-port list](https://github.com/prometheus/prometheus/wiki/Default-port-allocations)
+  gives 9464 to the OpenTelemetry Node.js exporter, so the two could not run on one host with
+  their defaults. The exporter range 9100-9999 is full, and 10060 is the next free port in the
+  10000+ block that continues it. **To keep an existing scrape config, pass `--port 9464`.**
+  `examples/grafana/` now publishes and scrapes 10060. A changed default, so this ships in a
+  minor pulse-top release (0.7.0), not a patch.
 - **pulse-top 0.6.1: Textual floor lowered from 8.2.7 to 2.0 (issue #71).** Every Textual from 4.1
   on requires pygments>=2.19.2, so on Ubuntu 24.04 `pip install --break-system-packages`
   replaced Debian's python3-pygments (2.17.2). Textual 2.0 to 4.0 need only rich>=13.3.3, which
@@ -16,6 +23,27 @@ All notable changes to this project are documented here. Format follows
   the docs.ros.org guide and docs/EXPORT.md now lead with `pipx install ros2-pulse-top` (in apt on
   22.04 and 24.04), with `uv tool install`, a `ros:<distro>` container recipe and the capped
   system-pip line as alternatives, instead of a bare `pip3 install`.
+
+### Added
+- **Prometheus alerting rules for pulse-export** in `examples/prometheus/ros2_pulse_alerts.yml`:
+  the probe's `topic_rate`, `topic_gap` and `node_missing` warns, a warn that keeps coming back
+  (`info`), a `recv_lag` deficit, a topic that stopped publishing while its process still writes
+  windows, a process that stopped writing windows (`warning`), and pulse-export itself down.
+  `ros2_pulse_alerts_test.yml` tests them on synthetic series, and a new CI job runs
+  `promtool check rules` and `promtool test rules` (Prometheus 3.5.0) and checks the compose
+  example's config. A pytest checks every metric and label the rules use against pulse-export's
+  metric catalogue. `examples/grafana/` loads the rules and evaluates them every 5 s.
+  docs/EXPORT.md has a new Alerting section.
+
+### Fixed
+- **pulse-export no longer scrapes logs of exited processes as live.** The follower replays every
+  matching log on attach and the probe never deletes its log, so on each start pulse-export
+  exported one leftover `topic_freq.<pid>.log` per process of every earlier run with its last
+  rates and an age of 0, until it forgot them five minutes later. It now skips a log whose mtime
+  is older than the forget horizon (`--once` still reads any log). It also forgets a process on
+  its jsonl exit window (`"partial": true` after another window), as pulse_bridge's
+  `/diagnostics` already did, and keeps a process for four window periods when that is longer
+  than five minutes, so a slow window is not forgotten between two flushes.
 
 ## [0.7.0] - 2026-10-21
 

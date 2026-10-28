@@ -12,7 +12,7 @@ changes the log directory; `PULSE_EXPORT_ARGS=--demo` exports a scripted demo gr
 | File | What |
 |---|---|
 | `docker-compose.yml` | pulse-export (built from `tools/pulse-top`), Prometheus, Grafana |
-| `prometheus.yml` | one scrape job, 1 s interval |
+| `prometheus.yml` | one scrape job, 1 s interval; evaluates [`../prometheus/ros2_pulse_alerts.yml`](../prometheus/ros2_pulse_alerts.yml) every 5 s (alerts at http://localhost:9090/alerts) |
 | `provisioning/` | Prometheus datasource (uid `prometheus`) and the dashboard provider |
 | `dashboards/ros2_pulse.json` | the dashboard; import it into any Grafana with a Prometheus datasource |
 

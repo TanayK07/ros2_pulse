@@ -7,7 +7,7 @@ presence, Python standard library only. It ships in the same pip package.
 ```bash
 pipx install ros2-pulse-top   # see the pulse-top page for other ways
 
-pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log on :9464/metrics
+pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log on :10060/metrics
 pulse-export '/var/log/topic_freq.*.log'       # a quoted glob, re-read as processes start
 pulse-export --otlp http://localhost:4318      # also push OTLP/HTTP JSON every 15 s
 pulse-export --once /tmp/topic_freq.4242.log   # print one scrape and exit
@@ -31,7 +31,7 @@ viewing and keeps Grafana's default admin password, so use it for a local look o
 | Flag | Default | Meaning |
 |---|---|---|
 | `file` | every `$TMPDIR/topic_freq.*.log` | Log path or quoted glob. |
-| `--port` | `9464` | Prometheus port. `0` turns the HTTP server off. |
+| `--port` | `10060` | Prometheus port. `0` turns the HTTP server off. 9464 before pulse-top 0.7.0. |
 | `--bind` | `0.0.0.0` | Listen address. `127.0.0.1` keeps topic names off the network. |
 | `--poll` | `1.0` | Seconds between log reads. |
 | `--otlp URL` | off | Push OTLP/HTTP JSON. `/v1/metrics` is appended to a bare host. |
@@ -76,9 +76,21 @@ increase(ros2_pulse_warns_total[5m]) > 0                  # any probe warn
   missing series, never `0`.
 - A process that has not written for two window periods plus one poll loses its topic, node and
   warn series, so a dead publisher's last rate is not reported as current. Its window age keeps
-  growing. After five minutes it is forgotten.
+  growing. After five minutes, or four window periods if longer, it is forgotten. A jsonl log's
+  exit window forgets it at once, and on start a log left by an earlier run is skipped.
 - Scrape at or faster than the window period (5 s by default). Slower scrapes skip windows; the
   counters still count them.
+
+## Alerting
+
+[`examples/prometheus/ros2_pulse_alerts.yml`](https://github.com/TanayK07/ros2_pulse/blob/main/examples/prometheus/ros2_pulse_alerts.yml)
+holds Prometheus alerting rules, with promtool unit tests: probe warns, a warn that keeps coming
+back, `recv_lag`, a topic that stopped publishing, a process that stopped writing, and the
+exporter itself down. The list and
+its caveats are in
+[docs/EXPORT.md](https://github.com/TanayK07/ros2_pulse/blob/main/docs/EXPORT.md#alerting).
+Without Prometheus, {ref}`/diagnostics <bridge-diagnostics>` and
+{ref}`pulse-check <pulse-check>` alert on the same expected-rate spec.
 
 OTLP pushes use the OTLP/HTTP JSON encoding with `service.name=ros2_pulse`, checked against
 OpenTelemetry Collector 0.128.0. The full metric reference is in

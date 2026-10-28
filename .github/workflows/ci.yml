@@ -74,6 +74,37 @@ jobs:
           python -c "import importlib.metadata as m; print({p: m.version(p) for p in ('textual', 'rich', 'pygments')})"
           python -m pytest tests/ -q
 
+  # The example alerting rules (examples/prometheus): syntax, then unit tests on synthetic
+  # series. promtool is a static binary from the official release, checked against its
+  # sha256sums.txt; same version as the Prometheus in examples/grafana/docker-compose.yml.
+  prometheus-rules:
+    name: prometheus rules (promtool)
+    runs-on: ubuntu-latest
+    env:
+      PROM_VERSION: 3.5.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install promtool
+        run: |
+          dir="prometheus-${PROM_VERSION}.linux-amd64"
+          base="https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}"
+          curl -fsSLO "$base/$dir.tar.gz"
+          curl -fsSL "$base/sha256sums.txt" | grep " $dir.tar.gz\$" | sha256sum -c -
+          tar -xzf "$dir.tar.gz" "$dir/promtool"
+          sudo install "$dir/promtool" /usr/local/bin/promtool
+          promtool --version
+      - name: Check and test the rules
+        run: |
+          promtool check rules examples/prometheus/ros2_pulse_alerts.yml
+          promtool test rules examples/prometheus/ros2_pulse_alerts_test.yml
+      - name: Check the compose example's Prometheus config
+        run: |
+          # with the rules where docker-compose.yml mounts them: Prometheus itself loads a
+          # rule_files glob that matches nothing without an error
+          d="$(mktemp -d)"
+          cp examples/grafana/prometheus.yml examples/prometheus/ros2_pulse_alerts.yml "$d"/
+          promtool check config "$d/prometheus.yml"
+
   # Standalone (no-ROS) lanes on a plain ubuntu image: the pure-C++ core + the gtest suite,
   # built via -DROS2_PULSE_STANDALONE=ON (find_package(GTest)/Threads, no ament). One plain
   # "fast" lane plus two sanitizer lanes. All three are reproducible on a stock ubuntu box
