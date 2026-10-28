@@ -94,9 +94,13 @@ zero:
 - A process whose last window is older than two of its periods plus one poll (a crash, a hang,
   a clean exit) loses its topic, node and warn series, so a dead publisher's last rate is not
   scraped as if current. Its `process_last_window_age_seconds` keeps growing, which is the
-  series to alert on. After five minutes of silence it is forgotten entirely.
+  series to alert on. After five minutes of silence, or four window periods if longer, it is
+  forgotten entirely. A jsonl log's exit window (`"partial": true` after another window)
+  forgets it at once.
 - Ages use the exporter's clock at read time, not the probe's `ts_ns`, so a log copied from
-  another machine or replayed after the fact does not read as hours stale.
+  another machine or replayed after the fact does not read as hours stale. On start,
+  pulse-export skips a log whose mtime is older than the forget horizon: the probe never deletes
+  its log, so `$TMPDIR` keeps one from every earlier run. `--once` reads a log however old.
 - Scrape at or under the window period (`ROS_TOPIC_STATISTICS_PUBLISH_PERIOD`, 5 s by default).
   A slower scrape skips windows; the counters still count them.
 
@@ -112,20 +116,33 @@ holds Prometheus alerting rules over these metrics. Add it to `rule_files:` in y
 | `ROS2PulseTopicRate` | The probe reports a `topic_rate` warn. | 15s |
 | `ROS2PulseTopicGap` | The probe reports a `topic_gap` warn. | 15s |
 | `ROS2PulseNodeMissing` | The probe reports a `node_missing` warn. | 15s |
+| `ROS2PulseWarnRecurring` | Six of the last 5 minutes' windows carried a warn of one kind (severity `info`). | none |
 | `ROS2PulseRecvLag` | A `recv_lag` deficit is exported for a topic. | 15s |
 | `ROS2PulseTopicSilent` | A topic that published in the last 15 minutes has no publish series, or only `0`, while its process still writes windows. | 1m |
 | `ROS2PulseProcessStale` | A process has written no window for three of its window periods. | 15s |
 | `ROS2PulseExporterDown` | `up{job="ros2_pulse"} == 0`. Change the job name to yours. | 1m |
 
-- The three warn alerts need an [expected-rate spec](../README.md#expected-rate-alerting).
+- The four warn alerts need an [expected-rate spec](../README.md#expected-rate-alerting).
 - The `for` durations assume the default 5 s window and a scrape and rule evaluation interval
-  at or under it. A warn shorter than `for` does not fire; `increase(ros2_pulse_warns_total[5m]) > 0`
-  catches it.
+  at or under it. A warn shorter than `for` does not fire its own alert; one that keeps coming
+  back fires `ROS2PulseWarnRecurring`, which names the kind but not the topic. A warn that lasts
+  fires both.
 - A stopped publisher has no series to compare with `0`, so `ROS2PulseTopicSilent` compares with
   the last 15 minutes. It resolves 15 minutes after the topic stops, and it fires for a topic
-  that publishes less than once a minute. Exclude such topics with a `topic!~` matcher.
-- `ROS2PulseProcessStale` also fires on a clean exit. It resolves when pulse-export forgets the
-  process, after five minutes.
+  that publishes less than once a minute. Exclude such topics with a `topic!~` matcher. To keep
+  alerting until the topic is back, give it a `min_hz` or `max_gap_ms` rule in the spec: the
+  probe then warns every window while it is silent. With gap tracking on
+  (`ROS_TOPIC_STATS_JITTER=1`), `ros2_pulse_topic_max_gap_seconds{side="pub"}` is the time since
+  the topic's last publish.
+- `ROS2PulseProcessStale` is a `warning`: it cannot tell a crash from a clean exit of a
+  text-format log (only jsonl marks its exit window), or from a process with no reported topics
+  (only `/rosout`, `/parameter_events`, `/diagnostics`, or services) whose nodes have been idle
+  for three windows, since the probe writes no window then. It resolves when pulse-export
+  forgets the process.
+- No rule fires while pulse-export follows no log at all (a glob or `PULSE_LOG_DIR` that matches
+  nothing, the probe not preloaded, the stack stopped). To alert on that, use
+  `ros2_pulse_lines_skipped_total unless on (job, instance) ros2_pulse_process_window_seconds`
+  with `for: 5m`. pulse-export always exports the first series, so this needs no job name.
 
 Two other ways to get alerted without watching a terminal:
 

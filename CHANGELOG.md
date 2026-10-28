@@ -26,11 +26,24 @@ All notable changes to this project are documented here. Format follows
 
 ### Added
 - **Prometheus alerting rules for pulse-export** in `examples/prometheus/ros2_pulse_alerts.yml`:
-  the probe's `topic_rate`, `topic_gap` and `node_missing` warns, a `recv_lag` deficit, a topic
-  that stopped publishing while its process still writes windows, a process that stopped
-  writing windows, and pulse-export itself down. `ros2_pulse_alerts_test.yml` tests them on
-  synthetic series, and a new CI job runs `promtool check rules` and `promtool test rules`
-  (Prometheus 3.5.0). docs/EXPORT.md has a new Alerting section.
+  the probe's `topic_rate`, `topic_gap` and `node_missing` warns, a warn that keeps coming back
+  (`info`), a `recv_lag` deficit, a topic that stopped publishing while its process still writes
+  windows, a process that stopped writing windows (`warning`), and pulse-export itself down.
+  `ros2_pulse_alerts_test.yml` tests them on synthetic series, and a new CI job runs
+  `promtool check rules` and `promtool test rules` (Prometheus 3.5.0) and checks the compose
+  example's config. A pytest checks every metric and label the rules use against pulse-export's
+  metric catalogue. `examples/grafana/` loads the rules and evaluates them every 5 s.
+  docs/EXPORT.md has a new Alerting section.
+
+### Fixed
+- **pulse-export no longer scrapes logs of exited processes as live.** The follower replays every
+  matching log on attach and the probe never deletes its log, so on each start pulse-export
+  exported one leftover `topic_freq.<pid>.log` per process of every earlier run with its last
+  rates and an age of 0, until it forgot them five minutes later. It now skips a log whose mtime
+  is older than the forget horizon (`--once` still reads any log). It also forgets a process on
+  its jsonl exit window (`"partial": true` after another window), as pulse_bridge's
+  `/diagnostics` already did, and keeps a process for four window periods when that is longer
+  than five minutes, so a slow window is not forgotten between two flushes.
 
 ## [0.7.0] - 2026-10-21
 

@@ -97,6 +97,13 @@ jobs:
         run: |
           promtool check rules examples/prometheus/ros2_pulse_alerts.yml
           promtool test rules examples/prometheus/ros2_pulse_alerts_test.yml
+      - name: Check the compose example's Prometheus config
+        run: |
+          # with the rules where docker-compose.yml mounts them: Prometheus itself loads a
+          # rule_files glob that matches nothing without an error
+          d="$(mktemp -d)"
+          cp examples/grafana/prometheus.yml examples/prometheus/ros2_pulse_alerts.yml "$d"/
+          promtool check config "$d/prometheus.yml"
 
   # Standalone (no-ROS) lanes on a plain ubuntu image: the pure-C++ core + the gtest suite,
   # built via -DROS2_PULSE_STANDALONE=ON (find_package(GTest)/Threads, no ament). One plain

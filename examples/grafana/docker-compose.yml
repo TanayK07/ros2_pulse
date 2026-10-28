@@ -32,6 +32,7 @@ services:
     image: prom/prometheus:v3.5.0
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/ros2_pulse_alerts.yml:/etc/prometheus/ros2_pulse_alerts.yml:ro
     ports:
       - "9090:9090"
     restart: unless-stopped

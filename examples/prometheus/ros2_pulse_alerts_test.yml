@@ -146,13 +146,42 @@ tests:
         alertname: ROS2PulseProcessStale
         exp_alerts:
           - exp_labels:
-              severity: critical
+              severity: warning
               job: ros2_pulse
               instance: "robot:10060"
               pid: "7000"
             exp_annotations:
               summary: "pid 7000 stopped writing probe windows"
-              description: "pulse-export has read no window from pid 7000 for 68 s, more than three of its window periods. The process crashed, hung or exited."
+              description: "pulse-export has read no window from pid 7000 for 68 s, more than three of its window periods. The process crashed or hung, exited while writing a text-format log, or has no reported topics and has been idle."
+
+  # ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=120: the threshold is 360 s, past a fixed five
+  # minutes. pulse-export keeps a process for four of its periods (480 s) when that is
+  # longer, so the alert still fires before the series goes stale.
+  - name: a slow window still fires before pulse-export forgets the process
+    interval: 5s
+    input_series:
+      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10060",pid="8000"}'
+        values: '0+5x96 stale'
+      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10060",pid="8000"}'
+        values: '120x96 stale'
+    alert_rule_test:
+      - eval_time: 6m15s
+        alertname: ROS2PulseProcessStale
+        exp_alerts: []
+      - eval_time: 6m20s
+        alertname: ROS2PulseProcessStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: ros2_pulse
+              instance: "robot:10060"
+              pid: "8000"
+            exp_annotations:
+              summary: "pid 8000 stopped writing probe windows"
+              description: "pulse-export has read no window from pid 8000 for 380 s, more than three of its window periods. The process crashed or hung, exited while writing a text-format log, or has no reported topics and has been idle."
+      - eval_time: 8m5s
+        alertname: ROS2PulseProcessStale
+        exp_alerts: []
 
   - name: exporter down after a minute, other jobs ignored
     interval: 5s
@@ -175,3 +204,78 @@ tests:
             exp_annotations:
               summary: "pulse-export at robot:10060 is down"
               description: "Prometheus has not scraped pulse-export at robot:10060 for a minute, so none of the ros2_pulse alerts for it can fire."
+
+  - name: a warn that keeps coming back fires ROS2PulseWarnRecurring, one bad window does not
+    interval: 5s
+    input_series:
+      # pid 5151: /cmd_vel hovers around min_hz, a warn in every other window for 4 minutes
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="5151",kind="topic_rate",topic="/cmd_vel"}'
+        values: '1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale'
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="5151",kind="topic_rate"}'
+        values: '1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13 14 14 15 15 16 16 17 17 18 18 19 19 20 20 21 21 22 22 23 23 24 24 24x12'
+      # pid 4242: one window at 60 s warns topic_gap on 8 topics at once
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="4242",kind="topic_gap"}'
+        values: '2x11 10x48'
+      # pid 6000: /odom warns in every window, so ROS2PulseTopicRate fires as well
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="6000",kind="topic_rate",topic="/odom"}'
+        values: '1x60'
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="6000",kind="topic_rate"}'
+        values: '1+1x60'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ROS2PulseTopicRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: ros2_pulse
+              instance: "robot:10060"
+              pid: "6000"
+              kind: topic_rate
+              topic: /odom
+            exp_annotations:
+              summary: "/odom rate is outside its expected range (pid 6000)"
+              description: "The probe in pid 6000 reports a topic_rate warn for /odom: its rate in the latest window is outside the min_hz or max_hz of the expected-rate spec."
+      - eval_time: 2m
+        alertname: ROS2PulseWarnRecurring
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              job: ros2_pulse
+              instance: "robot:10060"
+              pid: "5151"
+              kind: topic_rate
+            exp_annotations:
+              summary: "topic_rate warns in 12 windows of the last 5 minutes (pid 5151)"
+              description: "The probe in pid 5151 reported topic_rate warns in 12 windows of the last 5 minutes. ros2_pulse_warns_total has no topic label: the probe log names the topic."
+          - exp_labels:
+              severity: info
+              job: ros2_pulse
+              instance: "robot:10060"
+              pid: "6000"
+              kind: topic_rate
+            exp_annotations:
+              summary: "topic_rate warns in 24 windows of the last 5 minutes (pid 6000)"
+              description: "The probe in pid 6000 reported topic_rate warns in 24 windows of the last 5 minutes. ros2_pulse_warns_total has no topic label: the probe log names the topic."
+
+  - name: ROS2PulseWarnRecurring needs a sixth change in the range
+    interval: 5s
+    input_series:
+      # the series appears with the first warn, so the first one is not a change
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="7070",kind="node_missing"}'
+        values: '1x9 2x9 3x9 4x9 5x9 6x7 7x20'
+    alert_rule_test:
+      - eval_time: 285s
+        alertname: ROS2PulseWarnRecurring
+        exp_alerts: []
+      - eval_time: 290s
+        alertname: ROS2PulseWarnRecurring
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              job: ros2_pulse
+              instance: "robot:10060"
+              pid: "7070"
+              kind: node_missing
+            exp_annotations:
+              summary: "node_missing warns in 6 windows of the last 5 minutes (pid 7070)"
+              description: "The probe in pid 7070 reported node_missing warns in 6 windows of the last 5 minutes. ros2_pulse_warns_total has no topic label: the probe log names the topic."

@@ -76,15 +76,17 @@ increase(ros2_pulse_warns_total[5m]) > 0                  # any probe warn
   missing series, never `0`.
 - A process that has not written for two window periods plus one poll loses its topic, node and
   warn series, so a dead publisher's last rate is not reported as current. Its window age keeps
-  growing. After five minutes it is forgotten.
+  growing. After five minutes, or four window periods if longer, it is forgotten. A jsonl log's
+  exit window forgets it at once, and on start a log left by an earlier run is skipped.
 - Scrape at or faster than the window period (5 s by default). Slower scrapes skip windows; the
   counters still count them.
 
 ## Alerting
 
 [`examples/prometheus/ros2_pulse_alerts.yml`](https://github.com/TanayK07/ros2_pulse/blob/main/examples/prometheus/ros2_pulse_alerts.yml)
-holds Prometheus alerting rules, with promtool unit tests: probe warns, `recv_lag`, a topic that
-stopped publishing, a process that stopped writing, and the exporter itself down. The list and
+holds Prometheus alerting rules, with promtool unit tests: probe warns, a warn that keeps coming
+back, `recv_lag`, a topic that stopped publishing, a process that stopped writing, and the
+exporter itself down. The list and
 its caveats are in
 [docs/EXPORT.md](https://github.com/TanayK07/ros2_pulse/blob/main/docs/EXPORT.md#alerting).
 Without Prometheus, {ref}`/diagnostics <bridge-diagnostics>` and

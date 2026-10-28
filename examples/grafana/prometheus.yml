@@ -3,6 +3,12 @@ global:
   # period (ROS_TOPIC_STATISTICS_PUBLISH_PERIOD, 5 s by default; the demo flushes every 1 s)
   # or short windows go unseen. ros2_pulse_warns_total counts every warn either way.
   scrape_interval: 1s
+  # ros2_pulse_alerts.yml's `for:` durations assume rule evaluation at or under the
+  # probe's window period too; the default is 1m.
+  evaluation_interval: 5s
+
+# Next to this file in the container: docker-compose.yml mounts it from ../prometheus/.
+rule_files: [ros2_pulse_alerts.yml]
 
 scrape_configs:
   - job_name: ros2_pulse
