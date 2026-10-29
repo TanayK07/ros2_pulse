@@ -97,7 +97,7 @@ def _metrics() -> dict[str, Metric]:
                "Active recv_lag: (pub - recv) / pub while callbacks sit under the publish rate.",
                "1", ("pid", "topic")),
         Metric("ros2_pulse_warn_active", "gauge",
-               "1 for each warn in the process's latest window "
+               "1 for each kind and topic or node warned in the process's latest window "
                "(topic_rate, topic_gap, node_missing, recv_lag).",
                "1", ("pid", "kind", "topic", "node")),
         Metric("ros2_pulse_node_up", "gauge",
@@ -260,6 +260,12 @@ class Exporter:
                 pid = live[x.source].pid
                 m["ros2_pulse_topic_recv_lag_deficit_ratio"].add(x.deficit, pid, x.topic)
                 warn.add(1, pid, x.kind, x.topic, None)
+        # The probe's warn record carries no side or transport, so a spec with a pub and a recv
+        # rule (or an inter and an intra one) on one topic can warn twice in one window with the
+        # same labels, and so can a node listed twice in the spec. Prometheus rejects a scrape
+        # that repeats a series, so each label set is one sample.
+        for metric in (warn, node_up):
+            metric.samples = list(dict.fromkeys(metric.samples))
         for n, t in self._node_seen.items():
             m["ros2_pulse_node_last_seen_age_seconds"].add(now - t, n)
         m["ros2_pulse_lines_skipped_total"].add(self._skipped)

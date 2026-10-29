@@ -5,7 +5,7 @@ docker compose -f examples/grafana/docker-compose.yml up --build      # from the
 # http://localhost:3000 -> dashboard "ros2_pulse"
 ```
 
-`pulse-export` reads the host's `/tmp/topic_freq.*.log` (run the probe with
+`pulse-export` reads the host's `/tmp/topic_freq.*.log` (the probe's default text format or
 `ROS_TOPIC_STATS_FORMAT=jsonl`), Prometheus scrapes it, Grafana shows it. `PULSE_LOG_DIR`
 changes the log directory; `PULSE_EXPORT_ARGS=--demo` exports a scripted demo graph instead.
 

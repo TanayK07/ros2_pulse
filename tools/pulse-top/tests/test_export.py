@@ -85,7 +85,7 @@ ros2_pulse_topic_max_gap_seconds{pid="4242",topic="/scan",side="pub"} 0.8124
 # TYPE ros2_pulse_topic_loaned_rate_hertz gauge
 # HELP ros2_pulse_topic_recv_lag_deficit_ratio Active recv_lag: (pub - recv) / pub while callbacks sit under the publish rate.
 # TYPE ros2_pulse_topic_recv_lag_deficit_ratio gauge
-# HELP ros2_pulse_warn_active 1 for each warn in the process's latest window (topic_rate, topic_gap, node_missing, recv_lag).
+# HELP ros2_pulse_warn_active 1 for each kind and topic or node warned in the process's latest window (topic_rate, topic_gap, node_missing, recv_lag).
 # TYPE ros2_pulse_warn_active gauge
 ros2_pulse_warn_active{pid="5151",kind="node_missing",node="/localization"} 1
 ros2_pulse_warn_active{pid="5151",kind="topic_rate",topic="/scan"} 1
@@ -175,6 +175,48 @@ class TestPrometheus:
         text = render_prometheus(ex.collect())
         assert 'ros2_pulse_topic_recv_lag_deficit_ratio{pid="5151",topic="/scan"} 0.4' in text
         assert 'ros2_pulse_warn_active{pid="5151",kind="recv_lag",topic="/scan"} 1' in text
+
+    # A spec with a pub and a recv rule on one topic: both sides of one process under min_hz,
+    # and both gaps over max_gap_ms. The probe's warns carry no side, so each pair reads alike.
+    BOTH_SIDES_JSONL = rec(TS0, [{"topic": "/scan", "pub_inter_hz": 5.0, "pub_intra_hz": 0.0,
+                                  "recv_inter_hz": 3.0, "recv_intra_hz": 0.0,
+                                  "recv_endpoint_seen": True}],
+                           warns=[{"kind": "topic_rate", "topic": "/scan", "hz": 5.0, "min_hz": 10},
+                                  {"kind": "topic_rate", "topic": "/scan", "hz": 3.0, "min_hz": 10},
+                                  {"kind": "topic_gap", "topic": "/scan", "max_dt_ms": 900.0,
+                                   "max_gap_ms": 200},
+                                  {"kind": "topic_gap", "topic": "/scan", "max_dt_ms": 950.0,
+                                   "max_gap_ms": 200}])
+    BOTH_SIDES_TEXT = ("# ts_ns=1782887153000000000 window_s=1.000\n"
+                       "PUB /scan inter=5.000000 intra=0.000000\n"
+                       "RECV /scan inter=3.000000 intra=0.000000\n"
+                       "WARN TOPIC /scan hz=5.000000 expected=[10,inf]\n"
+                       "WARN TOPIC /scan hz=3.000000 expected=[10,inf]\n"
+                       "WARN TOPIC /scan max_dt_ms=900.000 expected_max_gap_ms=200\n"
+                       "WARN TOPIC /scan max_dt_ms=950.000 expected_max_gap_ms=200\n"
+                       "\n")
+
+    @pytest.mark.parametrize("fmt", ["jsonl", "text"])
+    def test_pub_and_recv_warn_of_one_kind_is_one_series(self, fmt):
+        ex = Exporter(poll_s=1.0, clock=Clock())
+        log = self.BOTH_SIDES_JSONL if fmt == "jsonl" else self.BOTH_SIDES_TEXT
+        for line in log.split("\n"):
+            ex.ingest(SUB_LOG, line)
+        metrics = ex.collect()
+        text = render_prometheus(metrics)
+        series = [line.rpartition(" ")[0] for line in text.splitlines()
+                  if line and not line.startswith("#")]
+        assert len(series) == len(set(series)), [s for s in series if series.count(s) > 1]
+        assert text.count('ros2_pulse_warn_active{pid="5151",kind="topic_rate",topic="/scan"} 1') == 1
+        assert text.count('ros2_pulse_warn_active{pid="5151",kind="topic_gap",topic="/scan"} 1') == 1
+        # the counter still counts every warn read
+        assert 'ros2_pulse_warns_total{pid="5151",kind="topic_rate"} 2' in text
+        # OTLP reads the same samples, so it has one point per attribute set too
+        scope = otlp_payload(metrics, 1, 0)["resourceMetrics"][0]["scopeMetrics"][0]
+        for entry in scope["metrics"]:
+            points = (entry.get("gauge") or entry["sum"])["dataPoints"]
+            attrs = [json.dumps(p["attributes"]) for p in points]
+            assert len(attrs) == len(set(attrs)), entry["name"]
 
     def test_label_escaping(self):
         clock = Clock()

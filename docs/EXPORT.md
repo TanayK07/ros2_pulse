@@ -67,7 +67,7 @@ records carry no pid). A log with any other name, such as a shared
 | `ros2_pulse_topic_max_gap_seconds` | gauge | `pid`, `topic`, `side` | Largest inter-arrival gap, `side` is `pub` or `recv`. Only with `ROS_TOPIC_STATS_JITTER`. |
 | `ros2_pulse_topic_loaned_rate_hertz` | gauge | `pid`, `topic`, `side` | Middleware-loaned share of the publish (`pub`) or receive (`recv`) rate, a subset of the total. Absent when the window saw no loan. |
 | `ros2_pulse_topic_recv_lag_deficit_ratio` | gauge | `pid`, `topic` | While a `recv_lag` warn is active: `(pub - recv) / pub`. `pid` is the subscriber's. |
-| `ros2_pulse_warn_active` | gauge | `pid`, `kind`, `topic`, `node` | `1` per warn in the latest window: `topic_rate`, `topic_gap`, `node_missing`, `recv_lag`. |
+| `ros2_pulse_warn_active` | gauge | `pid`, `kind`, `topic`, `node` | `1` per warn in the latest window: `topic_rate`, `topic_gap`, `node_missing`, `recv_lag`. The probe's warns name no side or transport, so a `pub` and a `recv` rule warning on one topic in one window are one series. `warns_total` counts both. |
 | `ros2_pulse_node_up` | gauge | `pid`, `node` | `1` if listed in the latest window, `0` if the probe reports it missing. |
 | `ros2_pulse_node_last_seen_age_seconds` | gauge | `node` | Seconds since a window last listed the node. |
 | `ros2_pulse_process_window_seconds` | gauge | `pid` | The process's window period. |
