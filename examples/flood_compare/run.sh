@@ -37,9 +37,11 @@ CTL_PREFIX="$(prefix_of flood_compare_controller)/lib/flood_compare_controller"
 [ -x "$CTL_PREFIX/flood_controller" ] || { echo "run.sh: flood_controller not built (README.md, Build)" >&2; exit 2; }
 
 # The probe settings this test is defined by: 1 s windows, jsonl, one file per process.
+# exec: run in the background, this function is a subshell, and $! must be the node itself or
+# the signals in stop_pid would stop the subshell and leave the node running.
 probed() { # <output file> <command...>
   local out="$1"; shift
-  env LD_PRELOAD="$PULSE_SO" \
+  exec env LD_PRELOAD="$PULSE_SO" \
       ROS_TOPIC_STATISTICS_PUBLISH_PERIOD=1 \
       ROS_TOPIC_STATS_FORMAT=jsonl \
       ROS_TOPIC_STATS_OUTPUT_FILE="$out" \

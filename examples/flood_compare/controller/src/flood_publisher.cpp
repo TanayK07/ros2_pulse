@@ -28,7 +28,13 @@ class FloodPublisher : public rclcpp::Node {
 public:
     FloodPublisher() : rclcpp::Node("flood_publisher") {
         const auto topic = declare_parameter<std::string>("topic", "/cmd_vel");
-        const double rate_hz = declare_parameter<double>("rate_hz", 100.0);
+        // `rate_hz:=200` arrives as an integer, `rate_hz:=200.0` as a double: accept both.
+        rcl_interfaces::msg::ParameterDescriptor any_number;
+        any_number.dynamic_typing = true;
+        const auto& rate = declare_parameter("rate_hz", rclcpp::ParameterValue(100.0), any_number);
+        const double rate_hz = rate.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER
+                                   ? static_cast<double>(rate.get<int64_t>())
+                                   : rate.get<double>();
         if (!(rate_hz > 0.0)) {
             throw std::invalid_argument("rate_hz must be > 0");
         }
