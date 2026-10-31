@@ -4,8 +4,9 @@
 //
 // flood_controller: the subscriber side of the flood test (../README.md). One rclcpp node, one
 // /cmd_vel subscription with the QoS from the `reliability` / `depth` parameters, and a trivial
-// controller step per callback (integrate a unicycle pose). `work_us` adds a busy wait per
-// callback, to make the executor the bottleneck on purpose.
+// controller step per callback (integrate a unicycle pose), on a single-threaded executor.
+// `work_us` adds a busy wait per callback; about 1000 us (a ~1 kHz ceiling) lets a faster flood
+// outrun the callback, which is what makes the depth matter.
 //
 // Run it with the probe preloaded (../run.sh does): every callback is counted by ros2_pulse at
 // rclcpp's callback_start tracepoint, so the probe's callback rate for /cmd_vel is exactly the
@@ -73,12 +74,19 @@ private:
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<FloodController>();
-    rclcpp::spin(node);
-    // stdout, not the logger: rclcpp is shut down by now (SIGINT from run.sh's timeout).
+    // One thread takes every sample, so with work_us > 0 the callback is the bottleneck and the
+    // reader's KEEP_LAST history is what absorbs (or overwrites) the excess.
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin();
+    // stdout, not the logger: rclcpp is shut down by now (SIGINT from run.sh).
     std::printf("flood_controller: %llu callbacks, %s\n",
                 static_cast<unsigned long long>(node->callbacks()), node->pose().c_str());
     std::fflush(stdout);
+    executor.remove_node(node);
     node.reset();
-    rclcpp::shutdown();
+    if (rclcpp::ok()) {
+        rclcpp::shutdown();
+    }
     return 0;
 }
