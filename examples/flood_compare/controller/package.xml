@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>flood_compare_controller</name>
+  <version>0.0.1</version>
+  <description>
+    Example only, not released: a minimal rclcpp /cmd_vel controller (and a reference flood
+    publisher) with QoS reliability and depth set by parameters, for lining up a wire-rate
+    capture with ros2_pulse's per-process publish and callback rates. See ../README.md.
+  </description>
+  <maintainer email="95276223+TanayK07@users.noreply.github.com">Tanay Kedia</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <!-- run.sh preloads the probe; it is not linked. -->
+  <exec_depend>ros2_pulse</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

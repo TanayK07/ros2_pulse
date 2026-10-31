@@ -25,6 +25,12 @@ All notable changes to this project are documented here. Format follows
   system-pip line as alternatives, instead of a bare `pip3 install`.
 
 ### Added
+- **`examples/flood_compare/`: wire rate vs probe rates, per window.** A minimal rclcpp `/cmd_vel`
+  controller with QoS reliability and depth as parameters (its own example package, not part of
+  the ros2_pulse build), `run.sh` to run it under the probe for the six reliable / best effort x
+  depth 1, 10, 100 combos with 1 s jsonl windows, and `compare.py` (stdlib) to line a wire
+  capture's CSV up with the probe's publish and callback rates window by window. A new CI
+  workflow runs its tests and builds and runs the controller under the probe on Jazzy.
 - **Prometheus alerting rules for pulse-export** in `examples/prometheus/ros2_pulse_alerts.yml`:
   the probe's `topic_rate`, `topic_gap` and `node_missing` warns, a warn that keeps coming back
   (`info`), a `recv_lag` deficit, a topic that stopped publishing while its process still writes
