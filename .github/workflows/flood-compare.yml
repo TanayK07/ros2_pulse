@@ -1,0 +1,84 @@
+name: flood_compare example
+
+# examples/flood_compare (wire rate vs probe rates, per window): compare.py's pytest on a stock
+# python, and the example's controller package built next to the probe in ros:jazzy and run end
+# to end with the reference publisher, so run.sh's probe settings and compare.py's reading of
+# real probe output stay checked. The example package is outside the main build (colcon stops
+# crawling at the repo's package.xml); this is the only place it is compiled.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/flood_compare/**'
+      - 'src/**'
+      - 'include/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/flood-compare.yml'
+  pull_request:
+    paths:
+      - 'examples/flood_compare/**'
+      - 'src/**'
+      - 'include/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/flood-compare.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flood-compare-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare-py:
+    name: flood_compare (compare.py, python ${{ matrix.python }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.8', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: pytest
+        run: |
+          pip install pytest
+          python -m pytest examples/flood_compare -q
+
+  end-to-end:
+    name: flood_compare (jazzy, controller + probe end to end)
+    runs-on: ubuntu-latest
+    container: ros:jazzy
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ros2_pulse and the example controller
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --base-paths . examples/flood_compare/controller \
+            --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
+      - name: Two combos with the reference publisher at 200 Hz
+        run: |
+          source install/setup.bash
+          # run.sh's defaults otherwise (rmw_fastrtps_cpp, UDPv4); one short repeat. WORK_US=0:
+          # this job checks the plumbing (every published message is counted as a callback),
+          # not the effect. With the scenario's 1000 us, best effort depth 1 already falls 15-25 %
+          # behind at 200 Hz on a shared 2-vCPU runner, which is the gap the test is about.
+          export OUT="$PWD/flood_out" PUB_HZ=200 REPEATS=1 WORK_US=0
+          bash examples/flood_compare/run.sh reliable 10 8
+          bash examples/flood_compare/run.sh best_effort 1 8
+          grep -h 'flood_publisher: sent' "$OUT"/*/publisher.log
+          # no wire capture here: the gate compares callbacks with the probe's publish rate
+          python3 examples/flood_compare/compare.py "$OUT" --csv "$OUT/table.csv" \
+            --totals-csv "$OUT/totals.csv" --max-diff-pct 10
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flood-compare-jazzy
+          path: flood_out
