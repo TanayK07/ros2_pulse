@@ -65,11 +65,14 @@ jobs:
       - name: Two combos with the reference publisher at 200 Hz
         run: |
           source install/setup.bash
-          export OUT="$PWD/flood_out" PUB_HZ=200
+          # run.sh's defaults otherwise (rmw_fastrtps_cpp, UDPv4, WORK_US=1000); one short repeat
+          export OUT="$PWD/flood_out" PUB_HZ=200 REPEATS=1
           bash examples/flood_compare/run.sh reliable 10 8
           bash examples/flood_compare/run.sh best_effort 1 8
+          grep -h 'flood_publisher: sent' "$OUT"/*/publisher.log
           # no wire capture here: the gate compares callbacks with the probe's publish rate
-          python3 examples/flood_compare/compare.py "$OUT" --csv "$OUT/table.csv" --max-diff-pct 10
+          python3 examples/flood_compare/compare.py "$OUT" --csv "$OUT/table.csv" \
+            --totals-csv "$OUT/totals.csv" --max-diff-pct 10
       - name: Upload the run
         if: always()
         uses: actions/upload-artifact@v4
