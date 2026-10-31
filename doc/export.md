@@ -7,7 +7,7 @@ presence, Python standard library only. It ships in the same pip package.
 ```bash
 pipx install ros2-pulse-top   # see the pulse-top page for other ways
 
-pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log on :10060/metrics
+pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log on :10061/metrics
 pulse-export '/var/log/topic_freq.*.log'       # a quoted glob, re-read as processes start
 pulse-export --otlp http://localhost:4318      # also push OTLP/HTTP JSON every 15 s
 pulse-export --once /tmp/topic_freq.4242.log   # print one scrape and exit
@@ -31,7 +31,7 @@ viewing and keeps Grafana's default admin password, so use it for a local look o
 | Flag | Default | Meaning |
 |---|---|---|
 | `file` | every `$TMPDIR/topic_freq.*.log` | Log path or quoted glob. |
-| `--port` | `10060` | Prometheus port. `0` turns the HTTP server off. 9464 before pulse-top 0.7.0. |
+| `--port` | `10061` | Prometheus port. `0` turns the HTTP server off. 9464 before pulse-top 0.7.0. |
 | `--bind` | `0.0.0.0` | Listen address. `127.0.0.1` keeps topic names off the network. |
 | `--poll` | `1.0` | Seconds between log reads. |
 | `--otlp URL` | off | Push OTLP/HTTP JSON. `/v1/metrics` is appended to a bare host. |

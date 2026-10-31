@@ -39,7 +39,7 @@ from .reader import MultiFollower, default_log_path
 # The Prometheus default-port list (github.com/prometheus/prometheus/wiki/Default-port-allocations)
 # gives 9464 to the OpenTelemetry Node.js exporter. 9100-9999 is full, so this is the next
 # free port in the 10000+ block that continues it.
-DEFAULT_PORT = 10060
+DEFAULT_PORT = 10061
 DEFAULT_OTLP_INTERVAL_S = 15.0
 # A process whose last window is older than this (exporter clock) is forgotten
 # entirely, so a stack restarted every few minutes does not grow the scrape forever.

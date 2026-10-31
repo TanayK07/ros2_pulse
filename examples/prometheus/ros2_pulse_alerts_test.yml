@@ -14,19 +14,19 @@ tests:
     interval: 5s
     input_series:
       # /cmd_vel out of range from 10 s to 35 s
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="5151",kind="topic_rate",topic="/cmd_vel"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="5151",kind="topic_rate",topic="/cmd_vel"}'
         values: '_x2 1x5 stale'
       # a gap in a single window: never fires
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="4242",kind="topic_gap",topic="/scan"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="4242",kind="topic_gap",topic="/scan"}'
         values: '_x2 1 stale'
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="4242",kind="topic_gap",topic="/odom"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="4242",kind="topic_gap",topic="/odom"}'
         values: '1x8'
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="5151",kind="node_missing",node="/localization"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="5151",kind="node_missing",node="/localization"}'
         values: '1x8'
       # pulse-export also writes recv_lag as a warn; only ROS2PulseRecvLag alerts on it
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="5151",kind="recv_lag",topic="/camera/image_raw"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="5151",kind="recv_lag",topic="/camera/image_raw"}'
         values: '1x8'
-      - series: 'ros2_pulse_topic_recv_lag_deficit_ratio{job="ros2_pulse",instance="robot:10060",pid="5151",topic="/camera/image_raw"}'
+      - series: 'ros2_pulse_topic_recv_lag_deficit_ratio{job="ros2_pulse",instance="robot:10061",pid="5151",topic="/camera/image_raw"}'
         values: '0.4x8'
     alert_rule_test:
       - eval_time: 20s
@@ -38,7 +38,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "5151"
               kind: topic_rate
               topic: /cmd_vel
@@ -54,7 +54,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "4242"
               kind: topic_gap
               topic: /odom
@@ -67,7 +67,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "5151"
               kind: node_missing
               node: /localization
@@ -83,7 +83,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "5151"
               topic: /camera/image_raw
             exp_annotations:
@@ -95,24 +95,24 @@ tests:
     input_series:
       # pid 4242 keeps writing windows. /scan leaves them at 30 s (absent, not zero),
       # /odom reads 0 from 30 s (ROS_PULSE_EMIT_IDLE=1), /imu keeps publishing.
-      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10060",pid="4242",topic="/scan",path="inter"}'
+      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10061",pid="4242",topic="/scan",path="inter"}'
         values: '20x5 stale'
-      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10060",pid="4242",topic="/scan",path="intra"}'
+      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10061",pid="4242",topic="/scan",path="intra"}'
         values: '0x5 stale'
-      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10060",pid="4242",topic="/odom",path="inter"}'
+      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10061",pid="4242",topic="/odom",path="inter"}'
         values: '50x5 0x30'
-      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10060",pid="4242",topic="/imu",path="inter"}'
+      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10061",pid="4242",topic="/imu",path="inter"}'
         values: '200x36'
-      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10060",pid="4242"}'
+      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10061",pid="4242"}'
         values: '2x36'
-      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10060",pid="4242"}'
+      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10061",pid="4242"}'
         values: '5x36'
       # pid 7000 dies at 30 s: its topic goes and its window age grows
-      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10060",pid="7000",topic="/map",path="inter"}'
+      - series: 'ros2_pulse_topic_publish_rate_hertz{job="ros2_pulse",instance="robot:10061",pid="7000",topic="/map",path="inter"}'
         values: '1x5 stale'
-      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10060",pid="7000"}'
+      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10061",pid="7000"}'
         values: '2x5 3+5x30'
-      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10060",pid="7000"}'
+      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10061",pid="7000"}'
         values: '5x36'
     alert_rule_test:
       - eval_time: 60s
@@ -124,7 +124,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "4242"
               topic: /scan
             exp_annotations:
@@ -133,7 +133,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "4242"
               topic: /odom
             exp_annotations:
@@ -148,7 +148,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "7000"
             exp_annotations:
               summary: "pid 7000 stopped writing probe windows"
@@ -160,9 +160,9 @@ tests:
   - name: a slow window still fires before pulse-export forgets the process
     interval: 5s
     input_series:
-      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10060",pid="8000"}'
+      - series: 'ros2_pulse_process_last_window_age_seconds{job="ros2_pulse",instance="robot:10061",pid="8000"}'
         values: '0+5x96 stale'
-      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10060",pid="8000"}'
+      - series: 'ros2_pulse_process_window_seconds{job="ros2_pulse",instance="robot:10061",pid="8000"}'
         values: '120x96 stale'
     alert_rule_test:
       - eval_time: 6m15s
@@ -174,7 +174,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "8000"
             exp_annotations:
               summary: "pid 8000 stopped writing probe windows"
@@ -186,7 +186,7 @@ tests:
   - name: exporter down after a minute, other jobs ignored
     interval: 5s
     input_series:
-      - series: 'up{job="ros2_pulse",instance="robot:10060"}'
+      - series: 'up{job="ros2_pulse",instance="robot:10061"}'
         values: '1x5 0x20'
       - series: 'up{job="node",instance="robot:9100"}'
         values: '0x25'
@@ -200,26 +200,26 @@ tests:
           - exp_labels:
               severity: critical
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
             exp_annotations:
-              summary: "pulse-export at robot:10060 is down"
-              description: "Prometheus has not scraped pulse-export at robot:10060 for a minute, so none of the ros2_pulse alerts for it can fire."
+              summary: "pulse-export at robot:10061 is down"
+              description: "Prometheus has not scraped pulse-export at robot:10061 for a minute, so none of the ros2_pulse alerts for it can fire."
 
   - name: a warn that keeps coming back fires ROS2PulseWarnRecurring, one bad window does not
     interval: 5s
     input_series:
       # pid 5151: /cmd_vel hovers around min_hz, a warn in every other window for 4 minutes
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="5151",kind="topic_rate",topic="/cmd_vel"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="5151",kind="topic_rate",topic="/cmd_vel"}'
         values: '1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale 1 stale'
-      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="5151",kind="topic_rate"}'
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10061",pid="5151",kind="topic_rate"}'
         values: '1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13 14 14 15 15 16 16 17 17 18 18 19 19 20 20 21 21 22 22 23 23 24 24 24x12'
       # pid 4242: one window at 60 s warns topic_gap on 8 topics at once
-      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="4242",kind="topic_gap"}'
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10061",pid="4242",kind="topic_gap"}'
         values: '2x11 10x48'
       # pid 6000: /odom warns in every window, so ROS2PulseTopicRate fires as well
-      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10060",pid="6000",kind="topic_rate",topic="/odom"}'
+      - series: 'ros2_pulse_warn_active{job="ros2_pulse",instance="robot:10061",pid="6000",kind="topic_rate",topic="/odom"}'
         values: '1x60'
-      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="6000",kind="topic_rate"}'
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10061",pid="6000",kind="topic_rate"}'
         values: '1+1x60'
     alert_rule_test:
       - eval_time: 4m
@@ -228,7 +228,7 @@ tests:
           - exp_labels:
               severity: warning
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "6000"
               kind: topic_rate
               topic: /odom
@@ -241,7 +241,7 @@ tests:
           - exp_labels:
               severity: info
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "5151"
               kind: topic_rate
             exp_annotations:
@@ -250,7 +250,7 @@ tests:
           - exp_labels:
               severity: info
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "6000"
               kind: topic_rate
             exp_annotations:
@@ -261,7 +261,7 @@ tests:
     interval: 5s
     input_series:
       # the series appears with the first warn, so the first one is not a change
-      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10060",pid="7070",kind="node_missing"}'
+      - series: 'ros2_pulse_warns_total{job="ros2_pulse",instance="robot:10061",pid="7070",kind="node_missing"}'
         values: '1x9 2x9 3x9 4x9 5x9 6x7 7x20'
     alert_rule_test:
       - eval_time: 285s
@@ -273,7 +273,7 @@ tests:
           - exp_labels:
               severity: info
               job: ros2_pulse
-              instance: "robot:10060"
+              instance: "robot:10061"
               pid: "7070"
               kind: node_missing
             exp_annotations:
