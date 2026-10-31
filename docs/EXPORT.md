@@ -35,7 +35,7 @@ default. For an existing Prometheus, skip compose and point a scrape job at the 
 
 ```bash
 pipx install ros2-pulse-top    # other ways: tools/pulse-top/README.md#install
-pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log, port 10060
+pulse-export                                   # every $TMPDIR/topic_freq.<pid>.log, port 10061
 pulse-export '/var/log/topic_freq.*.log'       # a quoted glob; new files are picked up as nodes start
 pulse-export --otlp http://localhost:4318      # also push OTLP/HTTP JSON every 15 s
 pulse-export --once /tmp/topic_freq.4242.log   # print the /metrics text once and exit
@@ -44,7 +44,7 @@ pulse-export --once /tmp/topic_freq.4242.log   # print the /metrics text once an
 | Flag | Default | Meaning |
 |---|---|---|
 | `file` | every `$TMPDIR/topic_freq.*.log` | Log path or quoted glob, re-expanded on every poll. |
-| `--port` | `10060` | Prometheus port; `0` disables the HTTP server (OTLP only). 9464 before pulse-top 0.7.0. |
+| `--port` | `10061` | Prometheus port; `0` disables the HTTP server (OTLP only). 9464 before pulse-top 0.7.0. |
 | `--bind` | `0.0.0.0` | Listen address. Use `127.0.0.1` to keep topic names off the network. |
 | `--poll` | `1.0` | Seconds between log reads. |
 | `--otlp URL` | off | Push OTLP/HTTP JSON here. A bare `http://host:4318` gets `/v1/metrics` appended. |

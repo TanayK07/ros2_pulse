@@ -25,7 +25,7 @@ services:
     volumes:
       - ${PULSE_LOG_DIR:-/tmp}:/logs:ro
     ports:
-      - "10060:10060"
+      - "10061:10061"
     restart: unless-stopped
 
   prometheus:

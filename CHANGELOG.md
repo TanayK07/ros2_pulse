@@ -6,12 +6,12 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Changed
-- **pulse-export listens on port 10060 by default, not 9464.** The
+- **pulse-export listens on port 10061 by default, not 9464.** The
   [Prometheus default-port list](https://github.com/prometheus/prometheus/wiki/Default-port-allocations)
   gives 9464 to the OpenTelemetry Node.js exporter, so the two could not run on one host with
-  their defaults. The exporter range 9100-9999 is full, and 10060 is the next free port in the
+  their defaults. The exporter range 9100-9999 is full, and 10061 is the next free port in the
   10000+ block that continues it. **To keep an existing scrape config, pass `--port 9464`.**
-  `examples/grafana/` now publishes and scrapes 10060. A changed default, so this ships in a
+  `examples/grafana/` now publishes and scrapes 10061. A changed default, so this ships in a
   minor pulse-top release (0.7.0), not a patch.
 - **pulse-top 0.6.1: Textual floor lowered from 8.2.7 to 2.0 (issue #71).** Every Textual from 4.1
   on requires pygments>=2.19.2, so on Ubuntu 24.04 `pip install --break-system-packages`

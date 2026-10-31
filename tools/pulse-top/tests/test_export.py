@@ -395,7 +395,7 @@ class TestCli:
 
     # The Prometheus default-port list gives 9464 to the OpenTelemetry Node.js exporter.
     # Scrape configs depend on the default, so changing it again is a minor release.
-    @pytest.mark.parametrize("argv, port", [([], 10060), (["--port", "9464"], 9464)])
+    @pytest.mark.parametrize("argv, port", [([], 10061), (["--port", "9464"], 9464)])
     def test_server_port(self, tmp_path, monkeypatch, argv, port):
         log = tmp_path / "topic_freq.99.log"
         log.write_text(PUB_LINE + "\n")
