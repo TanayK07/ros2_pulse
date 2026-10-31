@@ -6,7 +6,9 @@
 
 Inputs (positional, any order):
   DIR          a run directory written by run.sh (pulse*.jsonl [+ wire*.csv] [+ meta.json]), or
-               a directory of such run directories (one per QoS combo)
+               a directory of such run directories (one per QoS combo and repeat). Every
+               pulse*.jsonl in a run directory belongs to that run, so the generator side's own
+               probe log goes in next to the controller's (e.g. pulse_gen.jsonl).
   FILE.csv     wire rates (format below). Given next to a DIR, it is used for every run that has
                no wire*.csv of its own: one capture over the whole session is fine, rows are
                matched to runs by time.
@@ -26,10 +28,19 @@ Wire CSV: a header row, then one row per sample. Column names are case-insensiti
   window is the number of rows inside it. Rows starting with '#' are comments. Rows with the same
   timestamp and topic add up (one row per writer or per reader is fine).
 
-The probe's windows are the timeline: each jsonl record covers (ts_ns - window_s, ts_ns], wall
-clock. Wire rows are spread over their own windows and re-binned into the probe's by overlap, so
-the two sides need not tick in phase, but their clocks must agree (same host, or NTP). Use
---wire-offset when they do not.
+The probe's windows are the timeline. ts_ns is the probe's system_clock (CLOCK_REALTIME) in epoch
+nanoseconds, a decimal string, read when the window is flushed, so it marks the END of the
+window; window_s is the window's measured (steady_clock) length. A record therefore covers
+(ts_ns - window_s, ts_ns]. Wire rows are spread over their own windows and re-binned onto the
+probe's by overlap, so the two sides need not tick in phase, but their clocks must agree (same
+host, or NTP). Use --wire-offset when they do not.
+
+Two views of a run:
+  per window   partial windows (the probe's first after attach and its exit window) and windows
+               a source does not cover are listed but not compared;
+  totals       sent / wire / callbacks = sum(rate x window_s) over every window of the
+               processes that measured it, partial windows included.
+Runs named <combo>_r<n> (run.sh's REPEATS) are grouped by combo in a final table.
 
 Stdlib only: runs on any python3 >= 3.8, no ROS environment needed.
 """
@@ -43,6 +54,7 @@ import glob
 import json
 import math
 import os
+import re
 import statistics
 import sys
 from dataclasses import dataclass
@@ -59,8 +71,13 @@ COUNT_KEYS = ("count", "msgs", "messages", "n")
 WINDOW_KEYS = ("window_s", "interval_s", "period_s")
 
 CSV_FIELDS = (
-    "run", "reliability", "depth", "topic", "window_end_unix", "window_s", "wire_hz", "pub_hz",
-    "cb_hz", "cb_minus_wire_hz", "pub_minus_wire_hz", "cb_over_wire", "flags",
+    "run", "combo", "repeat", "reliability", "depth", "topic", "window_end_unix", "window_s",
+    "wire_hz", "pub_hz", "cb_hz", "cb_minus_wire_hz", "pub_minus_wire_hz", "cb_over_wire", "flags",
+)
+TOTALS_FIELDS = (
+    "run", "combo", "repeat", "reliability", "depth", "transport", "start_unix", "end_unix",
+    "sent_msgs", "wire_msgs", "cb_msgs", "wire_coverage", "cb_over_wire", "cb_over_sent",
+    "wire_over_sent", "windows", "compared_windows",
 )
 
 
@@ -356,6 +373,10 @@ class Row:
         return not self.flags
 
 
+_REPEAT_RE = re.compile(r"^(.*)_r(\d+)$")
+_COMBO_RE = re.compile(r"^(reliable|best_effort)_d(\d+)")
+
+
 @dataclass
 class Run:
     label: str
@@ -363,8 +384,60 @@ class Run:
     wire_path: str | None
     meta: dict
 
+    @property
+    def combo(self) -> str:
+        """The QoS combo a repeat belongs to: meta.json's, else the label without `_r<n>`."""
+        if self.meta.get("combo"):
+            return str(self.meta["combo"])
+        m = _REPEAT_RE.match(self.label)
+        return m.group(1) if m else self.label
 
-def compare_run(run: Run, topic: str, wire_opts: dict, warn) -> list:
+    @property
+    def repeat(self):
+        if isinstance(self.meta.get("repeat"), int):
+            return self.meta["repeat"]
+        m = _REPEAT_RE.match(self.label)
+        return int(m.group(2)) if m else None
+
+    @property
+    def qos(self) -> tuple:
+        """(reliability, depth) from meta.json, else from a `<reliability>_d<depth>` name."""
+        rel, depth = self.meta.get("reliability"), self.meta.get("depth")
+        m = _COMBO_RE.match(self.combo)
+        if rel is None and m:
+            rel = m.group(1)
+        if not isinstance(depth, int) and m:
+            depth = int(m.group(2))
+        return rel, depth if isinstance(depth, int) else None
+
+
+@dataclass
+class Totals:
+    """Messages over the whole run, each the sum of rate x window_s over EVERY window of the
+    processes that measured it, partial windows included. The per-window comparison leaves
+    partial windows out because their rates are not comparable window by window; their messages
+    still happened, so the totals count them."""
+    sent: float | None  # publishes, from probed publishing processes
+    wire: float | None  # the capture over the run's span
+    cb: float | None  # callbacks, from probed subscribing processes
+    wire_coverage: float | None  # fraction of the run's span the capture covers
+    span: tuple  # (first window start, last window end) over all of the run's probe logs
+
+
+@dataclass
+class Result:
+    run: Run
+    rows: list
+    totals: Totals
+
+
+def window_total(windows: list, attr: str) -> float:
+    """sum(rate * window_s) over all windows. window_s is written to the millisecond, so a
+    window's count is good to about 0.05 % (more for a short exit window)."""
+    return sum((getattr(w, attr) or 0.0) * w.window_s for w in windows)
+
+
+def compare_run(run: Run, topic: str, wire_opts: dict, warn) -> Result:
     sources = [pulse_source(p, topic, warn) for p in run.pulse_paths]
     # Timeline: the subscriber's windows (the controller), else a publisher's, else any.
     timeline_src = next((s for s in sources if s.cb is not None), None) \
@@ -403,7 +476,25 @@ def compare_run(run: Run, topic: str, wire_opts: dict, warn) -> list:
             else:
                 values[key] = rate + (own or 0.0)
         rows.append(Row(b, w.window_s, values["wire"], values["pub"], values["cb"], flags))
-    return rows
+
+    every = [w for s in sources for w in s.windows]
+    span = (min(w.start for w in every), max(w.end for w in every))
+    pub_srcs = [s for s in sources if s.pub is not None]
+    cb_srcs = [s for s in sources if s.cb is not None]
+    sent = sum(window_total(s.windows, "pub_hz") for s in pub_srcs) if pub_srcs else None
+    cb = sum(window_total(s.windows, "cb_hz") for s in cb_srcs) if cb_srcs else None
+    wire_total = coverage = None
+    if wire is not None:
+        rate, coverage = wire.rate(*span)
+        if coverage < COVERAGE_MIN:
+            warn(f"{run.label}: the wire capture covers {100.0 * coverage:.1f}% of the run, "
+                 "no wire total")
+        else:
+            wire_total = rate * (span[1] - span[0])
+            if coverage < 0.999:
+                warn(f"{run.label}: the wire capture covers {100.0 * coverage:.1f}% of the run; "
+                     "its total counts that part only")
+    return Result(run, rows, Totals(sent, wire_total, cb, coverage, span))
 
 
 # --------------------------------------------------------------------------- output
@@ -421,60 +512,53 @@ def _ratio(x, y):
     return None if x is None or y is None or y <= 0.0 else x / y
 
 
+def _pct(r, nd=2):
+    return "-" if r is None else f"{100.0 * r:.{nd}f}%"
+
+
 def _clock(t: float) -> str:
     return datetime.fromtimestamp(t, timezone.utc).strftime("%H:%M:%S.%f")[:-3]
 
 
-def print_table(label: str, meta: dict, rows: list, out, show_windows: bool = True) -> None:
-    qos = ""
-    if meta.get("reliability"):
-        qos = f"  ({meta['reliability']}, depth {meta.get('depth', '?')})"
-    print(f"== {label}{qos}", file=out)
+def _table(head: tuple, widths: tuple, lines: list, out) -> None:
+    """Right-aligned columns of width n > 0, left-aligned for n < 0, unpadded for 0."""
+    def cell(c, n):
+        return c.rjust(n) if n > 0 else c.ljust(-n) if n < 0 else c
+
+    for cells in [head] + lines:
+        print("  ".join(cell(c, n) for c, n in zip(cells, widths)).rstrip(), file=out)
+
+
+def print_run(res: Result, out, show_windows: bool = True) -> None:
+    rel, depth = res.run.qos
+    qos = f"  ({rel}, depth {depth})" if rel else ""
+    print(f"== {res.run.label}{qos}", file=out)
     if show_windows:
-        head = ("end (UTC)", "win_s", "wire_hz", "pub_hz", "cb_hz", "cb-wire", "cb/wire",
-                "pub-wire", "flags")
-        widths = (12, 6, 10, 10, 10, 9, 8, 9, 0)
-        print("  ".join(h.rjust(n) if n else h for h, n in zip(head, widths)), file=out)
-        for r in rows:
-            ratio = _ratio(r.cb_hz, r.wire_hz)
-            cells = (_clock(r.end), f"{r.window_s:.3f}", _fmt(r.wire_hz), _fmt(r.pub_hz),
-                     _fmt(r.cb_hz), _fmt(_diff(r.cb_hz, r.wire_hz)),
-                     "-" if ratio is None else f"{100.0 * ratio:.1f}%",
-                     _fmt(_diff(r.pub_hz, r.wire_hz)), ",".join(r.flags))
-            line = "  ".join(c.rjust(n) if n else c for c, n in zip(cells, widths))
-            print(line.rstrip(), file=out)
-    for line in summarize(rows):
+        lines = []
+        for r in res.rows:
+            lines.append((_clock(r.end), f"{r.window_s:.3f}", _fmt(r.wire_hz), _fmt(r.pub_hz),
+                          _fmt(r.cb_hz), _fmt(_diff(r.cb_hz, r.wire_hz)),
+                          _pct(_ratio(r.cb_hz, r.wire_hz), 1),
+                          _fmt(_diff(r.pub_hz, r.wire_hz)), ",".join(r.flags)))
+        _table(("end (UTC)", "win_s", "wire_hz", "pub_hz", "cb_hz", "cb-wire", "cb/wire",
+                "pub-wire", "flags"), (12, 6, 10, 10, 10, 9, 8, 9, 0), lines, out)
+    for line in summarize(res):
         print(f"   {line}", file=out)
     print(file=out)
 
 
-def totals(rows: list) -> dict:
-    """Messages per column over the full windows (each column where it has a value)."""
-    out = {}
-    for key in ("wire", "pub", "cb"):
-        vals = [(getattr(r, f"{key}_hz"), r.window_s) for r in rows if r.full]
-        vals = [(v, w) for v, w in vals if v is not None]
-        out[key] = sum(v * w for v, w in vals) if vals else None
-    return out
-
-
-def summarize(rows: list) -> list:
+def summarize(res: Result) -> list:
+    rows, t = res.rows, res.totals
     full = [r for r in rows if r.full]
-    lines = [f"{len(full)} full windows of {len(rows)} "
-             "(partial / gap windows are listed but not counted)"]
-    if not full:
-        return lines
-    t = totals(rows)
-    parts = [f"{name} {t[key]:.0f} msgs" for key, name in
-             (("wire", "wire"), ("pub", "publishes"), ("cb", "callbacks")) if t[key] is not None]
-    lines.append(", ".join(parts))
-    ratios = []
-    if t["cb"] is not None and t["wire"]:
-        ratios.append(f"callbacks/wire {100.0 * t['cb'] / t['wire']:.2f}%")
-    if t["pub"] is not None and t["wire"]:
-        ratios.append(f"publishes/wire {100.0 * t['pub'] / t['wire']:.2f}%")
-    if t["cb"] is not None and t["pub"]:
-        ratios.append(f"callbacks/publishes {100.0 * t['cb'] / t['pub']:.2f}%")
+    lines = [f"{len(full)} of {len(rows)} windows compared "
+             "(partial and gap windows are listed, not compared)"]
+    parts = [f"{name} {value:.0f}" for name, value in
+             (("sent", t.sent), ("wire", t.wire), ("callbacks", t.cb)) if value is not None]
+    if parts:
+        lines.append("totals, partial windows included: " + ", ".join(parts))
+    ratios = [f"{name} {_pct(_ratio(x, y))}" for name, x, y in
+              (("callbacks/wire", t.cb, t.wire), ("callbacks/sent", t.cb, t.sent),
+               ("wire/sent", t.wire, t.sent)) if _ratio(x, y) is not None]
     if ratios:
         lines.append(", ".join(ratios))
     worst = [(abs(d), d, r) for r in full
@@ -485,12 +569,54 @@ def summarize(rows: list) -> list:
     return lines
 
 
-def csv_rows(label: str, meta: dict, topic: str, rows: list):
-    for r in rows:
+def group_results(results: list) -> list:
+    """[(combo, [Result, ...]), ...] in the order the combos first appear."""
+    groups = {}
+    for res in results:
+        groups.setdefault(res.run.combo, []).append(res)
+    return list(groups.items())
+
+
+def _mean(values: list):
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else None
+
+
+def _ratio_stats(pairs: list) -> str:
+    """Mean of the per-run ratios, with [min-max] when there are several."""
+    ratios = [r for r in (_ratio(x, y) for x, y in pairs) if r is not None]
+    if not ratios:
+        return "-"
+    text = _pct(sum(ratios) / len(ratios))
+    if len(ratios) > 1:
+        text += f" [{100.0 * min(ratios):.2f}-{100.0 * max(ratios):.2f}]"
+    return text
+
+
+def print_groups(groups: list, out) -> None:
+    print("== by combo: mean per run of the totals (partial windows included); ratios are "
+          "the mean of the runs' ratios [min-max]", file=out)
+    lines = []
+    for combo, results in groups:
+        tot = [r.totals for r in results]
+        lines.append((combo, str(len(results)), _fmt(_mean([t.sent for t in tot]), 0),
+                      _fmt(_mean([t.wire for t in tot]), 0), _fmt(_mean([t.cb for t in tot]), 0),
+                      _ratio_stats([(t.cb, t.wire) for t in tot]),
+                      _ratio_stats([(t.cb, t.sent) for t in tot]),
+                      _ratio_stats([(t.wire, t.sent) for t in tot])))
+    _table(("combo", "runs", "sent", "wire", "callbacks", "callbacks/wire", "callbacks/sent",
+            "wire/sent"), (-16, 4, 10, 10, 10, 24, 24, 24), lines, out)
+    print(file=out)
+
+
+def csv_rows(res: Result, topic: str):
+    rel, depth = res.run.qos
+    for r in res.rows:
         ratio = _ratio(r.cb_hz, r.wire_hz)
         yield {
-            "run": label, "reliability": meta.get("reliability", ""),
-            "depth": meta.get("depth", ""), "topic": topic,
+            "run": res.run.label, "combo": res.run.combo,
+            "repeat": "" if res.run.repeat is None else res.run.repeat,
+            "reliability": rel or "", "depth": "" if depth is None else depth, "topic": topic,
             "window_end_unix": f"{r.end:.6f}", "window_s": f"{r.window_s:.3f}",
             "wire_hz": _fmt(r.wire_hz, 3), "pub_hz": _fmt(r.pub_hz, 3),
             "cb_hz": _fmt(r.cb_hz, 3), "cb_minus_wire_hz": _fmt(_diff(r.cb_hz, r.wire_hz), 3),
@@ -498,6 +624,28 @@ def csv_rows(label: str, meta: dict, topic: str, rows: list):
             "cb_over_wire": "-" if ratio is None else f"{ratio:.4f}",
             "flags": ",".join(r.flags),
         }
+
+
+def totals_row(res: Result) -> dict:
+    rel, depth = res.run.qos
+    t = res.totals
+
+    def ratio(x, y):
+        r = _ratio(x, y)
+        return "-" if r is None else f"{r:.6f}"
+
+    return {
+        "run": res.run.label, "combo": res.run.combo,
+        "repeat": "" if res.run.repeat is None else res.run.repeat,
+        "reliability": rel or "", "depth": "" if depth is None else depth,
+        "transport": res.run.meta.get("transport", ""),
+        "start_unix": f"{t.span[0]:.6f}", "end_unix": f"{t.span[1]:.6f}",
+        "sent_msgs": _fmt(t.sent, 1), "wire_msgs": _fmt(t.wire, 1), "cb_msgs": _fmt(t.cb, 1),
+        "wire_coverage": "-" if t.wire_coverage is None else f"{t.wire_coverage:.4f}",
+        "cb_over_wire": ratio(t.cb, t.wire), "cb_over_sent": ratio(t.cb, t.sent),
+        "wire_over_sent": ratio(t.wire, t.sent),
+        "windows": len(res.rows), "compared_windows": sum(1 for r in res.rows if r.full),
+    }
 
 
 def worst_pct(rows: list):
@@ -566,9 +714,9 @@ def discover_runs(inputs: list, label: str | None) -> list:
         runs[0].label = label
 
     def order(run: Run):
-        rel = _REL_ORDER.get(run.meta.get("reliability"), 2)
-        depth = run.meta.get("depth")
-        return (rel, depth if isinstance(depth, int) else math.inf, run.label)
+        rel, depth = run.qos
+        return (_REL_ORDER.get(rel, 2), math.inf if depth is None else depth, run.combo,
+                math.inf if run.repeat is None else run.repeat, run.label)
 
     return sorted(runs, key=order)
 
@@ -594,7 +742,9 @@ def main(argv=None) -> int:
     ap.add_argument("--wire-offset", type=float, default=0.0, metavar="S",
                     help="seconds added to every wire timestamp (clock offset between hosts)")
     ap.add_argument("--csv", metavar="PATH", help="also write every window of every run here")
-    ap.add_argument("--summary", action="store_true", help="print only the per-run summaries")
+    ap.add_argument("--totals-csv", metavar="PATH", help="also write one totals row per run here")
+    ap.add_argument("--summary", action="store_true",
+                    help="no per-window tables, only the per-run summaries and the combo table")
     ap.add_argument("--max-diff-pct", type=float, metavar="P",
                     help="exit 1 if a full window's callback rate differs from the wire rate "
                          "(the publish rate without a wire CSV) by more than P%%, or if no full "
@@ -609,30 +759,36 @@ def main(argv=None) -> int:
                  "offset": args.wire_offset}
     try:
         runs = discover_runs(args.inputs, args.label)
-        results = [(run, compare_run(run, topic, wire_opts, warn)) for run in runs]
+        results = [compare_run(run, topic, wire_opts, warn) for run in runs]
     except (OSError, ValueError) as exc:
         print(f"compare.py: {exc}", file=sys.stderr)
         return 2
 
-    for run, rows in results:
-        print_table(run.label, run.meta, rows, sys.stdout, show_windows=not args.summary)
+    for res in results:
+        print_run(res, sys.stdout, show_windows=not args.summary)
+    print_groups(group_results(results), sys.stdout)
 
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
             writer.writeheader()
-            for run, rows in results:
-                writer.writerows(csv_rows(run.label, run.meta, topic, rows))
+            for res in results:
+                writer.writerows(csv_rows(res, topic))
+    if args.totals_csv:
+        with open(args.totals_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=TOTALS_FIELDS)
+            writer.writeheader()
+            writer.writerows(totals_row(res) for res in results)
 
     if args.max_diff_pct is not None:
         failed = False
-        for run, rows in results:
-            pct = worst_pct(rows)
+        for res in results:
+            pct = worst_pct(res.rows)
             if pct is None:
-                warn(f"{run.label}: no full window with both a callback rate and a reference")
+                warn(f"{res.run.label}: no full window with both a callback rate and a reference")
                 failed = True
             elif pct > args.max_diff_pct:
-                warn(f"{run.label}: callbacks differ from the reference by up to {pct:.1f}% "
+                warn(f"{res.run.label}: callbacks differ from the reference by up to {pct:.1f}% "
                      f"(limit {args.max_diff_pct:g}%)")
                 failed = True
         if failed:

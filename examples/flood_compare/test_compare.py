@@ -55,11 +55,15 @@ def controller_log(tmp_path):
     return write_lines(tmp_path / "pulse.jsonl", lines)
 
 
-def rows_for(pulse_paths, wire_path=None, **wire_opts):
+def result_for(pulse_paths, wire_path=None, warn=None, **wire_opts):
     run = compare.Run("t", list(pulse_paths), wire_path, {})
     opts = {"ts_at": "end", "window_s": None, "offset": 0.0}
     opts.update(wire_opts)
-    return compare.compare_run(run, "/cmd_vel", opts, lambda m: None)
+    return compare.compare_run(run, "/cmd_vel", opts, warn or (lambda m: None))
+
+
+def rows_for(pulse_paths, wire_path=None, **wire_opts):
+    return result_for(pulse_paths, wire_path, **wire_opts).rows
 
 
 def by_end(rows):
@@ -238,7 +242,7 @@ def test_session_dir_table_and_csv(tmp_path, capsys):
     text = capsys.readouterr().out
     # reliable runs are listed first, whatever the directory order
     assert text.index("== reliable_d10") < text.index("== best_effort_d1")
-    assert "4 full windows of 6" in text
+    assert "4 of 6 windows compared" in text
     assert "callbacks/wire 40.00%" in text and "callbacks/wire 100.00%" in text
     with open(table) as f:
         got = list(csv.DictReader(f))
@@ -266,4 +270,100 @@ def test_loose_files_with_publisher_and_no_wire(tmp_path, controller_log, capsys
                       [pulse_record(T0 + k, pub=900.0) for k in range(0, 12)])
     assert compare.main([controller_log, pub, "--label", "dry", "--max-diff-pct", "60"]) == 0
     text = capsys.readouterr().out
-    assert "== dry" in text and "callbacks/publishes" in text
+    assert "== dry" in text and "callbacks/sent" in text
+
+
+# ---------------------------------------------------------------- totals
+
+
+def test_totals_include_partial_windows(tmp_path, controller_log):
+    # controller: windows 1..10, 900/s except 450 in window 6; 1 and 10 are partial
+    lines = [pulse_record(T0 + 0.5, window_s=0.5, pub=600.0, partial=True)]
+    lines += [pulse_record(T0 + k + 0.5, pub=1000.0) for k in range(1, 10)]
+    lines += [pulse_record(T0 + 10.2, window_s=0.2, pub=1000.0, partial=True)]
+    pub = write_lines(tmp_path / "pulse_pub.jsonl", lines)
+    wire = write_csv(tmp_path / "w.csv", ["timestamp", "msgs_per_s"],
+                     [(T0 + k, 1000.0) for k in range(0, 12)])
+    res = result_for([controller_log, pub], wire)
+    t = res.totals
+    assert t.cb == pytest.approx(9 * 900.0 + 450.0)  # partial windows 1 and 10 counted
+    assert t.sent == pytest.approx(0.5 * 600.0 + 9 * 1000.0 + 0.2 * 1000.0)
+    # span: first start T0 (controller window 1 and the publisher's first) to T0+10.2
+    assert t.span == (pytest.approx(T0), pytest.approx(T0 + 10.2))
+    assert t.wire == pytest.approx(10.2 * 1000.0)
+    assert t.wire_coverage == pytest.approx(1.0)
+    # the per-window comparison still leaves the partial windows out
+    assert sum(1 for r in res.rows if r.full) == 8
+
+
+def test_wire_total_needs_the_capture_to_cover_the_run(tmp_path, controller_log):
+    wire = write_csv(tmp_path / "w.csv", ["timestamp", "msgs_per_s"],
+                     [(T0 + k, 1000.0) for k in range(5, 12)])
+    msgs = []
+    res = result_for([controller_log], wire, warn=msgs.append)
+    assert res.totals.wire is None and res.totals.wire_coverage == pytest.approx(0.6)
+    assert any("covers 60.0%" in m for m in msgs)
+
+
+def test_no_publisher_means_no_sent_total(controller_log):
+    t = result_for([controller_log]).totals
+    assert t.sent is None and t.wire is None and t.cb == pytest.approx(8550.0)
+
+
+# ---------------------------------------------------------------- repeats
+
+
+def make_repeats_dir(tmp_path):
+    """run.sh's REPEATS layout: <combo>_r<n>, one wire CSV for the session. reliable_d1 gets
+    1000/s callbacks in r1 and r2 and 950/s in r3; best_effort_d1 400/s in its only run."""
+    out = tmp_path / "flood_out"
+    wire_rows = []
+    runs = [("reliable_d1", 1, 1000.0), ("reliable_d1", 2, 1000.0), ("reliable_d1", 3, 950.0),
+            ("best_effort_d1", 1, 400.0)]
+    for i, (combo, rep, cb) in enumerate(runs):
+        d = out / f"{combo}_r{rep}"
+        d.mkdir(parents=True)
+        base = T0 + 100 * i
+        write_lines(d / "pulse.jsonl", [pulse_record(base + k, cb=cb, partial=k in (1, 6))
+                                        for k in range(1, 7)])
+        rel, depth = combo.rsplit("_d", 1)
+        (d / "meta.json").write_text(json.dumps(
+            {"combo": combo, "repeat": rep, "reliability": rel, "depth": int(depth),
+             "transport": "UDPv4"}))
+        wire_rows += [(base + k, "rt/cmd_vel", 1000.0) for k in range(0, 8)]
+    return str(out), write_csv(tmp_path / "wire.csv", ["timestamp", "topic", "msgs_per_s"],
+                               wire_rows)
+
+
+def test_repeats_grouped_by_combo(tmp_path, capsys):
+    out, wire = make_repeats_dir(tmp_path)
+    totals = tmp_path / "totals.csv"
+    assert compare.main([out, wire, "--summary", "--totals-csv", str(totals)]) == 0
+    text = capsys.readouterr().out
+    assert "end (UTC)" not in text  # --summary: no per-window tables
+    assert text.index("== reliable_d1_r1") < text.index("== reliable_d1_r2") \
+        < text.index("== reliable_d1_r3") < text.index("== best_effort_d1_r1")
+    combo_table = text[text.index("== by combo"):]
+    rel_line = next(line for line in combo_table.splitlines() if line.startswith("reliable_d1"))
+    assert rel_line.split()[1] == "3"
+    # per-run callbacks/wire 100, 100, 95 -> mean 98.33 [95.00-100.00]
+    assert "98.33% [95.00-100.00]" in rel_line
+    be_line = next(line for line in combo_table.splitlines() if line.startswith("best_effort"))
+    assert be_line.split()[1] == "1" and "40.00%" in be_line and "[" not in be_line
+    with open(totals) as f:
+        got = list(csv.DictReader(f))
+    assert [r["run"] for r in got] == ["reliable_d1_r1", "reliable_d1_r2", "reliable_d1_r3",
+                                       "best_effort_d1_r1"]
+    assert set(got[0]) == set(compare.TOTALS_FIELDS)
+    assert got[2]["combo"] == "reliable_d1" and got[2]["repeat"] == "3"
+    assert float(got[2]["cb_msgs"]) == pytest.approx(6 * 950.0)
+    assert float(got[2]["wire_msgs"]) == pytest.approx(6000.0)
+    assert got[2]["transport"] == "UDPv4" and got[2]["compared_windows"] == "4"
+
+
+def test_combo_and_qos_from_names_without_meta():
+    run = compare.Run("best_effort_d100_r2", [], None, {})
+    assert run.combo == "best_effort_d100" and run.repeat == 2
+    assert run.qos == ("best_effort", 100)
+    loose = compare.Run("dry", [], None, {})
+    assert loose.combo == "dry" and loose.repeat is None and loose.qos == (None, None)
