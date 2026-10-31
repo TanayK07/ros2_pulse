@@ -44,6 +44,14 @@ All notable changes to this project are documented here. Format follows
   its jsonl exit window (`"partial": true` after another window), as pulse_bridge's
   `/diagnostics` already did, and keeps a process for four window periods when that is longer
   than five minutes, so a slow window is not forgotten between two flushes.
+- **pulse-export no longer repeats a `ros2_pulse_warn_active` series in one scrape.** The probe's
+  warns carry no side or transport, so a spec with a `pub` and a `recv` rule on one topic (or an
+  inter and an intra one) that both warned in a window gave two samples with the same labels,
+  and Prometheus rejects a scrape with a duplicate series. Each label set is now one sample, in
+  the scrape and in the OTLP push, and `ros2_pulse_warns_total` still counts every warn read. A
+  node listed twice in the spec's `nodes:` did the same to `warn_active` and `node_up`.
+- **examples/grafana/README.md said the probe must log jsonl.** pulse-export reads the default
+  text format too.
 
 ## [0.7.0] - 2026-10-21
 
