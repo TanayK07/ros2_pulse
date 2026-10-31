@@ -65,8 +65,11 @@ jobs:
       - name: Two combos with the reference publisher at 200 Hz
         run: |
           source install/setup.bash
-          # run.sh's defaults otherwise (rmw_fastrtps_cpp, UDPv4, WORK_US=1000); one short repeat
-          export OUT="$PWD/flood_out" PUB_HZ=200 REPEATS=1
+          # run.sh's defaults otherwise (rmw_fastrtps_cpp, UDPv4); one short repeat. WORK_US=0:
+          # this job checks the plumbing (every published message is counted as a callback),
+          # not the effect. With the scenario's 1000 us, best effort depth 1 already falls 15-25 %
+          # behind at 200 Hz on a shared 2-vCPU runner, which is the gap the test is about.
+          export OUT="$PWD/flood_out" PUB_HZ=200 REPEATS=1 WORK_US=0
           bash examples/flood_compare/run.sh reliable 10 8
           bash examples/flood_compare/run.sh best_effort 1 8
           grep -h 'flood_publisher: sent' "$OUT"/*/publisher.log
