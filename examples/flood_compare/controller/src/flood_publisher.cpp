@@ -10,7 +10,9 @@
 // most 1 kHz publishes whatever is due by then. Nothing feeds back from the subscriber, so the
 // target never adapts. publish() itself may take longer than the schedule allows (a reliable
 // writer with depth 1 can push back on a slow reader), which is why the number actually sent is
-// a recorded result, printed at exit, not an assumption. `duration_s` > 0 stops the node by
+// a recorded result, printed at exit, not an assumption. The schedule starts once a reader has
+// matched (`wait_for_reader_s`, default 10, then it starts anyway): with volatile durability
+// anything published earlier never reaches the controller. `duration_s` > 0 stops the node by
 // itself after that long; 0 runs until SIGINT. Same `reliability` / `depth` parameters as the
 // controller.
 
@@ -45,15 +47,18 @@ public:
         const auto topic = declare_parameter<std::string>("topic", "/cmd_vel");
         m_rate_hz = declareNumber(*this, "rate_hz", 100.0);
         m_duration_s = declareNumber(*this, "duration_s", 0.0);
-        if (!(m_rate_hz > 0.0) || m_duration_s < 0.0) {
-            throw std::invalid_argument("rate_hz must be > 0 and duration_s >= 0");
+        m_wait_for_reader_s = declareNumber(*this, "wait_for_reader_s", 10.0);
+        if (!(m_rate_hz > 0.0) || m_duration_s < 0.0 || m_wait_for_reader_s < 0.0) {
+            throw std::invalid_argument(
+                "rate_hz must be > 0, duration_s and wait_for_reader_s >= 0");
         }
         m_pub = create_publisher<geometry_msgs::msg::Twist>(topic,
                                                             flood_compare::qosFromParams(*this));
         const double tick_hz = std::min(m_rate_hz, 1000.0);
         const auto period = std::chrono::nanoseconds(static_cast<int64_t>(1e9 / tick_hz));
-        m_start = std::chrono::steady_clock::now();
-        m_last = m_start;
+        m_created = std::chrono::steady_clock::now();
+        m_start = m_created;
+        m_last = m_created;
         m_timer = create_wall_timer(period, [this]() { onTick(); });
         const std::string how_long =
             m_duration_s > 0.0 ? std::to_string(m_duration_s) + " s" : "until stopped";
@@ -84,6 +89,20 @@ private:
 
     void onTick() {
         const auto now = std::chrono::steady_clock::now();
+        if (!m_flooding) {
+            // Volatile durability: a sample published before the reader matched never reaches
+            // it, and would read as a sent-vs-callback gap at the start of every run. The
+            // open-loop clock starts at the first match (or after wait_for_reader_s regardless).
+            const auto waited = std::chrono::duration<double>(now - m_created).count();
+            if (m_pub->get_subscription_count() == 0 && waited < m_wait_for_reader_s) {
+                return;
+            }
+            m_flooding = true;
+            m_start = now;
+            m_last = now;
+            RCLCPP_INFO(get_logger(), "%zu reader(s) matched after %.3f s, flood starts",
+                        m_pub->get_subscription_count(), waited);
+        }
         const uint64_t due = dueBy(now);
         while (m_sent < due) {
             geometry_msgs::msg::Twist msg;
@@ -104,6 +123,9 @@ private:
     rclcpp::TimerBase::SharedPtr m_timer;
     double m_rate_hz = 100.0;
     double m_duration_s = 0.0;
+    double m_wait_for_reader_s = 10.0;
+    bool m_flooding = false;
+    std::chrono::steady_clock::time_point m_created;
     std::chrono::steady_clock::time_point m_start;
     std::chrono::steady_clock::time_point m_last;
     uint64_t m_sent = 0;

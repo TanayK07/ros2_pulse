@@ -78,8 +78,14 @@ ROS_TOPIC_STATS_FORMAT=jsonl ROS_TOPIC_STATS_OUTPUT_FILE=pulse_gen.jsonl  <gener
 The probe counts `rcl_publish`, so an rcl-based publisher shows up as well as an rclcpp one.
 Publish open loop at a fixed target rate for the run's duration. A reliable writer at depth 1
 can push back on a slow reader, so the publish rate is a result to record, not a setting to
-assume. `flood_publisher` (for dry runs) works this way: `PUB_HZ=2000 ./run.sh all 10` starts it
-under the probe for each run, writes `pulse_pub.jsonl`, and logs `sent N of M due` at exit.
+assume. Start the flood only once the controller's reader has matched (for example when the
+writer's matched-subscription count goes above 0). With volatile durability, samples published
+before the match never reach it, and they show up as a sent vs callback gap at the start of
+every run. A CI run without that wait was 20 messages short every time (100 ms at 200 Hz).
+
+`flood_publisher` (for dry runs) works this way: `PUB_HZ=2000 ./run.sh all 10` starts it under
+the probe for each run, writes `pulse_pub.jsonl`, waits for the match, and logs `sent N of M due`
+at exit.
 
 ### Transport
 
