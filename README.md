@@ -691,6 +691,19 @@ Cyclone (stock images ship no scriptable iceoryx introspection), so that residua
 rather than papered over. The claim under test, that the probe's numbers are transport
 independent, holds either way.
 
+## Used with
+
+- [ros2_data_collection](https://github.com/Minipada/ros2_data_collection): the `TopicStatistics`
+  measurement turns the `MetricsMessage`s `pulse_bridge` publishes on `/statistics` into records
+  ([#564](https://github.com/Minipada/ros2_data_collection/pull/564)), with an e2e CI job that runs
+  a preloaded publisher.
+- [ros2-kubernetes-lab](https://github.com/MSKazemi/ros2-kubernetes-lab): an opt-in telemetry
+  pilot in the jazzy image, the probe preloaded and `pulse-export` beside it as a sidecar
+  ([#115](https://github.com/MSKazemi/ros2-kubernetes-lab/pull/115)). Across pods the receive
+  side needs a discovery mechanism such as a discovery server.
+
+Using it somewhere? Open a PR adding a line here.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Issues and PRs welcome.
