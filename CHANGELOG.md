@@ -5,15 +5,20 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-10
+
+pulse-top 0.7.0: pulse-export moves to port 10061, ships Prometheus alerting rules, and stops exporting leftover logs and duplicate warn series. Also carries pulse-top 0.6.1's lower Textual floor. The probe and pulse_bridge are unchanged.
+
 ### Changed
 - **pulse-export listens on port 10061 by default, not 9464.** The
   [Prometheus default-port list](https://github.com/prometheus/prometheus/wiki/Default-port-allocations)
   gives 9464 to the OpenTelemetry Node.js exporter, so the two could not run on one host with
   their defaults. The exporter range 9100-9999 is full, and 10061 is the next free port in the
   10000+ block that continues it. **To keep an existing scrape config, pass `--port 9464`.**
-  `examples/grafana/` now publishes and scrapes 10061. A changed default, so this ships in a
-  minor pulse-top release (0.7.0), not a patch.
-- **pulse-top 0.6.1: Textual floor lowered from 8.2.7 to 2.0 (issue #71).** Every Textual from 4.1
+  `examples/grafana/` now publishes and scrapes 10061. A changed default, so pulse-top goes to
+  0.7.0, not 0.6.2.
+- **Textual floor lowered from 8.2.7 to 2.0 (issue #71), released as pulse-top 0.6.1 on
+  2026-10-21.** Every Textual from 4.1
   on requires pygments>=2.19.2, so on Ubuntu 24.04 `pip install --break-system-packages`
   replaced Debian's python3-pygments (2.17.2). Textual 2.0 to 4.0 need only rich>=13.3.3, which
   Debian's python3-rich (13.7.1) satisfies; install with `"textual<4.1"` there to keep both. The
@@ -34,6 +39,11 @@ All notable changes to this project are documented here. Format follows
   example's config. A pytest checks every metric and label the rules use against pulse-export's
   metric catalogue. `examples/grafana/` loads the rules and evaluates them every 5 s.
   docs/EXPORT.md has a new Alerting section.
+- **The RMW matrix runs in CI.** `.github/workflows/rmw-matrix.yml` runs
+  `test/rmw/run_rmw_matrix.sh` on humble, jazzy and kilted when the probe or the matrix changes,
+  and on main. The script gains a `rmw_zenoh` leg with Zenoh shared memory that fails unless a
+  pool-sized shared-memory segment shows up and no process logs a ShmProvider error.
+- README: a "Used with" section (ros2_data_collection, ros2-kubernetes-lab).
 
 ### Fixed
 - **pulse-export no longer scrapes logs of exited processes as live.** The follower replays every

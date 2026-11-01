@@ -6,6 +6,8 @@ binaries, with no rebuild, no privileges and no network traffic. The counting ho
 under a nanosecond per message; the whole probe costs about 2 % of workload CPU on a harsh
 4,900 msg/s stress and less on real graphs.
 
+Linux only: the probe is an `LD_PRELOAD` shim, tested on glibc. macOS and Windows are not supported.
+
 [![CI](https://github.com/TanayK07/ros2_pulse/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TanayK07/ros2_pulse/actions/workflows/ci.yml)
 [![ROS 2](https://img.shields.io/badge/ROS%202-Humble%20%7C%20Jazzy%20%7C%20Kilted-blue)](https://docs.ros.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
@@ -604,6 +606,9 @@ are in [`test/orin/RESULTS.md`](test/orin/RESULTS.md).
 
 ## Limitations
 
+- Linux only. The probe is injected with `LD_PRELOAD` and finds the real functions with
+  `dlsym(RTLD_NEXT)`, and CI runs it only on Ubuntu with glibc. macOS and Windows are not
+  supported, and other C libraries such as musl are untested.
 - On ROS 2 Humble there is no intra-process publish tracepoint, so intra rate is measured
   receive-side (per subscription), which is usually the signal you want. On Iron and newer the
   probe also hooks `rclcpp_intra_publish` and emits an additive `PUB` line with publish-side
