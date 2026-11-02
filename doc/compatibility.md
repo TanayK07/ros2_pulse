@@ -1,5 +1,10 @@
 # Compatibility and limitations
 
+## Platforms
+
+Linux only. The probe is an `LD_PRELOAD` shim, tested on Ubuntu with glibc. macOS and Windows
+are not supported.
+
 ## Distros
 
 | Distro | Status | Notes |
