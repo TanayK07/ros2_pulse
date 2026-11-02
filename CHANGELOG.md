@@ -5,7 +5,7 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-10
+## [0.8.0] - 2026-11-02
 
 pulse-top 0.7.0: pulse-export moves to port 10061, ships Prometheus alerting rules, and stops exporting leftover logs and duplicate warn series. Also carries pulse-top 0.6.1's lower Textual floor. The probe and pulse_bridge are unchanged.
 
