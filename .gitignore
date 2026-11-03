@@ -34,3 +34,6 @@ bench/trace/
 test/rmw/out/
 .venv/
 *.egg-info/
+
+# flood_compare runs (examples/flood_compare/run.sh default OUT)
+examples/flood_compare/flood_out/
