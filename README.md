@@ -706,6 +706,12 @@ independent, holds either way.
   pilot in the jazzy image, the probe preloaded and `pulse-export` beside it as a sidecar
   ([#115](https://github.com/MSKazemi/ros2-kubernetes-lab/pull/115)). Across pods the receive
   side needs a discovery mechanism such as a discovery server.
+- [rosnav](https://github.com/darshmenon/rosnav): `fleet_health.py` reads per-robot rates from
+  the probe's jsonl logs instead of subscribing to every robot's odom and scan, and falls back to
+  its own subscriptions when ros2_pulse isn't installed
+  ([f59f290](https://github.com/darshmenon/rosnav/commit/f59f29049b53588b6325ad2450d100f880196489)).
+  Tested on a two-robot Gazebo, Nav2 and slam_toolbox stack (37 processes), with rates matching
+  `ros2 topic hz`.
 
 Using it somewhere? Open a PR adding a line here.
 
